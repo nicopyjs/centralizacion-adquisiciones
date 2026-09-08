@@ -7,17 +7,26 @@ import { JWT } from "google-auth-library";
  *  - GOOGLE_SERVICE_ACCOUNT_EMAIL : correo de la cuenta de servicio
  *  - GOOGLE_PRIVATE_KEY           : private_key del JSON de la cuenta de servicio
  *                                  (los \n pueden ir escapados)
- *  - SHEET_ID                     : ID del spreadsheet
+ *  - SHEET_ID                     : ID del spreadsheet de artículos / pedidos
+ *  - CENTROS_SHEET_ID             : ID del spreadsheet de centros de negocio
  */
 
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 
-export function getSheetId(): string {
-  const id = process.env.SHEET_ID;
-  if (!id) {
-    throw new Error("Falta la variable de entorno SHEET_ID");
-  }
-  return id;
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Falta la variable de entorno ${name}`);
+  return v;
+}
+
+/** Spreadsheet de artículos (y donde se escribe la pestaña Pedidos). */
+export function articulosSheetId(): string {
+  return requireEnv("SHEET_ID");
+}
+
+/** Spreadsheet de centros de negocio. */
+export function centrosSheetId(): string {
+  return requireEnv("CENTROS_SHEET_ID");
 }
 
 let cachedClient: JWT | null = null;
@@ -55,10 +64,12 @@ type SpreadsheetMeta = {
   sheets: { properties: { sheetId: number; title: string; index: number } }[];
 };
 
-export async function getSpreadsheetMeta(): Promise<SpreadsheetMeta> {
+export async function getSpreadsheetMeta(
+  spreadsheetId: string
+): Promise<SpreadsheetMeta> {
   const headers = await authHeaders();
   const res = await fetch(
-    `${API}/${getSheetId()}?fields=sheets.properties(sheetId,title,index)`,
+    `${API}/${spreadsheetId}?fields=sheets.properties(sheetId,title,index)`,
     { headers, cache: "no-store" }
   );
   if (!res.ok) {
@@ -70,8 +81,8 @@ export async function getSpreadsheetMeta(): Promise<SpreadsheetMeta> {
 }
 
 /** Devuelve el título de la primera pestaña (por índice). */
-export async function getFirstSheetTitle(): Promise<string> {
-  const meta = await getSpreadsheetMeta();
+export async function getFirstSheetTitle(spreadsheetId: string): Promise<string> {
+  const meta = await getSpreadsheetMeta(spreadsheetId);
   const first = [...meta.sheets].sort(
     (a, b) => a.properties.index - b.properties.index
   )[0];
@@ -80,10 +91,13 @@ export async function getFirstSheetTitle(): Promise<string> {
 }
 
 /** Lee un rango en formato A1 y devuelve la matriz de valores. */
-export async function readRange(rangeA1: string): Promise<string[][]> {
+export async function readRange(
+  spreadsheetId: string,
+  rangeA1: string
+): Promise<string[][]> {
   const headers = await authHeaders();
   const res = await fetch(
-    `${API}/${getSheetId()}/values/${encodeURIComponent(rangeA1)}`,
+    `${API}/${spreadsheetId}/values/${encodeURIComponent(rangeA1)}`,
     { headers, cache: "no-store" }
   );
   if (!res.ok) {
@@ -95,14 +109,39 @@ export async function readRange(rangeA1: string): Promise<string[][]> {
   return data.values ?? [];
 }
 
+/** Sobrescribe un rango (formato A1) con los valores dados. */
+export async function writeRange(
+  spreadsheetId: string,
+  rangeA1: string,
+  rows: (string | number)[][]
+): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(
+    `${API}/${spreadsheetId}/values/${encodeURIComponent(
+      rangeA1
+    )}?valueInputOption=USER_ENTERED`,
+    {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ values: rows }),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Error al escribir el rango "${rangeA1}" (${res.status}): ${await res.text()}`
+    );
+  }
+}
+
 /** Agrega filas al final de una pestaña. */
 export async function appendRows(
+  spreadsheetId: string,
   sheetTitle: string,
   rows: (string | number)[][]
 ): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(
-    `${API}/${getSheetId()}/values/${encodeURIComponent(
+    `${API}/${spreadsheetId}/values/${encodeURIComponent(
       `${sheetTitle}!A:A`
     )}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     {
@@ -119,12 +158,15 @@ export async function appendRows(
 }
 
 /** Crea una pestaña si no existe. */
-export async function ensureSheet(title: string): Promise<void> {
-  const meta = await getSpreadsheetMeta();
+export async function ensureSheet(
+  spreadsheetId: string,
+  title: string
+): Promise<void> {
+  const meta = await getSpreadsheetMeta(spreadsheetId);
   if (meta.sheets.some((s) => s.properties.title === title)) return;
 
   const headers = await authHeaders();
-  const res = await fetch(`${API}/${getSheetId()}:batchUpdate`, {
+  const res = await fetch(`${API}/${spreadsheetId}:batchUpdate`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({

@@ -1,4 +1,4 @@
-import { getFirstSheetTitle, readRange } from "./google-sheets";
+import { articulosSheetId, getFirstSheetTitle, readRange } from "./google-sheets";
 
 export type Articulo = {
   codigo: string;
@@ -31,8 +31,9 @@ function norm(v: string | undefined): string {
 
 /** Lee la hoja de artículos y devuelve los artículos activos. */
 export async function getArticulos(): Promise<Articulo[]> {
-  const sheetTitle = await getFirstSheetTitle();
-  const rows = await readRange(`${sheetTitle}!A2:O`);
+  const id = articulosSheetId();
+  const sheetTitle = await getFirstSheetTitle(id);
+  const rows = await readRange(id, `${sheetTitle}!A2:O`);
 
   const articulos: Articulo[] = [];
   for (const row of rows) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Articulo = {
   codigo: string;
@@ -14,6 +14,11 @@ type CategoriaConArticulos = {
   categoriaId: string;
   categoria: string;
   articulos: Articulo[];
+};
+
+type CentroNegocio = {
+  codigo: string;
+  descripcion: string;
 };
 
 type LineaPedido = {
@@ -117,11 +122,12 @@ function IconCheck() {
 
 export default function EnviarPedidoForm() {
   const [categorias, setCategorias] = useState<CategoriaConArticulos[]>([]);
+  const [centros, setCentros] = useState<CentroNegocio[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [solicitante, setSolicitante] = useState("");
-  const [area, setArea] = useState("");
+  const [centroSel, setCentroSel] = useState("");
   const [comentario, setComentario] = useState("");
 
   const [categoriaSel, setCategoriaSel] = useState("");
@@ -129,20 +135,32 @@ export default function EnviarPedidoForm() {
   const [cantidad, setCantidad] = useState("1");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
+  const [ultimoAgregado, setUltimoAgregado] = useState<string | null>(null);
 
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState<
     { ok: true; pedidoId: string } | { ok: false; error: string } | null
   >(null);
 
+  const articuloRef = useRef<HTMLSelectElement>(null);
+
   useEffect(() => {
     let cancelado = false;
     (async () => {
       try {
-        const res = await fetch("/api/articulos");
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Error al cargar artículos");
-        if (!cancelado) setCategorias(data.categorias ?? []);
+        const [rArt, rCen] = await Promise.all([
+          fetch("/api/articulos"),
+          fetch("/api/centros"),
+        ]);
+        const dArt = await rArt.json();
+        const dCen = await rCen.json();
+        if (!rArt.ok) throw new Error(dArt.error || "Error al cargar artículos");
+        if (!rCen.ok)
+          throw new Error(dCen.error || "Error al cargar centros de negocio");
+        if (!cancelado) {
+          setCategorias(dArt.categorias ?? []);
+          setCentros(dCen.centros ?? []);
+        }
       } catch (err) {
         if (!cancelado)
           setLoadError(err instanceof Error ? err.message : "Error desconocido");
@@ -165,6 +183,11 @@ export default function EnviarPedidoForm() {
     [articulosDeCategoria, articuloSel]
   );
 
+  const centroActual = useMemo(
+    () => centros.find((c) => c.codigo === centroSel) ?? null,
+    [centros, centroSel]
+  );
+
   const totalUnidades = useMemo(
     () => lineas.reduce((sum, l) => sum + l.cantidad, 0),
     [lineas]
@@ -175,29 +198,31 @@ export default function EnviarPedidoForm() {
     const cant = Number(cantidad);
     if (!Number.isFinite(cant) || cant <= 0) return;
 
+    const art = articuloActual;
     setLineas((prev) => {
-      const existente = prev.find((l) => l.codigo === articuloActual.codigo);
+      const existente = prev.find((l) => l.codigo === art.codigo);
       if (existente) {
         return prev.map((l) =>
-          l.codigo === articuloActual.codigo
-            ? { ...l, cantidad: l.cantidad + cant }
-            : l
+          l.codigo === art.codigo ? { ...l, cantidad: l.cantidad + cant } : l
         );
       }
       return [
         ...prev,
         {
-          codigo: articuloActual.codigo,
-          nombre: articuloActual.nombre,
-          categoria: articuloActual.categoria,
-          unidad: articuloActual.unidad,
+          codigo: art.codigo,
+          nombre: art.nombre,
+          categoria: art.categoria,
+          unidad: art.unidad,
           cantidad: cant,
         },
       ];
     });
+    setUltimoAgregado(art.nombre);
     setArticuloSel("");
     setCantidad("1");
     setResultado(null);
+    // Deja el foco listo para seguir agregando artículos.
+    articuloRef.current?.focus();
   }
 
   function quitarLinea(codigo: string) {
@@ -211,13 +236,21 @@ export default function EnviarPedidoForm() {
       const res = await fetch("/api/pedidos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ solicitante, area, comentario, items: lineas }),
+        body: JSON.stringify({
+          solicitante,
+          centroNegocio: centroActual
+            ? { codigo: centroActual.codigo, descripcion: centroActual.descripcion }
+            : null,
+          comentario,
+          items: lineas,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al enviar el pedido");
       setResultado({ ok: true, pedidoId: data.pedidoId });
       setLineas([]);
       setComentario("");
+      setUltimoAgregado(null);
     } catch (err) {
       setResultado({
         ok: false,
@@ -228,13 +261,25 @@ export default function EnviarPedidoForm() {
     }
   }
 
+  const faltante =
+    solicitante.trim().length === 0
+      ? "Ingresa el solicitante para enviar."
+      : !centroSel
+        ? "Selecciona un centro de negocio para enviar."
+        : lineas.length === 0
+          ? "Agrega al menos un artículo."
+          : null;
+
   const puedeEnviar =
-    solicitante.trim().length > 0 && lineas.length > 0 && !enviando;
+    solicitante.trim().length > 0 &&
+    centroSel.length > 0 &&
+    lineas.length > 0 &&
+    !enviando;
 
   if (loading) {
     return (
       <div className="space-y-6" aria-busy="true" aria-live="polite">
-        <span className="sr-only">Cargando artículos…</span>
+        <span className="sr-only">Cargando datos…</span>
         {[0, 1, 2].map((i) => (
           <div
             key={i}
@@ -251,15 +296,19 @@ export default function EnviarPedidoForm() {
         role="alert"
         className="rounded-xl border border-warning/40 bg-warning-surface p-5 text-sm text-warning"
       >
-        <p className="font-semibold">No se pudieron cargar los artículos.</p>
+        <p className="font-semibold">No se pudieron cargar los datos.</p>
         <p className="mt-1">{loadError}</p>
         <p className="mt-2 text-warning/90">
-          Verifica que las variables de entorno de Google (cuenta de servicio y{" "}
+          Verifica que las variables de entorno de Google (cuenta de servicio,{" "}
           <code className="rounded bg-warning/10 px-1 py-0.5 font-mono text-xs">
             SHEET_ID
+          </code>{" "}
+          y{" "}
+          <code className="rounded bg-warning/10 px-1 py-0.5 font-mono text-xs">
+            CENTROS_SHEET_ID
           </code>
-          ) estén configuradas y que el spreadsheet esté compartido con la cuenta
-          de servicio.
+          ) estén configuradas y que ambos spreadsheets estén compartidos con la
+          cuenta de servicio.
         </p>
       </div>
     );
@@ -270,7 +319,7 @@ export default function EnviarPedidoForm() {
       <SectionCard
         step={1}
         title="Datos del pedido"
-        description="Quién solicita y para qué."
+        description="Quién solicita y a qué centro de negocio se imputa."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -287,16 +336,22 @@ export default function EnviarPedidoForm() {
             />
           </div>
           <div>
-            <label htmlFor="area" className={labelClass}>
-              Área / Proyecto
+            <label htmlFor="centro" className={labelClass}>
+              Centro de negocio <span className="text-destructive">*</span>
             </label>
-            <input
-              id="area"
+            <select
+              id="centro"
               className={fieldClass}
-              value={area}
-              onChange={(e) => setArea(e.target.value)}
-              placeholder="Opcional"
-            />
+              value={centroSel}
+              onChange={(e) => setCentroSel(e.target.value)}
+            >
+              <option value="">Selecciona…</option>
+              {centros.map((c) => (
+                <option key={c.codigo} value={c.codigo}>
+                  {c.descripcion} — {c.codigo}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <div className="mt-4">
@@ -316,8 +371,8 @@ export default function EnviarPedidoForm() {
 
       <SectionCard
         step={2}
-        title="Agregar artículo"
-        description="Elige categoría, luego el artículo y la cantidad."
+        title="Agregar artículos"
+        description="Elige categoría, artículo y cantidad. Repite para sumar varios artículos al pedido."
       >
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_130px_auto] sm:items-end">
           <div>
@@ -348,6 +403,7 @@ export default function EnviarPedidoForm() {
             </label>
             <select
               id="articulo"
+              ref={articuloRef}
               className={fieldClass}
               value={articuloSel}
               onChange={(e) => setArticuloSel(e.target.value)}
@@ -377,6 +433,12 @@ export default function EnviarPedidoForm() {
               className={fieldClass}
               value={cantidad}
               onChange={(e) => setCantidad(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  agregarLinea();
+                }
+              }}
             />
           </div>
 
@@ -390,12 +452,22 @@ export default function EnviarPedidoForm() {
             Agregar
           </button>
         </div>
+
+        {ultimoAgregado && (
+          <p
+            className="mt-3 flex items-center gap-1.5 text-xs font-medium text-success"
+            role="status"
+          >
+            <IconCheck />
+            «{ultimoAgregado}» agregado al pedido. Puedes seguir agregando más.
+          </p>
+        )}
       </SectionCard>
 
       <SectionCard
         step={3}
         title="Detalle del pedido"
-        description="Revisa las líneas antes de enviar."
+        description="Todos los artículos agregados. Revisa antes de enviar."
       >
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
@@ -479,10 +551,8 @@ export default function EnviarPedidoForm() {
           >
             {enviando ? "Enviando…" : "Enviar Pedido"}
           </button>
-          {!solicitante.trim() && lineas.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              Ingresa el solicitante para enviar.
-            </span>
+          {faltante && (
+            <span className="text-xs text-muted-foreground">{faltante}</span>
           )}
         </div>
 

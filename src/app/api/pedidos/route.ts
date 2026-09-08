@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import {
   appendRows,
+  articulosSheetId,
   ensureSheet,
   getSpreadsheetMeta,
   readRange,
+  writeRange,
 } from "@/lib/google-sheets";
 
 const PEDIDOS_SHEET = "Pedidos";
@@ -11,7 +13,8 @@ const HEADERS = [
   "Pedido ID",
   "Fecha",
   "Solicitante",
-  "Área",
+  "Centro de negocio",
+  "Centro Código",
   "Categoría",
   "Código",
   "Artículo",
@@ -30,7 +33,7 @@ type ItemInput = {
 
 type PedidoInput = {
   solicitante?: unknown;
-  area?: unknown;
+  centroNegocio?: { codigo?: unknown; descripcion?: unknown } | null;
   comentario?: unknown;
   items?: unknown;
 };
@@ -48,13 +51,21 @@ export async function POST(request: Request) {
   }
 
   const solicitante = str(body.solicitante);
-  const area = str(body.area);
+  const centroCodigo = str(body.centroNegocio?.codigo);
+  const centroDescripcion = str(body.centroNegocio?.descripcion);
   const comentario = str(body.comentario);
   const rawItems = Array.isArray(body.items) ? (body.items as ItemInput[]) : [];
 
   if (!solicitante) {
     return NextResponse.json(
       { error: "El campo 'solicitante' es obligatorio." },
+      { status: 400 }
+    );
+  }
+
+  if (!centroCodigo || !centroDescripcion) {
+    return NextResponse.json(
+      { error: "Debes seleccionar un centro de negocio." },
       { status: 400 }
     );
   }
@@ -78,19 +89,24 @@ export async function POST(request: Request) {
 
   const pedidoId = `PED-${Date.now()}`;
   const fecha = new Date().toISOString();
+  const sheetId = articulosSheetId();
 
   try {
-    const meta = await getSpreadsheetMeta();
-    const exists = meta.sheets.some(
-      (s) => s.properties.title === PEDIDOS_SHEET
-    );
+    const meta = await getSpreadsheetMeta(sheetId);
+    const exists = meta.sheets.some((s) => s.properties.title === PEDIDOS_SHEET);
+
     if (!exists) {
-      await ensureSheet(PEDIDOS_SHEET);
-      await appendRows(PEDIDOS_SHEET, [HEADERS]);
+      await ensureSheet(sheetId, PEDIDOS_SHEET);
+      await appendRows(sheetId, PEDIDOS_SHEET, [HEADERS]);
     } else {
-      const firstRow = await readRange(`${PEDIDOS_SHEET}!A1:J1`);
-      if (!firstRow.length || !firstRow[0].length) {
-        await appendRows(PEDIDOS_SHEET, [HEADERS]);
+      // Asegura que la fila de encabezados esté al día.
+      const firstRow = await readRange(sheetId, `${PEDIDOS_SHEET}!A1:K1`);
+      const current = firstRow[0] ?? [];
+      const matches =
+        current.length === HEADERS.length &&
+        HEADERS.every((h, i) => (current[i] ?? "") === h);
+      if (!matches) {
+        await writeRange(sheetId, `${PEDIDOS_SHEET}!A1:K1`, [HEADERS]);
       }
     }
 
@@ -98,7 +114,8 @@ export async function POST(request: Request) {
       pedidoId,
       fecha,
       solicitante,
-      area,
+      centroDescripcion,
+      centroCodigo,
       it.categoria,
       it.codigo,
       it.nombre,
@@ -107,7 +124,7 @@ export async function POST(request: Request) {
       comentario,
     ]);
 
-    await appendRows(PEDIDOS_SHEET, rows);
+    await appendRows(sheetId, PEDIDOS_SHEET, rows);
 
     return NextResponse.json({ ok: true, pedidoId, lineas: rows.length });
   } catch (err) {

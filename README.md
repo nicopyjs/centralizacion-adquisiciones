@@ -3,6 +3,8 @@
 App interna (Next.js 16 + App Router, Tailwind v4) para centralizar el proceso de
 adquisiciones. Se despliega en Vercel.
 
+Producción: https://centralizacion-adquisiciones.vercel.app
+
 ## Módulos
 
 | Pestaña        | Ruta              | Estado |
@@ -13,31 +15,39 @@ adquisiciones. Se despliega en Vercel.
 
 Formulario para armar un pedido:
 
-1. Se eligen **datos del pedido** (solicitante obligatorio, área/proyecto y comentario opcionales).
-2. Se selecciona **categoría** → **artículo** de esa categoría → **cantidad**, y se agrega a la lista.
-3. Se pueden agregar varios artículos y quitarlos antes de enviar.
-4. Al **Enviar Pedido**, cada línea se agrega a la pestaña `Pedidos` del mismo spreadsheet
-   (se crea automáticamente con encabezados si no existe) y se devuelve un folio `PED-<timestamp>`.
+1. **Datos del pedido**: `Solicitante` (obligatorio), `Centro de negocio`
+   (obligatorio, se elige de una lista) y `Comentario` (opcional).
+2. **Agregar artículos**: se elige **categoría** → **artículo** de esa categoría →
+   **cantidad** y se agrega al detalle. Se repite para sumar **varios artículos**
+   al mismo pedido; cada línea se puede quitar antes de enviar.
+3. Al **Enviar Pedido**, cada línea se agrega a la pestaña `Pedidos` del spreadsheet
+   de artículos (se crea/actualiza con encabezados si hace falta) y se devuelve un
+   folio `PED-<timestamp>` compartido por todas las líneas.
 
-Los artículos se leen desde el Google Sheet configurado. Columnas usadas de la hoja de artículos:
+**Artículos** (spreadsheet `SHEET_ID`, primera pestaña) — columnas usadas:
 `A Código`, `B Nombre`, `C Categoría ID`, `D Categoría`, `G Activo`, `I Unidad`.
-Solo se muestran los artículos con `Activo = S`.
+Solo se muestran los que tienen `Activo = S`.
+
+**Centros de negocio** (spreadsheet `CENTROS_SHEET_ID`, primera pestaña) — columnas:
+`C Code`, `D Description`, `E Imputable`, `F Activo`.
+Solo se ofrecen los que tienen `Imputable = S` **y** `Activo = S` (~205).
 
 > **Nota sobre los datos:** ~3.800 artículos activos en 69 categorías. 11 artículos
 > tienen en la columna `Categoría` el texto literal `(categoría desconocida)`; se
 > agrupan bajo ese nombre tal cual. Si se corrigen en el Sheet, la app los reagrupa
-> automáticamente (cache de 5 min).
+> automáticamente (cache de 5 min; centros 30 min).
 
 ## Fuente de datos: Google Sheets + cuenta de servicio
 
-La app lee y escribe el spreadsheet mediante una **cuenta de servicio** de Google.
+La app lee y escribe los spreadsheets mediante una **cuenta de servicio** de Google.
 
 1. En el proyecto de Google Cloud, la cuenta de servicio ya existe:
    `defontana-etl@defontana-centralizacion-datos.iam.gserviceaccount.com`
 2. Genera (o reutiliza) una **clave JSON** de esa cuenta de servicio.
-3. **Comparte el spreadsheet** con ese correo:
-   - `Lector` es suficiente para listar artículos.
-   - `Editor` es necesario para que el módulo de pedidos pueda escribir en la pestaña `Pedidos`.
+3. **Comparte ambos spreadsheets** (artículos y centros de negocio) con ese correo:
+   - `Lector` es suficiente para listar artículos y centros.
+   - `Editor` es necesario en el spreadsheet de artículos para que el módulo de
+     pedidos pueda escribir en la pestaña `Pedidos`.
 4. Habilita la **Google Sheets API** en el proyecto de Cloud.
 
 ### Variables de entorno
@@ -46,12 +56,13 @@ Copia `.env.example` a `.env.local` y completa:
 
 | Variable                        | Descripción |
 | ------------------------------- | ----------- |
-| `SHEET_ID`                      | ID del spreadsheet (ya viene con el valor actual). |
+| `SHEET_ID`                      | ID del spreadsheet de artículos / pedidos. |
+| `CENTROS_SHEET_ID`              | ID del spreadsheet de centros de negocio. |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL`  | Correo de la cuenta de servicio. |
 | `GOOGLE_PRIVATE_KEY`            | Campo `private_key` del JSON. Pega el valor entre comillas; los `\n` se convierten en tiempo de ejecución. |
 
-En **Vercel**: agrega las tres variables en *Project → Settings → Environment Variables*
-(para `GOOGLE_PRIVATE_KEY` pega el valor multilínea tal cual del JSON o con `\n` escapados).
+En **Vercel** ya están cargadas en Production + Preview + Development
+(*Project → Settings → Environment Variables*).
 
 ## Desarrollo
 
@@ -66,5 +77,9 @@ npm run lint
 
 | Método | Ruta             | Descripción |
 | ------ | ---------------- | ----------- |
-| GET    | `/api/articulos` | Devuelve `{ categorias: [{ categoria, categoriaId, articulos: [...] }] }`. Cache 5 min. |
-| POST   | `/api/pedidos`   | Body `{ solicitante, area?, comentario?, items: [{ codigo, nombre, categoria, unidad, cantidad }] }`. Escribe en la pestaña `Pedidos`. |
+| GET    | `/api/articulos` | `{ categorias: [{ categoria, categoriaId, articulos: [...] }] }`. Cache 5 min. |
+| GET    | `/api/centros`   | `{ centros: [{ codigo, descripcion }] }` (Imputable=S y Activo=S). Cache 30 min. |
+| POST   | `/api/pedidos`   | Body `{ solicitante, centroNegocio: { codigo, descripcion }, comentario?, items: [{ codigo, nombre, categoria, unidad, cantidad }] }`. Escribe una fila por ítem en la pestaña `Pedidos`. |
+
+Pestaña `Pedidos` (11 columnas):
+`Pedido ID · Fecha · Solicitante · Centro de negocio · Centro Código · Categoría · Código · Artículo · Unidad · Cantidad · Comentario`
