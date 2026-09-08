@@ -22,12 +22,19 @@ type CentroNegocio = {
 };
 
 type LineaPedido = {
+  id: string;
+  categoria: string;
   codigo: string;
   nombre: string;
-  categoria: string;
   unidad: string;
   cantidad: number;
 };
+
+let lineaSeq = 0;
+function nuevaLineaId() {
+  lineaSeq += 1;
+  return `linea-${Date.now()}-${lineaSeq}`;
+}
 
 const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
@@ -239,6 +246,23 @@ function IconPlus() {
   );
 }
 
+function IconMinus() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
 function IconTrash() {
   return (
     <svg
@@ -286,19 +310,12 @@ export default function EnviarPedidoForm() {
   const [centroSel, setCentroSel] = useState("");
   const [comentario, setComentario] = useState("");
 
-  const [categoriaSel, setCategoriaSel] = useState("");
-  const [articuloSel, setArticuloSel] = useState("");
-  const [cantidad, setCantidad] = useState("1");
-
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
-  const [ultimoAgregado, setUltimoAgregado] = useState<string | null>(null);
 
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState<
     { ok: true; pedidoId: string } | { ok: false; error: string } | null
   >(null);
-
-  const articuloRef = useRef<HTMLSelectElement>(null);
 
   useEffect(() => {
     let cancelado = false;
@@ -329,15 +346,11 @@ export default function EnviarPedidoForm() {
     };
   }, []);
 
-  const articulosDeCategoria = useMemo(() => {
-    const cat = categorias.find((c) => c.categoria === categoriaSel);
-    return cat ? cat.articulos : [];
-  }, [categorias, categoriaSel]);
-
-  const articuloActual = useMemo(
-    () => articulosDeCategoria.find((a) => a.codigo === articuloSel) ?? null,
-    [articulosDeCategoria, articuloSel]
-  );
+  const articulosPorCategoria = useMemo(() => {
+    const m = new Map<string, Articulo[]>();
+    for (const c of categorias) m.set(c.categoria, c.articulos);
+    return m;
+  }, [categorias]);
 
   const centroActual = useMemo(
     () => centros.find((c) => c.codigo === centroSel) ?? null,
@@ -350,39 +363,60 @@ export default function EnviarPedidoForm() {
   );
 
   function agregarLinea() {
-    if (!articuloActual) return;
-    const cant = Number(cantidad);
-    if (!Number.isFinite(cant) || cant <= 0) return;
-
-    const art = articuloActual;
-    setLineas((prev) => {
-      const existente = prev.find((l) => l.codigo === art.codigo);
-      if (existente) {
-        return prev.map((l) =>
-          l.codigo === art.codigo ? { ...l, cantidad: l.cantidad + cant } : l
-        );
-      }
-      return [
-        ...prev,
-        {
-          codigo: art.codigo,
-          nombre: art.nombre,
-          categoria: art.categoria,
-          unidad: art.unidad,
-          cantidad: cant,
-        },
-      ];
-    });
-    setUltimoAgregado(art.nombre);
-    setArticuloSel("");
-    setCantidad("1");
+    setLineas((prev) => [
+      ...prev,
+      {
+        id: nuevaLineaId(),
+        categoria: "",
+        codigo: "",
+        nombre: "",
+        unidad: "",
+        cantidad: 1,
+      },
+    ]);
     setResultado(null);
-    // Deja el foco listo para seguir agregando artículos.
-    articuloRef.current?.focus();
   }
 
-  function quitarLinea(codigo: string) {
-    setLineas((prev) => prev.filter((l) => l.codigo !== codigo));
+  function cambiarCategoriaLinea(id: string, categoria: string) {
+    setLineas((prev) =>
+      prev.map((l) =>
+        l.id === id
+          ? { ...l, categoria, codigo: "", nombre: "", unidad: "" }
+          : l
+      )
+    );
+    setResultado(null);
+  }
+
+  function cambiarArticuloLinea(id: string, codigo: string) {
+    setLineas((prev) =>
+      prev.map((l) => {
+        if (l.id !== id) return l;
+        const art = (articulosPorCategoria.get(l.categoria) ?? []).find(
+          (a) => a.codigo === codigo
+        );
+        return {
+          ...l,
+          codigo,
+          nombre: art?.nombre ?? "",
+          unidad: art?.unidad ?? "",
+        };
+      })
+    );
+    setResultado(null);
+  }
+
+  function cambiarCantidad(id: string, valor: number) {
+    if (Number.isNaN(valor)) return;
+    const v = valor < 0 ? 0 : valor;
+    setLineas((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, cantidad: v } : l))
+    );
+    setResultado(null);
+  }
+
+  function quitarLinea(id: string) {
+    setLineas((prev) => prev.filter((l) => l.id !== id));
   }
 
   async function enviarPedido() {
@@ -398,7 +432,13 @@ export default function EnviarPedidoForm() {
             ? { codigo: centroActual.codigo, descripcion: centroActual.descripcion }
             : null,
           comentario,
-          items: lineas,
+          items: lineas.map((l) => ({
+            codigo: l.codigo,
+            nombre: l.nombre,
+            categoria: l.categoria,
+            unidad: l.unidad,
+            cantidad: l.cantidad,
+          })),
         }),
       });
       const data = await res.json();
@@ -406,7 +446,6 @@ export default function EnviarPedidoForm() {
       setResultado({ ok: true, pedidoId: data.pedidoId });
       setLineas([]);
       setComentario("");
-      setUltimoAgregado(null);
     } catch (err) {
       setResultado({
         ok: false,
@@ -424,12 +463,17 @@ export default function EnviarPedidoForm() {
         ? "Selecciona un centro de negocio para enviar."
         : lineas.length === 0
           ? "Agrega al menos un artículo."
-          : null;
+          : lineas.some((l) => !l.codigo)
+            ? "Completa la categoría y el artículo en todas las filas."
+            : lineas.some((l) => !(l.cantidad > 0))
+              ? "Revisa las cantidades: todas deben ser mayores a 0."
+              : null;
 
   const puedeEnviar =
     solicitante.trim().length > 0 &&
     centroSel.length > 0 &&
     lineas.length > 0 &&
+    lineas.every((l) => l.codigo && l.cantidad > 0) &&
     !enviando;
 
   if (loading) {
@@ -519,105 +563,10 @@ export default function EnviarPedidoForm() {
 
       <SectionCard
         step={2}
-        title="Agregar artículos"
-        description="Elige categoría, artículo y cantidad. Repite para sumar varios artículos al pedido."
+        title="Artículos del pedido"
+        description="Agrega una fila por artículo. Puedes cambiar la categoría, el artículo y la cantidad de cada fila mientras armas el pedido."
       >
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_130px_auto] sm:items-end">
-          <div>
-            <label htmlFor="categoria" className={labelClass}>
-              Categoría
-            </label>
-            <select
-              id="categoria"
-              className={fieldClass}
-              value={categoriaSel}
-              onChange={(e) => {
-                setCategoriaSel(e.target.value);
-                setArticuloSel("");
-              }}
-            >
-              <option value="">Selecciona…</option>
-              {categorias.map((c) => (
-                <option key={c.categoria} value={c.categoria}>
-                  {c.categoria} ({c.articulos.length})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="articulo" className={labelClass}>
-              Artículo
-            </label>
-            <select
-              id="articulo"
-              ref={articuloRef}
-              className={fieldClass}
-              value={articuloSel}
-              onChange={(e) => setArticuloSel(e.target.value)}
-              disabled={!categoriaSel}
-            >
-              <option value="">
-                {categoriaSel ? "Selecciona…" : "Elige categoría primero"}
-              </option>
-              {articulosDeCategoria.map((a) => (
-                <option key={a.codigo} value={a.codigo}>
-                  {a.nombre} — {a.codigo}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="cantidad" className={labelClass}>
-              Cantidad{articuloActual ? ` · ${articuloActual.unidad}` : ""}
-            </label>
-            <input
-              id="cantidad"
-              type="number"
-              min="0"
-              step="any"
-              inputMode="decimal"
-              className={fieldClass}
-              value={cantidad}
-              onChange={(e) => setCantidad(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  agregarLinea();
-                }
-              }}
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={agregarLinea}
-            disabled={!articuloActual || Number(cantidad) <= 0}
-            className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <IconPlus />
-            Agregar
-          </button>
-        </div>
-
-        {ultimoAgregado && (
-          <p
-            className="mt-3 flex items-center gap-1.5 text-xs font-medium text-success"
-            role="status"
-          >
-            <IconCheck />
-            «{ultimoAgregado}» agregado al pedido. Puedes seguir agregando más.
-          </p>
-        )}
-      </SectionCard>
-
-      <SectionCard
-        step={3}
-        title="Detalle del pedido"
-        description="Todos los artículos agregados. Revisa antes de enviar."
-      >
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
             {lineas.length} {lineas.length === 1 ? "artículo" : "artículos"}
           </span>
@@ -630,67 +579,143 @@ export default function EnviarPedidoForm() {
 
         {lineas.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-            Aún no has agregado artículos.
+            Aún no has agregado artículos. Usa «Agregar artículo» para empezar.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="py-2 pr-3 font-semibold">Código</th>
+                  <th className="py-2 pr-3 font-semibold">Categoría</th>
                   <th className="py-2 pr-3 font-semibold">Artículo</th>
-                  <th className="hidden py-2 pr-3 font-semibold sm:table-cell">
-                    Categoría
-                  </th>
-                  <th className="py-2 pr-3 text-right font-semibold">Cantidad</th>
+                  <th className="py-2 pr-3 font-semibold">Cantidad</th>
                   <th className="py-2 font-semibold">
                     <span className="sr-only">Acciones</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {lineas.map((l) => (
-                  <tr
-                    key={l.codigo}
-                    className="border-b border-border/70 last:border-0"
-                  >
-                    <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
-                      {l.codigo}
-                    </td>
-                    <td className="py-2.5 pr-3 font-medium text-card-foreground">
-                      {l.nombre}
-                      <span className="mt-0.5 block text-xs font-normal text-muted-foreground sm:hidden">
-                        {l.categoria}
-                      </span>
-                    </td>
-                    <td className="hidden py-2.5 pr-3 text-muted-foreground sm:table-cell">
-                      {l.categoria}
-                    </td>
-                    <td className="py-2.5 pr-3 text-right font-semibold tabular-nums">
-                      {l.cantidad.toLocaleString("es-CL")}{" "}
-                      <span className="font-normal text-muted-foreground">
-                        {l.unidad}
-                      </span>
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => quitarLinea(l.codigo)}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
-                        aria-label={`Quitar ${l.nombre}`}
-                      >
-                        <IconTrash />
-                        Quitar
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {lineas.map((l) => {
+                  const artsLinea =
+                    articulosPorCategoria.get(l.categoria) ?? [];
+                  return (
+                    <tr
+                      key={l.id}
+                      className="border-b border-border/70 align-top last:border-0"
+                    >
+                      <td className="py-2.5 pr-3">
+                        <select
+                          className={`${fieldClass} min-w-[11rem]`}
+                          value={l.categoria}
+                          onChange={(e) =>
+                            cambiarCategoriaLinea(l.id, e.target.value)
+                          }
+                          aria-label="Categoría del artículo"
+                        >
+                          <option value="">Selecciona…</option>
+                          {categorias.map((c) => (
+                            <option key={c.categoria} value={c.categoria}>
+                              {c.categoria} ({c.articulos.length})
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <select
+                          className={`${fieldClass} min-w-[16rem]`}
+                          value={l.codigo}
+                          onChange={(e) =>
+                            cambiarArticuloLinea(l.id, e.target.value)
+                          }
+                          disabled={!l.categoria}
+                          aria-label="Artículo"
+                        >
+                          <option value="">
+                            {l.categoria
+                              ? "Selecciona…"
+                              : "Elige categoría primero"}
+                          </option>
+                          {artsLinea.map((a) => (
+                            <option key={a.codigo} value={a.codigo}>
+                              {a.nombre} — {a.codigo}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              cambiarCantidad(l.id, l.cantidad - 1)
+                            }
+                            disabled={l.cantidad <= 1}
+                            className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label="Disminuir cantidad"
+                          >
+                            <IconMinus />
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            inputMode="decimal"
+                            value={l.cantidad || ""}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const n = raw === "" ? 0 : Number(raw);
+                              if (!Number.isNaN(n)) cambiarCantidad(l.id, n);
+                            }}
+                            onBlur={() => {
+                              if (!(l.cantidad > 0)) cambiarCantidad(l.id, 1);
+                            }}
+                            className="h-8 w-16 rounded-md border border-border bg-card px-2 text-center text-sm tabular-nums text-card-foreground outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                            aria-label="Cantidad"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              cambiarCantidad(l.id, l.cantidad + 1)
+                            }
+                            className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted"
+                            aria-label="Aumentar cantidad"
+                          >
+                            <IconPlus />
+                          </button>
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {l.unidad || "—"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => quitarLinea(l.id)}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
+                          aria-label="Quitar fila"
+                        >
+                          <IconTrash />
+                          Quitar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={agregarLinea}
+          className="mt-4 inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+        >
+          <IconPlus />
+          Agregar artículo
+        </button>
+
+        <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5">
           <button
             type="button"
             onClick={enviarPedido}
