@@ -477,8 +477,6 @@ export default function EnviarPedidoForm() {
       .join("\n");
 
     const partes = [
-      asunto,
-      "",
       saludo,
       "",
       "Junto con saludar, solicito gestión del siguiente pedido:",
@@ -503,7 +501,6 @@ export default function EnviarPedidoForm() {
 
     return partes.join("\n");
   }, [
-    asunto,
     centroDesc,
     clasificador1,
     clasificador2,
