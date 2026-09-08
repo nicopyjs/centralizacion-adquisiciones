@@ -66,6 +66,162 @@ function SectionCard({
   );
 }
 
+function IconChevron() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/**
+ * Combobox con búsqueda por texto para elegir el centro de negocio.
+ * Muestra solo la descripción; el valor seleccionado es el código.
+ */
+function CentroCombobox({
+  centros,
+  value,
+  onChange,
+}: {
+  centros: CentroNegocio[];
+  value: string;
+  onChange: (codigo: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const listId = "centro-listbox";
+
+  const selected = useMemo(
+    () => centros.find((c) => c.codigo === value) ?? null,
+    [centros, value]
+  );
+
+  const filtradas = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return centros;
+    return centros.filter((c) => c.descripcion.toLowerCase().includes(q));
+  }, [centros, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocPointer(e: PointerEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", onDocPointer);
+    return () => document.removeEventListener("pointerdown", onDocPointer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const el = listRef.current.children[activeIndex] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
+  function seleccionar(c: CentroNegocio) {
+    onChange(c.codigo);
+    setQuery("");
+    setOpen(false);
+  }
+
+  const displayValue = open ? query : selected?.descripcion ?? "";
+
+  return (
+    <div ref={rootRef} className="relative">
+      <input
+        id="centro"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        autoComplete="off"
+        className={`${fieldClass} pr-9`}
+        placeholder="Escribe para buscar…"
+        value={displayValue}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActiveIndex(0);
+          if (!open) setOpen(true);
+        }}
+        onFocus={() => {
+          setActiveIndex(0);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            if (!open) {
+              setOpen(true);
+              return;
+            }
+            setActiveIndex((i) => Math.min(i + 1, filtradas.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActiveIndex((i) => Math.max(i - 1, 0));
+          } else if (e.key === "Enter") {
+            if (open) {
+              e.preventDefault();
+              const c = filtradas[activeIndex];
+              if (c) seleccionar(c);
+            }
+          } else if (e.key === "Escape") {
+            setOpen(false);
+            setQuery("");
+          }
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+      >
+        <IconChevron />
+      </span>
+      {open && (
+        <ul
+          id={listId}
+          ref={listRef}
+          role="listbox"
+          className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-border bg-card py-1 text-sm shadow-lg"
+        >
+          {filtradas.length === 0 ? (
+            <li className="px-3 py-2 text-muted-foreground">Sin resultados</li>
+          ) : (
+            filtradas.map((c, i) => (
+              <li
+                key={c.codigo}
+                role="option"
+                aria-selected={c.codigo === value}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  seleccionar(c);
+                }}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={`cursor-pointer px-3 py-2 text-card-foreground ${
+                  i === activeIndex ? "bg-accent/10" : ""
+                } ${c.codigo === value ? "font-semibold" : ""}`}
+              >
+                {c.descripcion}
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function IconPlus() {
   return (
     <svg
@@ -339,19 +495,11 @@ export default function EnviarPedidoForm() {
             <label htmlFor="centro" className={labelClass}>
               Centro de negocio <span className="text-destructive">*</span>
             </label>
-            <select
-              id="centro"
-              className={fieldClass}
+            <CentroCombobox
+              centros={centros}
               value={centroSel}
-              onChange={(e) => setCentroSel(e.target.value)}
-            >
-              <option value="">Selecciona…</option>
-              {centros.map((c) => (
-                <option key={c.codigo} value={c.codigo}>
-                  {c.descripcion} — {c.codigo}
-                </option>
-              ))}
-            </select>
+              onChange={setCentroSel}
+            />
           </div>
         </div>
         <div className="mt-4">
