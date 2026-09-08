@@ -12,8 +12,8 @@ export default function EnviarPedidoPage() {
           Enviar Pedido
         </h1>
         <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Selecciona una categoría, elige el artículo y la cantidad. Puedes
-          agregar varios artículos antes de enviar el pedido.
+          Completa los datos, arma la lista de artículos y abre el correo de
+          solicitud ya redactado en Gmail para revisarlo y enviarlo.
         </p>
       </header>
       <EnviarPedidoForm />

@@ -36,10 +36,28 @@ function nuevaLineaId() {
   return `linea-${Date.now()}-${lineaSeq}`;
 }
 
+/** "2026-09-22" -> "22-09-26". Devuelve el valor original si no calza. */
+function formatFecha(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return iso.trim();
+  return `${m[3]}-${m[2]}-${m[1].slice(2)}`;
+}
+
 const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
+
+// Siempre van en copia; el área destino se agrega como tercer destinatario.
+const DESTINATARIOS_FIJOS = [
+  "adquisiciones@nebchile.cl",
+  "gerencia@nebchile.cl",
+];
+const AREAS = [
+  { label: "Refacciones", email: "refacciones@nebchile.cl" },
+  { label: "Servicio Técnico", email: "serviciotecnico@nebchile.cl" },
+  { label: "Instalaciones", email: "instalaciones@nebchile.cl" },
+];
 
 function SectionCard({
   step,
@@ -308,14 +326,17 @@ export default function EnviarPedidoForm() {
 
   const [solicitante, setSolicitante] = useState("");
   const [centroSel, setCentroSel] = useState("");
+  const [proveedor, setProveedor] = useState("");
+  const [planCuenta, setPlanCuenta] = useState("Insumos");
+  const [clasificador1, setClasificador1] = useState("");
+  const [clasificador2, setClasificador2] = useState("");
+  const [despacho, setDespacho] = useState("");
+  const [fechaEntrega, setFechaEntrega] = useState("");
+  const [areaDestino, setAreaDestino] = useState("refacciones@nebchile.cl");
   const [comentario, setComentario] = useState("");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
-
-  const [enviando, setEnviando] = useState(false);
-  const [resultado, setResultado] = useState<
-    { ok: true; pedidoId: string } | { ok: false; error: string } | null
-  >(null);
+  const [copiado, setCopiado] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -374,7 +395,7 @@ export default function EnviarPedidoForm() {
         cantidad: 1,
       },
     ]);
-    setResultado(null);
+    setCopiado(false);
   }
 
   function cambiarCategoriaLinea(id: string, categoria: string) {
@@ -385,7 +406,7 @@ export default function EnviarPedidoForm() {
           : l
       )
     );
-    setResultado(null);
+    setCopiado(false);
   }
 
   function cambiarArticuloLinea(id: string, codigo: string) {
@@ -403,7 +424,7 @@ export default function EnviarPedidoForm() {
         };
       })
     );
-    setResultado(null);
+    setCopiado(false);
   }
 
   function cambiarCantidad(id: string, valor: number) {
@@ -412,69 +433,113 @@ export default function EnviarPedidoForm() {
     setLineas((prev) =>
       prev.map((l) => (l.id === id ? { ...l, cantidad: v } : l))
     );
-    setResultado(null);
+    setCopiado(false);
   }
 
   function quitarLinea(id: string) {
     setLineas((prev) => prev.filter((l) => l.id !== id));
+    setCopiado(false);
   }
 
-  async function enviarPedido() {
-    setEnviando(true);
-    setResultado(null);
-    try {
-      const res = await fetch("/api/pedidos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          solicitante,
-          centroNegocio: centroActual
-            ? { codigo: centroActual.codigo, descripcion: centroActual.descripcion }
-            : null,
-          comentario,
-          items: lineas.map((l) => ({
-            codigo: l.codigo,
-            nombre: l.nombre,
-            categoria: l.categoria,
-            unidad: l.unidad,
-            cantidad: l.cantidad,
-          })),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al enviar el pedido");
-      setResultado({ ok: true, pedidoId: data.pedidoId });
-      setLineas([]);
-      setComentario("");
-    } catch (err) {
-      setResultado({
-        ok: false,
-        error: err instanceof Error ? err.message : "Error desconocido",
-      });
-    } finally {
-      setEnviando(false);
-    }
-  }
+  const lineasCompletas = useMemo(
+    () => lineas.filter((l) => l.codigo && l.cantidad > 0),
+    [lineas]
+  );
+
+  const centroDesc = centroActual?.descripcion ?? "";
 
   const faltante =
     solicitante.trim().length === 0
-      ? "Ingresa el solicitante para enviar."
+      ? "Ingresa el solicitante."
       : !centroSel
-        ? "Selecciona un centro de negocio para enviar."
-        : lineas.length === 0
-          ? "Agrega al menos un artículo."
-          : lineas.some((l) => !l.codigo)
-            ? "Completa la categoría y el artículo en todas las filas."
-            : lineas.some((l) => !(l.cantidad > 0))
-              ? "Revisa las cantidades: todas deben ser mayores a 0."
-              : null;
+        ? "Selecciona un centro de negocio."
+        : planCuenta.trim().length === 0
+          ? "Indica el plan de cuenta."
+          : lineasCompletas.length === 0
+            ? "Agrega al menos un artículo con cantidad."
+            : null;
 
-  const puedeEnviar =
-    solicitante.trim().length > 0 &&
-    centroSel.length > 0 &&
-    lineas.length > 0 &&
-    lineas.every((l) => l.codigo && l.cantidad > 0) &&
-    !enviando;
+  const puedeEnviar = !faltante;
+
+  const asunto = `NEB Chile // Adquisiciones // ${centroDesc} // ${planCuenta.trim()}`;
+
+  const cuerpoCorreo = useMemo(() => {
+    const h = new Date().getHours();
+    const saludo =
+      h < 12
+        ? "Buenos días, estimados"
+        : h < 20
+          ? "Buenas tardes, estimados"
+          : "Buenas noches, estimados";
+
+    const elementos = lineasCompletas
+      .map((l) => `- ${l.cantidad.toLocaleString("es-CL")} ${l.nombre}`)
+      .join("\n");
+
+    const partes = [
+      asunto,
+      "",
+      saludo,
+      "",
+      "Junto con saludar, solicito gestión del siguiente pedido:",
+      "",
+      `Proveedor: ${proveedor}`.trimEnd(),
+      `Centro de Costo: ${centroDesc}`.trimEnd(),
+      `Plan de cuenta: ${planCuenta.trim()}`.trimEnd(),
+      `Clasificador 1: ${clasificador1}`.trimEnd(),
+      `Clasificador 2: ${clasificador2}`.trimEnd(),
+      `Despacho: ${despacho}`.trimEnd(),
+      `Fecha de entrega: ${formatFecha(fechaEntrega)}`.trimEnd(),
+      "",
+      "Elementos a solicitar:",
+      elementos,
+    ];
+
+    if (comentario.trim()) {
+      partes.push("", `Comentario: ${comentario.trim()}`);
+    }
+
+    partes.push("", "Saludos,", solicitante.trim() || "Nombre");
+
+    return partes.join("\n");
+  }, [
+    asunto,
+    centroDesc,
+    clasificador1,
+    clasificador2,
+    comentario,
+    despacho,
+    fechaEntrega,
+    lineasCompletas,
+    planCuenta,
+    proveedor,
+    solicitante,
+  ]);
+
+  const destinatarios = [...DESTINATARIOS_FIJOS, areaDestino];
+
+  const gmailUrl =
+    "https://mail.google.com/mail/?view=cm&fs=1" +
+    `&to=${encodeURIComponent(destinatarios.join(","))}` +
+    `&su=${encodeURIComponent(asunto)}` +
+    `&body=${encodeURIComponent(cuerpoCorreo)}`;
+
+  function abrirGmail() {
+    if (!puedeEnviar) return;
+    window.open(gmailUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function copiarCorreo() {
+    try {
+      await navigator.clipboard.writeText(
+        `Para: ${destinatarios.join(", ")}\nAsunto: ${asunto}\n\n${cuerpoCorreo}`
+      );
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 2500);
+    } catch {
+      setCopiado(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -519,12 +584,12 @@ export default function EnviarPedidoForm() {
       <SectionCard
         step={1}
         title="Datos del pedido"
-        description="Quién solicita y a qué centro de negocio se imputa."
+        description="Estos datos arman el encabezado del correo de solicitud."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="solicitante" className={labelClass}>
-              Solicitante <span className="text-destructive">*</span>
+              Solicitante (nombre) <span className="text-destructive">*</span>
             </label>
             <input
               id="solicitante"
@@ -537,12 +602,102 @@ export default function EnviarPedidoForm() {
           </div>
           <div>
             <label htmlFor="centro" className={labelClass}>
-              Centro de negocio <span className="text-destructive">*</span>
+              Centro de negocio / Centro de Costo{" "}
+              <span className="text-destructive">*</span>
             </label>
             <CentroCombobox
               centros={centros}
               value={centroSel}
               onChange={setCentroSel}
+            />
+          </div>
+          <div>
+            <label htmlFor="planCuenta" className={labelClass}>
+              Plan de cuenta <span className="text-destructive">*</span>
+            </label>
+            <input
+              id="planCuenta"
+              className={fieldClass}
+              value={planCuenta}
+              onChange={(e) => setPlanCuenta(e.target.value)}
+              placeholder="Ej. Insumos"
+            />
+          </div>
+          <div>
+            <label htmlFor="area" className={labelClass}>
+              Área destino <span className="text-destructive">*</span>
+            </label>
+            <select
+              id="area"
+              className={fieldClass}
+              value={areaDestino}
+              onChange={(e) => setAreaDestino(e.target.value)}
+            >
+              {AREAS.map((a) => (
+                <option key={a.email} value={a.email}>
+                  {a.label} — {a.email}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="proveedor" className={labelClass}>
+              Proveedor
+            </label>
+            <input
+              id="proveedor"
+              className={fieldClass}
+              value={proveedor}
+              onChange={(e) => setProveedor(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
+          <div>
+            <label htmlFor="fechaEntrega" className={labelClass}>
+              Fecha de entrega
+            </label>
+            <input
+              id="fechaEntrega"
+              type="date"
+              className={fieldClass}
+              value={fechaEntrega}
+              onChange={(e) => setFechaEntrega(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="clasificador1" className={labelClass}>
+              Clasificador 1
+            </label>
+            <input
+              id="clasificador1"
+              className={fieldClass}
+              value={clasificador1}
+              onChange={(e) => setClasificador1(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
+          <div>
+            <label htmlFor="clasificador2" className={labelClass}>
+              Clasificador 2
+            </label>
+            <input
+              id="clasificador2"
+              className={fieldClass}
+              value={clasificador2}
+              onChange={(e) => setClasificador2(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
+          <div>
+            <label htmlFor="despacho" className={labelClass}>
+              Despacho
+            </label>
+            <input
+              id="despacho"
+              className={fieldClass}
+              value={despacho}
+              onChange={(e) => setDespacho(e.target.value)}
+              placeholder="Opcional"
             />
           </div>
         </div>
@@ -715,42 +870,54 @@ export default function EnviarPedidoForm() {
           Agregar artículo
         </button>
 
-        <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5">
-          <button
-            type="button"
-            onClick={enviarPedido}
-            disabled={!puedeEnviar}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-6 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {enviando ? "Enviando…" : "Enviar Pedido"}
-          </button>
-          {faltante && (
-            <span className="text-xs text-muted-foreground">{faltante}</span>
+        <div className="mt-6 border-t border-border pt-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={abrirGmail}
+              disabled={!puedeEnviar}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-6 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Abrir correo en Gmail
+            </button>
+            <button
+              type="button"
+              onClick={copiarCorreo}
+              disabled={!puedeEnviar}
+              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {copiado ? (
+                <>
+                  <IconCheck />
+                  Copiado
+                </>
+              ) : (
+                "Copiar correo"
+              )}
+            </button>
+            {faltante && (
+              <span className="text-xs text-muted-foreground">{faltante}</span>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Se abre Gmail con el correo listo para {destinatarios.join(", ")}.
+            Revísalo y presiona Enviar. No se escribe nada en la planilla.
+          </p>
+
+          {puedeEnviar && (
+            <details className="mt-4 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <summary className="cursor-pointer font-semibold text-primary">
+                Vista previa del correo
+              </summary>
+              <p className="mt-2 text-xs font-semibold text-muted-foreground">
+                Asunto: <span className="font-normal">{asunto}</span>
+              </p>
+              <pre className="mt-2 whitespace-pre-wrap font-sans text-xs text-card-foreground">
+                {cuerpoCorreo}
+              </pre>
+            </details>
           )}
         </div>
-
-        {resultado?.ok && (
-          <div
-            role="status"
-            className="mt-4 flex items-start gap-2.5 rounded-lg border border-success/30 bg-success-surface p-3.5 text-sm text-success"
-          >
-            <span className="mt-0.5 shrink-0">
-              <IconCheck />
-            </span>
-            <span>
-              Pedido enviado correctamente. Folio:{" "}
-              <span className="font-mono font-bold">{resultado.pedidoId}</span>
-            </span>
-          </div>
-        )}
-        {resultado && !resultado.ok && (
-          <div
-            role="alert"
-            className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3.5 text-sm text-destructive"
-          >
-            {resultado.error}
-          </div>
-        )}
       </SectionCard>
     </div>
   );
