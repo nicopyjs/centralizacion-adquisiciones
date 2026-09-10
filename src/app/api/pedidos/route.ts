@@ -13,8 +13,13 @@ const HEADERS = [
   "Pedido ID",
   "Fecha",
   "Solicitante",
+  "Área",
   "Centro de negocio",
   "Centro Código",
+  "Fecha entrega",
+  "Clasificador 1",
+  "Clasificador 2",
+  "Despacho",
   "Categoría",
   "Código",
   "Artículo",
@@ -22,6 +27,8 @@ const HEADERS = [
   "Cantidad",
   "Comentario",
 ];
+// Última columna de encabezados (16 columnas -> A..P).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:P1`;
 
 type ItemInput = {
   codigo?: unknown;
@@ -33,7 +40,12 @@ type ItemInput = {
 
 type PedidoInput = {
   solicitante?: unknown;
+  area?: { label?: unknown; email?: unknown } | null;
   centroNegocio?: { codigo?: unknown; descripcion?: unknown } | null;
+  fechaEntrega?: unknown;
+  clasificador1?: unknown;
+  clasificador2?: unknown;
+  despacho?: unknown;
   comentario?: unknown;
   items?: unknown;
 };
@@ -51,8 +63,13 @@ export async function POST(request: Request) {
   }
 
   const solicitante = str(body.solicitante);
+  const area = str(body.area?.label);
   const centroCodigo = str(body.centroNegocio?.codigo);
   const centroDescripcion = str(body.centroNegocio?.descripcion);
+  const fechaEntrega = str(body.fechaEntrega);
+  const clasificador1 = str(body.clasificador1);
+  const clasificador2 = str(body.clasificador2);
+  const despacho = str(body.despacho);
   const comentario = str(body.comentario);
   const rawItems = Array.isArray(body.items) ? (body.items as ItemInput[]) : [];
 
@@ -100,13 +117,13 @@ export async function POST(request: Request) {
       await appendRows(sheetId, PEDIDOS_SHEET, [HEADERS]);
     } else {
       // Asegura que la fila de encabezados esté al día.
-      const firstRow = await readRange(sheetId, `${PEDIDOS_SHEET}!A1:K1`);
+      const firstRow = await readRange(sheetId, HEADERS_RANGE);
       const current = firstRow[0] ?? [];
       const matches =
         current.length === HEADERS.length &&
         HEADERS.every((h, i) => (current[i] ?? "") === h);
       if (!matches) {
-        await writeRange(sheetId, `${PEDIDOS_SHEET}!A1:K1`, [HEADERS]);
+        await writeRange(sheetId, HEADERS_RANGE, [HEADERS]);
       }
     }
 
@@ -114,8 +131,13 @@ export async function POST(request: Request) {
       pedidoId,
       fecha,
       solicitante,
+      area,
       centroDescripcion,
       centroCodigo,
+      fechaEntrega,
+      clasificador1,
+      clasificador2,
+      despacho,
       it.categoria,
       it.codigo,
       it.nombre,

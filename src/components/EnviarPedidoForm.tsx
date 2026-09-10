@@ -43,6 +43,31 @@ function formatFecha(iso: string): string {
   return `${m[3]}-${m[2]}-${m[1].slice(2)}`;
 }
 
+/** Suma días hábiles (lunes a viernes) a una fecha. No considera feriados. */
+function sumarDiasHabiles(desde: Date, dias: number): Date {
+  const d = new Date(desde);
+  let sumados = 0;
+  while (sumados < dias) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) sumados += 1;
+  }
+  return d;
+}
+
+/** Date -> "YYYY-MM-DD" en horario local (para <input type="date">). */
+function toInputDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Fecha de entrega por defecto: 10 días hábiles desde hoy. */
+function fechaEntregaPorDefecto(): string {
+  return toInputDate(sumarDiasHabiles(new Date(), 10));
+}
+
 const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 const labelClass =
@@ -53,10 +78,13 @@ const DESTINATARIOS_FIJOS = [
   "adquisiciones@nebchile.cl",
   "gerencia@nebchile.cl",
 ];
+// Cada área destino filtra los centros de negocio por el prefijo de su código
+// (columna C de la planilla de centros): RCT = Refacciones, SST = Servicio
+// Técnico, INT = Instalaciones.
 const AREAS = [
-  { label: "Refacciones", email: "refacciones@nebchile.cl" },
-  { label: "Servicio Técnico", email: "serviciotecnico@nebchile.cl" },
-  { label: "Instalaciones", email: "instalaciones@nebchile.cl" },
+  { label: "Refacciones", email: "refacciones@nebchile.cl", prefijo: "RCT" },
+  { label: "Servicio Técnico", email: "serviciotecnico@nebchile.cl", prefijo: "SST" },
+  { label: "Instalaciones", email: "instalaciones@nebchile.cl", prefijo: "INT" },
 ];
 
 function SectionCard({
@@ -325,18 +353,25 @@ export default function EnviarPedidoForm() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [solicitante, setSolicitante] = useState("");
+  const [areaDestino, setAreaDestino] = useState(AREAS[0].email);
   const [centroSel, setCentroSel] = useState("");
-  const [proveedor, setProveedor] = useState("");
-  const [planCuenta, setPlanCuenta] = useState("Insumos");
   const [clasificador1, setClasificador1] = useState("");
   const [clasificador2, setClasificador2] = useState("");
   const [despacho, setDespacho] = useState("");
-  const [fechaEntrega, setFechaEntrega] = useState("");
-  const [areaDestino, setAreaDestino] = useState("refacciones@nebchile.cl");
+  const [fechaEntrega, setFechaEntrega] = useState(fechaEntregaPorDefecto);
   const [comentario, setComentario] = useState("");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
   const [copiado, setCopiado] = useState(false);
+  const [registrando, setRegistrando] = useState(false);
+  const [registro, setRegistro] = useState<
+    { ok: true; folio: string } | { ok: false; error: string } | null
+  >(null);
+
+  const areaActual = useMemo(
+    () => AREAS.find((a) => a.email === areaDestino) ?? AREAS[0],
+    [areaDestino]
+  );
 
   useEffect(() => {
     let cancelado = false;
@@ -373,10 +408,27 @@ export default function EnviarPedidoForm() {
     return m;
   }, [categorias]);
 
+  // Solo los centros cuyo código empieza con el prefijo del área elegida.
+  const centrosDelArea = useMemo(
+    () =>
+      centros.filter((c) =>
+        c.codigo.toUpperCase().startsWith(areaActual.prefijo)
+      ),
+    [centros, areaActual]
+  );
+
   const centroActual = useMemo(
     () => centros.find((c) => c.codigo === centroSel) ?? null,
     [centros, centroSel]
   );
+
+  function cambiarArea(email: string) {
+    setAreaDestino(email);
+    // El centro elegido puede no pertenecer a la nueva área: se limpia siempre.
+    setCentroSel("");
+    setCopiado(false);
+    setRegistro(null);
+  }
 
   const totalUnidades = useMemo(
     () => lineas.reduce((sum, l) => sum + l.cantidad, 0),
@@ -453,15 +505,13 @@ export default function EnviarPedidoForm() {
       ? "Ingresa el solicitante."
       : !centroSel
         ? "Selecciona un centro de negocio."
-        : planCuenta.trim().length === 0
-          ? "Indica el plan de cuenta."
-          : lineasCompletas.length === 0
-            ? "Agrega al menos un artículo con cantidad."
-            : null;
+        : lineasCompletas.length === 0
+          ? "Agrega al menos un artículo con cantidad."
+          : null;
 
   const puedeEnviar = !faltante;
 
-  const asunto = `NEB Chile // Adquisiciones // ${centroDesc} // ${planCuenta.trim()}`;
+  const asunto = `NEB Chile // Adquisiciones // ${areaActual.label} // ${centroDesc}`;
 
   const cuerpoCorreo = useMemo(() => {
     const h = new Date().getHours();
@@ -481,9 +531,8 @@ export default function EnviarPedidoForm() {
       "",
       "Junto con saludar, solicito gestión del siguiente pedido:",
       "",
-      `Proveedor: ${proveedor}`.trimEnd(),
+      `Área: ${areaActual.label}`.trimEnd(),
       `Centro de Costo: ${centroDesc}`.trimEnd(),
-      `Plan de cuenta: ${planCuenta.trim()}`.trimEnd(),
       `Clasificador 1: ${clasificador1}`.trimEnd(),
       `Clasificador 2: ${clasificador2}`.trimEnd(),
       `Despacho: ${despacho}`.trimEnd(),
@@ -501,6 +550,7 @@ export default function EnviarPedidoForm() {
 
     return partes.join("\n");
   }, [
+    areaActual,
     centroDesc,
     clasificador1,
     clasificador2,
@@ -508,8 +558,6 @@ export default function EnviarPedidoForm() {
     despacho,
     fechaEntrega,
     lineasCompletas,
-    planCuenta,
-    proveedor,
     solicitante,
   ]);
 
@@ -522,8 +570,58 @@ export default function EnviarPedidoForm() {
     `&body=${encodeURIComponent(cuerpoCorreo)}`;
 
   function abrirGmail() {
-    if (!puedeEnviar) return;
     window.open(gmailUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function registrarPedido(): Promise<
+    { ok: true; folio: string } | { ok: false; error: string }
+  > {
+    try {
+      const res = await fetch("/api/pedidos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          solicitante: solicitante.trim(),
+          area: { label: areaActual.label, email: areaActual.email },
+          centroNegocio: centroActual
+            ? { codigo: centroActual.codigo, descripcion: centroActual.descripcion }
+            : null,
+          fechaEntrega: formatFecha(fechaEntrega),
+          clasificador1: clasificador1.trim(),
+          clasificador2: clasificador2.trim(),
+          despacho: despacho.trim(),
+          comentario: comentario.trim(),
+          items: lineasCompletas.map((l) => ({
+            codigo: l.codigo,
+            nombre: l.nombre,
+            categoria: l.categoria,
+            unidad: l.unidad,
+            cantidad: l.cantidad,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || "No se pudo registrar el pedido." };
+      }
+      return { ok: true, folio: data.pedidoId as string };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error de red al registrar.",
+      };
+    }
+  }
+
+  async function registrarYAbrir() {
+    if (!puedeEnviar || registrando) return;
+    setRegistrando(true);
+    setRegistro(null);
+    const resultado = await registrarPedido();
+    setRegistro(resultado);
+    setRegistrando(false);
+    // Se abre Gmail igual: el registro en planilla es complementario al correo.
+    abrirGmail();
   }
 
   async function copiarCorreo() {
@@ -598,29 +696,6 @@ export default function EnviarPedidoForm() {
             />
           </div>
           <div>
-            <label htmlFor="centro" className={labelClass}>
-              Centro de negocio / Centro de Costo{" "}
-              <span className="text-destructive">*</span>
-            </label>
-            <CentroCombobox
-              centros={centros}
-              value={centroSel}
-              onChange={setCentroSel}
-            />
-          </div>
-          <div>
-            <label htmlFor="planCuenta" className={labelClass}>
-              Plan de cuenta <span className="text-destructive">*</span>
-            </label>
-            <input
-              id="planCuenta"
-              className={fieldClass}
-              value={planCuenta}
-              onChange={(e) => setPlanCuenta(e.target.value)}
-              placeholder="Ej. Insumos"
-            />
-          </div>
-          <div>
             <label htmlFor="area" className={labelClass}>
               Área destino <span className="text-destructive">*</span>
             </label>
@@ -628,7 +703,7 @@ export default function EnviarPedidoForm() {
               id="area"
               className={fieldClass}
               value={areaDestino}
-              onChange={(e) => setAreaDestino(e.target.value)}
+              onChange={(e) => cambiarArea(e.target.value)}
             >
               {AREAS.map((a) => (
                 <option key={a.email} value={a.email}>
@@ -638,16 +713,20 @@ export default function EnviarPedidoForm() {
             </select>
           </div>
           <div>
-            <label htmlFor="proveedor" className={labelClass}>
-              Proveedor
+            <label htmlFor="centro" className={labelClass}>
+              Centro de negocio / Centro de Costo{" "}
+              <span className="text-destructive">*</span>
             </label>
-            <input
-              id="proveedor"
-              className={fieldClass}
-              value={proveedor}
-              onChange={(e) => setProveedor(e.target.value)}
-              placeholder="Opcional"
+            <CentroCombobox
+              key={areaActual.prefijo}
+              centros={centrosDelArea}
+              value={centroSel}
+              onChange={setCentroSel}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Solo centros de {areaActual.label} ({centrosDelArea.length}
+              {" "}disponibles).
+            </p>
           </div>
           <div>
             <label htmlFor="fechaEntrega" className={labelClass}>
@@ -660,6 +739,9 @@ export default function EnviarPedidoForm() {
               value={fechaEntrega}
               onChange={(e) => setFechaEntrega(e.target.value)}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Por defecto, 10 días hábiles desde hoy.
+            </p>
           </div>
           <div>
             <label htmlFor="clasificador1" className={labelClass}>
@@ -871,11 +953,19 @@ export default function EnviarPedidoForm() {
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={abrirGmail}
-              disabled={!puedeEnviar}
+              onClick={registrarYAbrir}
+              disabled={!puedeEnviar || registrando}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-6 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Abrir correo en Gmail
+              {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
+            </button>
+            <button
+              type="button"
+              onClick={abrirGmail}
+              disabled={!puedeEnviar}
+              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Solo abrir Gmail
             </button>
             <button
               type="button"
@@ -897,9 +987,24 @@ export default function EnviarPedidoForm() {
             )}
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Se abre Gmail con el correo listo para {destinatarios.join(", ")}.
-            Revísalo y presiona Enviar. No se escribe nada en la planilla.
+            «Registrar y abrir correo» guarda una fila por artículo en la pestaña{" "}
+            <span className="font-semibold">Pedidos</span> de la planilla y abre
+            Gmail con el correo listo para {destinatarios.join(", ")}. Revísalo y
+            presiona Enviar.
           </p>
+
+          {registro && (
+            <p
+              className={`mt-2 text-xs font-semibold ${
+                registro.ok ? "text-success" : "text-warning"
+              }`}
+              role="status"
+            >
+              {registro.ok
+                ? `Pedido registrado en la planilla con folio ${registro.folio}.`
+                : `No se pudo registrar en la planilla: ${registro.error} (el correo se abrió igual).`}
+            </p>
+          )}
 
           {puedeEnviar && (
             <details className="mt-4 rounded-lg border border-border bg-muted/40 p-3 text-sm">

@@ -12,7 +12,8 @@ export default function EnviarPedidoPage() {
           Enviar Pedido
         </h1>
         <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Completa los datos, arma la lista de artículos y abre el correo de
+          Elige el área y su centro de negocio, arma la lista de artículos y
+          registra el pedido: se guarda en la planilla y se abre el correo de
           solicitud ya redactado en Gmail para revisarlo y enviarlo.
         </p>
       </header>
