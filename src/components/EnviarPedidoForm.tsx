@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type Articulo = {
   codigo: string;
@@ -137,41 +138,80 @@ function IconChevron() {
   );
 }
 
+type ComboOption = { value: string; label: string };
+
 /**
- * Combobox con búsqueda por texto para elegir el centro de negocio.
- * Muestra solo la descripción; el valor seleccionado es el código.
+ * Combobox con búsqueda por texto: escribe para filtrar por `label` y elige
+ * una opción; `onChange` recibe su `value`. La lista se renderiza en un
+ * portal (posición fija calculada desde el input) para que no se corte
+ * dentro de contenedores con scroll, como la tabla de artículos.
  */
-function CentroCombobox({
-  centros,
+function SearchCombobox({
+  id,
+  ariaLabel,
+  options,
   value,
   onChange,
+  placeholder = "Escribe para buscar…",
+  disabled,
+  inputClassName = "",
 }: {
-  centros: CentroNegocio[];
+  id?: string;
+  ariaLabel?: string;
+  options: ComboOption[];
   value: string;
-  onChange: (codigo: string) => void;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  inputClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(
+    null
+  );
   const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  const listId = "centro-listbox";
+  const listId = useId();
 
   const selected = useMemo(
-    () => centros.find((c) => c.codigo === value) ?? null,
-    [centros, value]
+    () => options.find((o) => o.value === value) ?? null,
+    [options, value]
   );
 
   const filtradas = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return centros;
-    return centros.filter((c) => c.descripcion.toLowerCase().includes(q));
-  }, [centros, query]);
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
+  function actualizarRect() {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.bottom, left: r.left, width: r.width });
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    actualizarRect();
+    window.addEventListener("scroll", actualizarRect, true);
+    window.addEventListener("resize", actualizarRect);
+    return () => {
+      window.removeEventListener("scroll", actualizarRect, true);
+      window.removeEventListener("resize", actualizarRect);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     function onDocPointer(e: PointerEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("pointerdown", onDocPointer);
     return () => document.removeEventListener("pointerdown", onDocPointer);
@@ -183,25 +223,28 @@ function CentroCombobox({
     el?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, open]);
 
-  function seleccionar(c: CentroNegocio) {
-    onChange(c.codigo);
+  function seleccionar(o: ComboOption) {
+    onChange(o.value);
     setQuery("");
     setOpen(false);
   }
 
-  const displayValue = open ? query : selected?.descripcion ?? "";
+  const displayValue = open ? query : selected?.label ?? "";
 
   return (
     <div ref={rootRef} className="relative">
       <input
-        id="centro"
+        id={id}
+        ref={inputRef}
         role="combobox"
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
+        aria-label={ariaLabel}
         autoComplete="off"
-        className={`${fieldClass} pr-9`}
-        placeholder="Escribe para buscar…"
+        disabled={disabled}
+        className={`${fieldClass} pr-9 ${inputClassName}`}
+        placeholder={placeholder}
         value={displayValue}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -226,8 +269,8 @@ function CentroCombobox({
           } else if (e.key === "Enter") {
             if (open) {
               e.preventDefault();
-              const c = filtradas[activeIndex];
-              if (c) seleccionar(c);
+              const o = filtradas[activeIndex];
+              if (o) seleccionar(o);
             }
           } else if (e.key === "Escape") {
             setOpen(false);
@@ -241,36 +284,45 @@ function CentroCombobox({
       >
         <IconChevron />
       </span>
-      {open && (
-        <ul
-          id={listId}
-          ref={listRef}
-          role="listbox"
-          className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-border bg-card py-1 text-sm shadow-lg"
-        >
-          {filtradas.length === 0 ? (
-            <li className="px-3 py-2 text-muted-foreground">Sin resultados</li>
-          ) : (
-            filtradas.map((c, i) => (
-              <li
-                key={c.codigo}
-                role="option"
-                aria-selected={c.codigo === value}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  seleccionar(c);
-                }}
-                onMouseEnter={() => setActiveIndex(i)}
-                className={`cursor-pointer px-3 py-2 text-card-foreground ${
-                  i === activeIndex ? "bg-accent/10" : ""
-                } ${c.codigo === value ? "font-semibold" : ""}`}
-              >
-                {c.descripcion}
-              </li>
-            ))
-          )}
-        </ul>
-      )}
+      {open &&
+        rect &&
+        createPortal(
+          <ul
+            id={listId}
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: "fixed",
+              top: rect.top + 4,
+              left: rect.left,
+              width: rect.width,
+            }}
+            className="z-50 max-h-64 overflow-auto rounded-lg border border-border bg-card py-1 text-sm shadow-lg"
+          >
+            {filtradas.length === 0 ? (
+              <li className="px-3 py-2 text-muted-foreground">Sin resultados</li>
+            ) : (
+              filtradas.map((o, i) => (
+                <li
+                  key={o.value}
+                  role="option"
+                  aria-selected={o.value === value}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    seleccionar(o);
+                  }}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`cursor-pointer px-3 py-2 text-card-foreground ${
+                    i === activeIndex ? "bg-accent/10" : ""
+                  } ${o.value === value ? "font-semibold" : ""}`}
+                >
+                  {o.label}
+                </li>
+              ))
+            )}
+          </ul>,
+          document.body
+        )}
     </div>
   );
 }
@@ -408,6 +460,13 @@ export default function EnviarPedidoForm() {
     return m;
   }, [categorias]);
 
+  // Lista plana de todos los artículos, para buscar directamente por nombre
+  // sin tener que elegir antes una categoría.
+  const todosLosArticulos = useMemo(
+    () => categorias.flatMap((c) => c.articulos),
+    [categorias]
+  );
+
   // Solo los centros cuyo código empieza con el prefijo del área elegida.
   const centrosDelArea = useMemo(
     () =>
@@ -465,14 +524,18 @@ export default function EnviarPedidoForm() {
     setLineas((prev) =>
       prev.map((l) => {
         if (l.id !== id) return l;
-        const art = (articulosPorCategoria.get(l.categoria) ?? []).find(
-          (a) => a.codigo === codigo
-        );
+        // Se busca en todos los artículos (no solo los de la categoría ya
+        // elegida) para poder escribir el nombre del artículo directamente;
+        // la categoría de la fila se actualiza a la que realmente le
+        // corresponde.
+        const art = todosLosArticulos.find((a) => a.codigo === codigo);
+        if (!art) return { ...l, codigo, nombre: "", unidad: "" };
         return {
           ...l,
-          codigo,
-          nombre: art?.nombre ?? "",
-          unidad: art?.unidad ?? "",
+          categoria: art.categoria,
+          codigo: art.codigo,
+          nombre: art.nombre,
+          unidad: art.unidad,
         };
       })
     );
@@ -717,9 +780,14 @@ export default function EnviarPedidoForm() {
               Centro de negocio / Centro de Costo{" "}
               <span className="text-destructive">*</span>
             </label>
-            <CentroCombobox
+            <SearchCombobox
               key={areaActual.prefijo}
-              centros={centrosDelArea}
+              id="centro"
+              ariaLabel="Centro de negocio"
+              options={centrosDelArea.map((c) => ({
+                value: c.codigo,
+                label: c.descripcion,
+              }))}
               value={centroSel}
               onChange={setCentroSel}
             />
@@ -798,7 +866,7 @@ export default function EnviarPedidoForm() {
       <SectionCard
         step={2}
         title="Artículos del pedido"
-        description="Agrega una fila por artículo. Puedes cambiar la categoría, el artículo y la cantidad de cada fila mientras armas el pedido."
+        description="Agrega una fila por artículo. Escribe para buscar directamente el artículo (no hace falta elegir antes la categoría) o filtra primero por categoría."
       >
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
@@ -830,51 +898,49 @@ export default function EnviarPedidoForm() {
               </thead>
               <tbody>
                 {lineas.map((l) => {
-                  const artsLinea =
-                    articulosPorCategoria.get(l.categoria) ?? [];
+                  // Sin categoría elegida, se busca entre todos los
+                  // artículos; con categoría, se acota a esa categoría.
+                  const artsLinea = l.categoria
+                    ? articulosPorCategoria.get(l.categoria) ?? []
+                    : todosLosArticulos;
                   return (
                     <tr
                       key={l.id}
                       className="border-b border-border/70 align-top last:border-0"
                     >
                       <td className="py-2.5 pr-3">
-                        <select
-                          className={`${fieldClass} min-w-[11rem]`}
+                        <SearchCombobox
+                          inputClassName="min-w-[11rem]"
+                          ariaLabel="Categoría del artículo"
+                          placeholder="Buscar categoría…"
+                          options={categorias.map((c) => ({
+                            value: c.categoria,
+                            label: `${c.categoria} (${c.articulos.length})`,
+                          }))}
                           value={l.categoria}
-                          onChange={(e) =>
-                            cambiarCategoriaLinea(l.id, e.target.value)
+                          onChange={(categoria) =>
+                            cambiarCategoriaLinea(l.id, categoria)
                           }
-                          aria-label="Categoría del artículo"
-                        >
-                          <option value="">Selecciona…</option>
-                          {categorias.map((c) => (
-                            <option key={c.categoria} value={c.categoria}>
-                              {c.categoria} ({c.articulos.length})
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </td>
                       <td className="py-2.5 pr-3">
-                        <select
-                          className={`${fieldClass} min-w-[16rem]`}
-                          value={l.codigo}
-                          onChange={(e) =>
-                            cambiarArticuloLinea(l.id, e.target.value)
+                        <SearchCombobox
+                          inputClassName="min-w-[16rem]"
+                          ariaLabel="Artículo"
+                          placeholder={
+                            l.categoria
+                              ? "Buscar artículo…"
+                              : "Buscar en todos los artículos…"
                           }
-                          disabled={!l.categoria}
-                          aria-label="Artículo"
-                        >
-                          <option value="">
-                            {l.categoria
-                              ? "Selecciona…"
-                              : "Elige categoría primero"}
-                          </option>
-                          {artsLinea.map((a) => (
-                            <option key={a.codigo} value={a.codigo}>
-                              {a.nombre} — {a.codigo}
-                            </option>
-                          ))}
-                        </select>
+                          options={artsLinea.map((a) => ({
+                            value: a.codigo,
+                            label: `${a.nombre} — ${a.codigo}`,
+                          }))}
+                          value={l.codigo}
+                          onChange={(codigo) =>
+                            cambiarArticuloLinea(l.id, codigo)
+                          }
+                        />
                       </td>
                       <td className="py-2.5 pr-3">
                         <div className="flex items-center gap-1.5">
