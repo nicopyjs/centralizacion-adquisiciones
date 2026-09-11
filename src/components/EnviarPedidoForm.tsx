@@ -150,19 +150,30 @@ function SearchCombobox({
   id,
   ariaLabel,
   options,
+  searchOptions,
   value,
   onChange,
   placeholder = "Escribe para buscar…",
   disabled,
+  clearable,
   inputClassName = "",
 }: {
   id?: string;
   ariaLabel?: string;
+  /** Opciones que se muestran al abrir el combo sin haber escrito nada. */
   options: ComboOption[];
+  /**
+   * Universo donde buscar una vez que se escribe texto (por ejemplo, "todos
+   * los artículos" aunque `options` venga acotado a una categoría). Si no se
+   * pasa, se busca dentro de `options`.
+   */
+  searchOptions?: ComboOption[];
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Muestra una «×» para limpiar la selección sin abrir la lista. */
+  clearable?: boolean;
   inputClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -176,16 +187,18 @@ function SearchCombobox({
   const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
 
+  const universoBusqueda = searchOptions ?? options;
+
   const selected = useMemo(
-    () => options.find((o) => o.value === value) ?? null,
-    [options, value]
+    () => universoBusqueda.find((o) => o.value === value) ?? null,
+    [universoBusqueda, value]
   );
 
   const filtradas = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
-  }, [options, query]);
+    return universoBusqueda.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, universoBusqueda, query]);
 
   function actualizarRect() {
     const el = inputRef.current;
@@ -230,6 +243,7 @@ function SearchCombobox({
   }
 
   const displayValue = open ? query : selected?.label ?? "";
+  const mostrarLimpiar = clearable && !disabled && !!value;
 
   return (
     <div ref={rootRef} className="relative">
@@ -243,7 +257,7 @@ function SearchCombobox({
         aria-label={ariaLabel}
         autoComplete="off"
         disabled={disabled}
-        className={`${fieldClass} pr-9 ${inputClassName}`}
+        className={`${fieldClass} ${mostrarLimpiar ? "pr-16" : "pr-9"} ${inputClassName}`}
         placeholder={placeholder}
         value={displayValue}
         onChange={(e) => {
@@ -278,6 +292,23 @@ function SearchCombobox({
           }
         }}
       />
+      {mostrarLimpiar && (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Quitar selección"
+          onMouseDown={(e) => {
+            // preventDefault evita el blur del input antes del click.
+            e.preventDefault();
+            onChange("");
+            setQuery("");
+            setOpen(false);
+          }}
+          className="absolute right-8 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+        >
+          <IconX />
+        </button>
+      )}
       <span
         aria-hidden
         className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -324,6 +355,24 @@ function SearchCombobox({
           document.body
         )}
     </div>
+  );
+}
+
+function IconX() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
   );
 }
 
@@ -516,6 +565,15 @@ export default function EnviarPedidoForm() {
           ? { ...l, categoria, codigo: "", nombre: "", unidad: "" }
           : l
       )
+    );
+    setCopiado(false);
+  }
+
+  // Quita el filtro de categoría de la fila sin tocar el artículo ya
+  // elegido: así no queda "atrapada" buscando solo dentro de esa categoría.
+  function limpiarCategoriaLinea(id: string) {
+    setLineas((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, categoria: "" } : l))
     );
     setCopiado(false);
   }
@@ -866,7 +924,7 @@ export default function EnviarPedidoForm() {
       <SectionCard
         step={2}
         title="Artículos del pedido"
-        description="Agrega una fila por artículo. Escribe para buscar directamente el artículo (no hace falta elegir antes la categoría) o filtra primero por categoría."
+        description="Agrega una fila por artículo. Al escribir en Artículo se busca siempre en todos los artículos, elijas o no una categoría antes; la × de Categoría quita el filtro sin borrar el artículo ya elegido."
       >
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
@@ -913,13 +971,16 @@ export default function EnviarPedidoForm() {
                           inputClassName="min-w-[11rem]"
                           ariaLabel="Categoría del artículo"
                           placeholder="Buscar categoría…"
+                          clearable
                           options={categorias.map((c) => ({
                             value: c.categoria,
                             label: `${c.categoria} (${c.articulos.length})`,
                           }))}
                           value={l.categoria}
                           onChange={(categoria) =>
-                            cambiarCategoriaLinea(l.id, categoria)
+                            categoria
+                              ? cambiarCategoriaLinea(l.id, categoria)
+                              : limpiarCategoriaLinea(l.id)
                           }
                         />
                       </td>
@@ -929,10 +990,15 @@ export default function EnviarPedidoForm() {
                           ariaLabel="Artículo"
                           placeholder={
                             l.categoria
-                              ? "Buscar artículo…"
+                              ? "Buscar artículo (en esta categoría o escribe para buscar en todos)…"
                               : "Buscar en todos los artículos…"
                           }
+                          clearable
                           options={artsLinea.map((a) => ({
+                            value: a.codigo,
+                            label: `${a.nombre} — ${a.codigo}`,
+                          }))}
+                          searchOptions={todosLosArticulos.map((a) => ({
                             value: a.codigo,
                             label: `${a.nombre} — ${a.codigo}`,
                           }))}
