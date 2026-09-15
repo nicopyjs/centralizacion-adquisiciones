@@ -4,7 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const TABS = [{ href: "/enviar-pedido", label: "Enviar Pedido" }];
+const TABS = [
+  { href: "/enviar-pedido", label: "Enviar Pedido" },
+  { href: "/gestion-pedidos", label: "Gestión de Pedidos" },
+];
 
 export default function Navbar() {
   const pathname = usePathname();

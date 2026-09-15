@@ -26,9 +26,14 @@ const HEADERS = [
   "Unidad",
   "Cantidad",
   "Comentario",
+  "Cantidad recibida",
+  "Consumo interno",
+  "Parte de entrada",
 ];
-// Última columna de encabezados (16 columnas -> A..P).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:P1`;
+// Última columna de encabezados (19 columnas -> A..S).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:S1`;
+// Rango de datos (sin encabezado).
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:S`;
 
 type ItemInput = {
   codigo?: unknown;
@@ -52,6 +57,27 @@ type PedidoInput = {
 
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : v == null ? "" : String(v);
+}
+
+async function asegurarPedidosSheet(sheetId: string) {
+  const meta = await getSpreadsheetMeta(sheetId);
+  const exists = meta.sheets.some((s) => s.properties.title === PEDIDOS_SHEET);
+
+  if (!exists) {
+    await ensureSheet(sheetId, PEDIDOS_SHEET);
+    await appendRows(sheetId, PEDIDOS_SHEET, [HEADERS]);
+    return;
+  }
+
+  // Asegura que la fila de encabezados esté al día.
+  const firstRow = await readRange(sheetId, HEADERS_RANGE);
+  const current = firstRow[0] ?? [];
+  const matches =
+    current.length === HEADERS.length &&
+    HEADERS.every((h, i) => (current[i] ?? "") === h);
+  if (!matches) {
+    await writeRange(sheetId, HEADERS_RANGE, [HEADERS]);
+  }
 }
 
 export async function POST(request: Request) {
@@ -109,23 +135,7 @@ export async function POST(request: Request) {
   const sheetId = articulosSheetId();
 
   try {
-    const meta = await getSpreadsheetMeta(sheetId);
-    const exists = meta.sheets.some((s) => s.properties.title === PEDIDOS_SHEET);
-
-    if (!exists) {
-      await ensureSheet(sheetId, PEDIDOS_SHEET);
-      await appendRows(sheetId, PEDIDOS_SHEET, [HEADERS]);
-    } else {
-      // Asegura que la fila de encabezados esté al día.
-      const firstRow = await readRange(sheetId, HEADERS_RANGE);
-      const current = firstRow[0] ?? [];
-      const matches =
-        current.length === HEADERS.length &&
-        HEADERS.every((h, i) => (current[i] ?? "") === h);
-      if (!matches) {
-        await writeRange(sheetId, HEADERS_RANGE, [HEADERS]);
-      }
-    }
+    await asegurarPedidosSheet(sheetId);
 
     const rows = items.map((it) => [
       pedidoId,
@@ -144,11 +154,166 @@ export async function POST(request: Request) {
       it.unidad,
       it.cantidad,
       comentario,
+      "",
+      "",
+      "",
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
 
     return NextResponse.json({ ok: true, pedidoId, lineas: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export type PedidoItem = {
+  fila: number;
+  categoria: string;
+  codigo: string;
+  nombre: string;
+  unidad: string;
+  cantidad: number;
+  cantidadRecibida: number | null;
+  consumoInterno: string;
+  parteDeEntrada: string;
+};
+
+export type PedidoResumen = {
+  pedidoId: string;
+  fecha: string;
+  solicitante: string;
+  area: string;
+  centroNegocio: string;
+  centroCodigo: string;
+  fechaEntrega: string;
+  clasificador1: string;
+  clasificador2: string;
+  despacho: string;
+  comentario: string;
+  items: PedidoItem[];
+};
+
+export async function GET() {
+  const sheetId = articulosSheetId();
+  try {
+    const meta = await getSpreadsheetMeta(sheetId);
+    const exists = meta.sheets.some((s) => s.properties.title === PEDIDOS_SHEET);
+    if (!exists) {
+      return NextResponse.json({ pedidos: [] });
+    }
+
+    const rows = await readRange(sheetId, DATA_RANGE);
+    const porPedido = new Map<string, PedidoResumen>();
+
+    rows.forEach((row, i) => {
+      const pedidoId = str(row[0]);
+      if (!pedidoId) return;
+      const fila = i + 2; // +2: encabezado en fila 1, datos desde fila 2.
+
+      let pedido = porPedido.get(pedidoId);
+      if (!pedido) {
+        pedido = {
+          pedidoId,
+          fecha: str(row[1]),
+          solicitante: str(row[2]),
+          area: str(row[3]),
+          centroNegocio: str(row[4]),
+          centroCodigo: str(row[5]),
+          fechaEntrega: str(row[6]),
+          clasificador1: str(row[7]),
+          clasificador2: str(row[8]),
+          despacho: str(row[9]),
+          comentario: str(row[15]),
+          items: [],
+        };
+        porPedido.set(pedidoId, pedido);
+      }
+
+      const cantidadRecibidaRaw = str(row[16]);
+      pedido.items.push({
+        fila,
+        categoria: str(row[10]),
+        codigo: str(row[11]),
+        nombre: str(row[12]),
+        unidad: str(row[13]),
+        cantidad: Number(row[14]) || 0,
+        cantidadRecibida:
+          cantidadRecibidaRaw === "" ? null : Number(cantidadRecibidaRaw),
+        consumoInterno: str(row[17]),
+        parteDeEntrada: str(row[18]),
+      });
+    });
+
+    const pedidos = Array.from(porPedido.values()).sort((a, b) =>
+      b.fecha.localeCompare(a.fecha)
+    );
+
+    return NextResponse.json({ pedidos });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+type PatchInput = {
+  fila?: unknown;
+  cantidadRecibida?: unknown;
+  consumoInterno?: unknown;
+  parteDeEntrada?: unknown;
+};
+
+export async function PATCH(request: Request) {
+  let body: PatchInput;
+  try {
+    body = (await request.json()) as PatchInput;
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+
+  const fila = Number(body.fila);
+  if (!Number.isInteger(fila) || fila < 2) {
+    return NextResponse.json(
+      { error: "El campo 'fila' es inválido." },
+      { status: 400 }
+    );
+  }
+
+  const sheetId = articulosSheetId();
+
+  try {
+    // Lee los valores actuales de la fila para no pisar los campos que no
+    // vienen en este PATCH (se guarda de a un campo o de a varios).
+    const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`);
+    const [curRecibida = "", curConsumo = "", curParte = ""] = actual[0] ?? [];
+
+    const cantidadRecibida =
+      body.cantidadRecibida === undefined
+        ? curRecibida
+        : body.cantidadRecibida === null || body.cantidadRecibida === ""
+          ? ""
+          : Number(body.cantidadRecibida);
+    const consumoInterno =
+      body.consumoInterno === undefined ? curConsumo : str(body.consumoInterno);
+    const parteDeEntrada =
+      body.parteDeEntrada === undefined ? curParte : str(body.parteDeEntrada);
+
+    if (
+      typeof cantidadRecibida === "number" &&
+      !Number.isFinite(cantidadRecibida)
+    ) {
+      return NextResponse.json(
+        { error: "La cantidad recibida debe ser un número." },
+        { status: 400 }
+      );
+    }
+
+    await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`, [
+      [cantidadRecibida, consumoInterno, parteDeEntrada],
+    ]);
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });
