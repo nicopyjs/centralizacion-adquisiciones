@@ -20,23 +20,22 @@ export default async function GestionPedidosPage() {
   }
 
   return (
-    <div>
-      <header className="mb-6 flex items-start justify-between gap-4">
+    <div className="mx-auto w-full max-w-[1800px]">
+      <header className="mb-5 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-primary">
             Gestión de Pedidos
           </h1>
-          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            Revisa los pedidos registrados por los maestros y actualiza, por
-            artículo, la cantidad recibida, el consumo interno y el parte de
-            entrada. Los cambios se guardan directamente en la planilla.
+          <p className="mt-1 text-sm text-muted-foreground">
+            Registra lo recibido, el consumo interno y el parte de entrada. Los
+            cambios se guardan directamente en la planilla.
           </p>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <CerrarSesionButton />
-          <span className="text-xs text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             Sesión: {GESTION_USUARIO}
           </span>
+          <CerrarSesionButton />
         </div>
       </header>
       <GestionPedidosPanel />

@@ -27,7 +27,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         suppressHydrationWarning
       >
         <Navbar />
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6 lg:py-10">
+        {/* El ancho máximo lo define cada página (Enviar Pedido es angosta,
+            Gestión de Pedidos aprovecha la pantalla completa). */}
+        <main className="w-full flex-1 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
           {children}
         </main>
         <footer className="border-t border-border py-5 text-center text-xs text-muted-foreground">

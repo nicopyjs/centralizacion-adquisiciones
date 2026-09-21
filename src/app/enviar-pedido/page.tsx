@@ -6,7 +6,7 @@ export const metadata = {
 
 export default function EnviarPedidoPage() {
   return (
-    <div>
+    <div className="mx-auto w-full max-w-5xl">
       <header className="mb-6">
         <h1 className="text-2xl font-extrabold tracking-tight text-primary">
           Enviar Pedido
