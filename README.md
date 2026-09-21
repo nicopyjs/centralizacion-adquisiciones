@@ -92,7 +92,7 @@ npm run lint
 | POST   | `/api/pedidos`   | Body `{ solicitante, area: { label, email }, centroNegocio: { codigo, descripcion }, fechaEntrega?, urgente?, clasificador1?, clasificador2?, despacho?, comentario?, items: [{ codigo, nombre, categoria, unidad, cantidad }] }`. Escribe una fila por ítem en la pestaña `Pedidos`. |
 
 Pestaña `Pedidos` (20 columnas, A..T):
-`Pedido ID · Fecha · Solicitante · Área · Centro de negocio · Centro Código · Fecha entrega · Clasificador 1 · Clasificador 2 · Despacho · Categoría · Código · Artículo · Unidad · Cantidad · Comentario · Cantidad recibida · Consumo interno · Parte de entrada · Urgente`
+`Pedido ID · Fecha · Solicitante · Área · Centro de negocio · Centro Código · Fecha entrega · Clasificador 1 · Clasificador 2 · Despacho · Categoría · Código · Artículo · Unidad · Cantidad · Comentario · Cantidad recibida · Consumo interno · Recepcionado por · Urgente`
 
 La columna `Urgente` vale `Sí` en los pedidos urgentes y queda vacía en el resto.
 

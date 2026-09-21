@@ -29,7 +29,7 @@ const HEADERS = [
   "Comentario",
   "Cantidad recibida",
   "Consumo interno",
-  "Parte de entrada",
+  "Recepcionado por",
   "Urgente",
 ];
 // Última columna de encabezados (20 columnas -> A..T).
@@ -61,6 +61,8 @@ type PedidoInput = {
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : v == null ? "" : String(v);
 }
+
+let encabezadosVerificados = false;
 
 function noAutorizado() {
   return NextResponse.json({ error: "No autorizado." }, { status: 401 });
@@ -187,7 +189,7 @@ export type PedidoItem = {
   cantidad: number;
   cantidadRecibida: number | null;
   consumoInterno: string;
-  parteDeEntrada: string;
+  recepcionadoPor: string;
 };
 
 export type PedidoResumen = {
@@ -258,7 +260,7 @@ export async function GET() {
         cantidadRecibida:
           cantidadRecibidaRaw === "" ? null : Number(cantidadRecibidaRaw),
         consumoInterno: str(row[17]),
-        parteDeEntrada: str(row[18]),
+        recepcionadoPor: str(row[18]),
       });
     });
 
@@ -277,7 +279,7 @@ type PatchInput = {
   fila?: unknown;
   cantidadRecibida?: unknown;
   consumoInterno?: unknown;
-  parteDeEntrada?: unknown;
+  recepcionadoPor?: unknown;
 };
 
 export async function PATCH(request: Request) {
@@ -300,10 +302,18 @@ export async function PATCH(request: Request) {
   const sheetId = articulosSheetId();
 
   try {
+    // Una vez por instancia: pone al día la fila de encabezados (p. ej. el
+    // renombre de «Parte de entrada» a «Recepcionado por») sin esperar a que
+    // se registre un pedido nuevo.
+    if (!encabezadosVerificados) {
+      await asegurarPedidosSheet(sheetId);
+      encabezadosVerificados = true;
+    }
+
     // Lee los valores actuales de la fila para no pisar los campos que no
     // vienen en este PATCH (se guarda de a un campo o de a varios).
     const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`);
-    const [curRecibida = "", curConsumo = "", curParte = ""] = actual[0] ?? [];
+    const [curRecibida = "", curConsumo = "", curRecepcion = ""] = actual[0] ?? [];
 
     const cantidadRecibida =
       body.cantidadRecibida === undefined
@@ -313,8 +323,8 @@ export async function PATCH(request: Request) {
           : Number(body.cantidadRecibida);
     const consumoInterno =
       body.consumoInterno === undefined ? curConsumo : str(body.consumoInterno);
-    const parteDeEntrada =
-      body.parteDeEntrada === undefined ? curParte : str(body.parteDeEntrada);
+    const recepcionadoPor =
+      body.recepcionadoPor === undefined ? curRecepcion : str(body.recepcionadoPor);
 
     if (
       typeof cantidadRecibida === "number" &&
@@ -327,7 +337,7 @@ export async function PATCH(request: Request) {
     }
 
     await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`, [
-      [cantidadRecibida, consumoInterno, parteDeEntrada],
+      [cantidadRecibida, consumoInterno, recepcionadoPor],
     ]);
 
     return NextResponse.json({ ok: true });

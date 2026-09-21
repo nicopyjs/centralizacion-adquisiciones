@@ -27,7 +27,7 @@ export default async function GestionPedidosPage() {
             Gestión de Pedidos
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Registra lo recibido, el consumo interno y el parte de entrada. Los
+            Registra lo recibido, el consumo interno y quién recepciona. Los
             cambios se guardan directamente en la planilla.
           </p>
         </div>

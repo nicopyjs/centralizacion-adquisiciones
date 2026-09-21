@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 
 type PedidoItem = {
   fila: number;
@@ -11,7 +12,7 @@ type PedidoItem = {
   cantidad: number;
   cantidadRecibida: number | null;
   consumoInterno: string;
-  parteDeEntrada: string;
+  recepcionadoPor: string;
 };
 
 type PedidoResumen = {
@@ -90,7 +91,7 @@ function esUrgentePendiente(p: PedidoResumen): boolean {
 type LineaEdit = {
   cantidadRecibida: string;
   consumoInterno: string;
-  parteDeEntrada: string;
+  recepcionadoPor: string;
 };
 
 function lineaEditDesdeItem(it: PedidoItem): LineaEdit {
@@ -98,7 +99,7 @@ function lineaEditDesdeItem(it: PedidoItem): LineaEdit {
     cantidadRecibida:
       it.cantidadRecibida === null ? "" : String(it.cantidadRecibida),
     consumoInterno: it.consumoInterno,
-    parteDeEntrada: it.parteDeEntrada,
+    recepcionadoPor: it.recepcionadoPor,
   };
 }
 
@@ -109,7 +110,7 @@ function tieneCambios(it: PedidoItem, ed: LineaEdit | undefined): boolean {
   return (
     ed.cantidadRecibida.trim() !== base.cantidadRecibida ||
     ed.consumoInterno.trim() !== base.consumoInterno.trim() ||
-    ed.parteDeEntrada.trim() !== base.parteDeEntrada.trim()
+    ed.recepcionadoPor.trim() !== base.recepcionadoPor.trim()
   );
 }
 
@@ -169,6 +170,26 @@ export default function GestionPedidosPanel() {
 
   useEffect(() => {
     cargarPedidos(true);
+  }, []);
+
+  // Personas activas del maestro de empleados, para «Recepcionado por». Es
+  // opcional: si falla, el campo sigue aceptando texto libre.
+  const [empleados, setEmpleados] = useState<ComboOption[]>([]);
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/solicitantes")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelado && Array.isArray(d?.solicitantes)) {
+          setEmpleados(
+            (d.solicitantes as string[]).map((n) => ({ value: n, label: n }))
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
   }, []);
 
   const cambiosPorPedido = useMemo(() => {
@@ -302,7 +323,7 @@ export default function GestionPedidosPanel() {
           fila,
           cantidadRecibida,
           consumoInterno: edicion.consumoInterno.trim(),
-          parteDeEntrada: edicion.parteDeEntrada.trim(),
+          recepcionadoPor: edicion.recepcionadoPor.trim(),
         }),
       });
       if (res.status === 401) {
@@ -321,7 +342,7 @@ export default function GestionPedidosPanel() {
                   ...x,
                   cantidadRecibida,
                   consumoInterno: edicion.consumoInterno.trim(),
-                  parteDeEntrada: edicion.parteDeEntrada.trim(),
+                  recepcionadoPor: edicion.recepcionadoPor.trim(),
                 }
               : x
           ),
@@ -631,6 +652,7 @@ export default function GestionPedidosPanel() {
               guardado={guardado}
               errores={errores}
               guardandoTodo={guardandoTodo}
+              empleados={empleados}
               cambios={cambiosPorPedido.get(pedidoActual.pedidoId) ?? 0}
               onCambiar={cambiarCampo}
               onMarcarRecibido={marcarRecibido}
@@ -651,6 +673,7 @@ function Detalle({
   guardado,
   errores,
   guardandoTodo,
+  empleados,
   cambios,
   onCambiar,
   onMarcarRecibido,
@@ -663,6 +686,7 @@ function Detalle({
   guardado: Record<number, boolean>;
   errores: Record<number, string>;
   guardandoTodo: boolean;
+  empleados: ComboOption[];
   cambios: number;
   onCambiar: (it: PedidoItem, campo: keyof LineaEdit, valor: string) => void;
   onMarcarRecibido: (items: PedidoItem[]) => void;
@@ -790,7 +814,7 @@ function Detalle({
               <th className="px-3 py-2.5 font-semibold">Pedido</th>
               <th className="px-3 py-2.5 font-semibold">Recibido</th>
               <th className="px-3 py-2.5 font-semibold">Consumo interno</th>
-              <th className="px-3 py-2.5 font-semibold">Parte de entrada</th>
+              <th className="px-3 py-2.5 font-semibold">Recepcionado por</th>
               <th className="py-2.5 pl-3 pr-5 text-right font-semibold">
                 <span className="sr-only">Guardar</span>
               </th>
@@ -892,15 +916,15 @@ function Detalle({
                     />
                   </td>
                   <td className="px-3 py-3">
-                    <input
-                      aria-label={`Parte de entrada de ${it.nombre}`}
-                      className={fieldClass}
-                      value={edicion.parteDeEntrada}
-                      onChange={(e) =>
-                        onCambiar(it, "parteDeEntrada", e.target.value)
-                      }
-                      onKeyDown={enter}
-                      placeholder="Opcional"
+                    <SearchCombobox
+                      size="sm"
+                      allowCustom
+                      clearable
+                      ariaLabel={`Quién recepcionó ${it.nombre}`}
+                      placeholder="Buscar persona…"
+                      options={empleados}
+                      value={edicion.recepcionadoPor}
+                      onChange={(v) => onCambiar(it, "recepcionadoPor", v)}
                     />
                   </td>
                   <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right">
