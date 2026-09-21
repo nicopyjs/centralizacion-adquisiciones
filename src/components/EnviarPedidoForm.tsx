@@ -78,7 +78,7 @@ function fechaEntregaPorDefecto(): string {
 }
 
 const fieldClass =
-  "h-11 w-full rounded-lg border border-border bg-card px-3 text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
+  "h-11 w-full rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
@@ -133,6 +133,245 @@ const OPCIONES_DESPACHO = [
   "STOCK EN BODEGA",
 ];
 
+type Plataforma = "ios" | "android" | null;
+
+/** Detecta si se está en un celular/tablet (donde conviene abrir la app de Gmail). */
+function detectarPlataforma(): Plataforma {
+  if (typeof navigator === "undefined") return null;
+  const ua = navigator.userAgent;
+  if (/android/i.test(ua)) return "android";
+  if (
+    /iPhone|iPad|iPod/i.test(ua) ||
+    // iPadOS se presenta como Mac, pero con pantalla táctil.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  )
+    return "ios";
+  return null;
+}
+
+type ResumenEnvio = {
+  solicitante: string;
+  area: string;
+  centro: string;
+  entrega: string;
+  despacho: string;
+  clasificador1: string;
+  clasificador2: string;
+  para: string[];
+  items: { id: string; nombre: string; cantidad: number; unidad: string }[];
+  unidades: number;
+};
+
+/**
+ * Confirmación antes de registrar y abrir el correo. Se monta solo mientras
+ * está abierta. El foco parte en «No, volver a editar» (la opción segura).
+ */
+function ConfirmarEnvioDialog({
+  resumen,
+  enviando,
+  onCancelar,
+  onConfirmar,
+}: {
+  resumen: ResumenEnvio;
+  enviando: boolean;
+  onCancelar: () => void;
+  onConfirmar: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const volverRef = useRef<HTMLButtonElement>(null);
+  const propsRef = useRef({ enviando, onCancelar });
+  useEffect(() => {
+    propsRef.current = { enviando, onCancelar };
+  });
+
+  useEffect(() => {
+    const previo = document.activeElement as HTMLElement | null;
+    volverRef.current?.focus();
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (!propsRef.current.enviando) propsRef.current.onCancelar();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled])"
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+      previo?.focus();
+    };
+  }, []);
+
+  const datos: [string, string][] = [
+    ["Solicitante", resumen.solicitante],
+    ["Área", resumen.area],
+    ["Centro de negocio", resumen.centro],
+    ["Fecha de entrega", resumen.entrega],
+  ];
+  if (resumen.despacho) datos.push(["Despacho", resumen.despacho]);
+  if (resumen.clasificador1) datos.push(["Clasificador 1", resumen.clasificador1]);
+  if (resumen.clasificador2) datos.push(["Clasificador 2", resumen.clasificador2]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-primary/55 backdrop-blur-[2px] sm:items-center sm:p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCancelar();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirmar-titulo"
+        aria-describedby="confirmar-desc"
+        className="flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:max-w-lg sm:rounded-2xl"
+      >
+        <div className="flex items-start gap-3 px-5 pb-3 pt-5">
+          <span
+            aria-hidden
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand text-brand-foreground"
+          >
+            <IconWarning />
+          </span>
+          <div>
+            <h2
+              id="confirmar-titulo"
+              className="text-lg font-extrabold leading-snug tracking-tight text-primary"
+            >
+              ¿Estás realmente seguro de que tu pedido está correcto?
+            </h2>
+            <p
+              id="confirmar-desc"
+              className="mt-1 text-sm text-muted-foreground"
+            >
+              Al confirmar se registra en la planilla y se abre el correo listo
+              para enviar.
+            </p>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+          <dl className="grid gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-sm sm:grid-cols-2">
+            {datos.map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {k}
+                </dt>
+                <dd className="break-words font-medium text-card-foreground">
+                  {v || "—"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+
+          <p className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {resumen.items.length}{" "}
+            {resumen.items.length === 1 ? "artículo" : "artículos"} ·{" "}
+            {resumen.unidades.toLocaleString("es-CL")} unidades
+          </p>
+          <ul className="divide-y divide-border/70 rounded-lg border border-border text-sm">
+            {resumen.items.map((it) => (
+              <li
+                key={it.id}
+                className="flex items-start justify-between gap-3 px-3 py-2"
+              >
+                <span className="min-w-0 break-words text-card-foreground">
+                  {it.nombre}
+                </span>
+                <span className="shrink-0 font-bold tabular-nums text-primary">
+                  {it.cantidad.toLocaleString("es-CL")}{" "}
+                  <span className="font-normal text-muted-foreground">
+                    {it.unidad}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Para: {resumen.para.join(", ")}
+          </p>
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:justify-end">
+          <button
+            ref={volverRef}
+            type="button"
+            onClick={onCancelar}
+            disabled={enviando}
+            className="inline-flex h-12 items-center justify-center rounded-lg border border-border bg-card px-5 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50 sm:h-11"
+          >
+            No, volver a editar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirmar}
+            disabled={enviando}
+            className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-accent px-5 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-wait disabled:opacity-70 sm:h-11"
+          >
+            {enviando ? "Registrando…" : "Sí, enviar"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function IconWarning() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 17h.01" />
+    </svg>
+  );
+}
+
+function IconMail() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </svg>
+  );
+}
+
 function SectionCard({
   step,
   title,
@@ -145,18 +384,18 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+    <section className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-6">
       <div className="flex items-start gap-3">
         <span
           aria-hidden
-          className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-brand text-xs font-bold text-brand-foreground"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand text-sm font-extrabold text-brand-foreground"
         >
           {step}
         </span>
         <div>
-          <h2 className="text-sm font-bold text-primary">{title}</h2>
+          <h2 className="text-base font-bold leading-8 text-primary">{title}</h2>
           {description ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+            <p className="text-sm text-muted-foreground">{description}</p>
           ) : null}
         </div>
       </div>
@@ -525,6 +764,8 @@ export default function EnviarPedidoForm() {
   const [registro, setRegistro] = useState<
     { ok: true; folio: string } | { ok: false; error: string } | null
   >(null);
+  const [confirmando, setConfirmando] = useState(false);
+  const bannerRef = useRef<HTMLDivElement>(null);
 
   const areaActual = useMemo(
     () => AREAS.find((a) => a.email === areaDestino) ?? AREAS[0],
@@ -767,8 +1008,48 @@ export default function EnviarPedidoForm() {
     `&su=${encodeURIComponent(asunto)}` +
     `&body=${encodeURIComponent(cuerpoCorreo)}`;
 
+  /**
+   * En PC abre Gmail web en otra pestaña. En celular abre la APP de Gmail con
+   * el correo ya redactado (la versión web móvil es incómoda y falla).
+   *  - Android: intent hacia com.google.android.gm; si la app no está, cae a
+   *    Gmail web.
+   *  - iOS: esquema googlegmail://; si la app no se abre, cae a mailto:.
+   */
   function abrirGmail() {
-    window.open(gmailUrl, "_blank", "noopener,noreferrer");
+    const plataforma = detectarPlataforma();
+    if (!plataforma) {
+      window.open(gmailUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    const para = destinatarios.join(",");
+    const asuntoEnc = encodeURIComponent(asunto);
+    const cuerpoEnc = encodeURIComponent(cuerpoCorreo);
+
+    if (plataforma === "android") {
+      window.location.href =
+        `intent:${para}?subject=${asuntoEnc}&body=${cuerpoEnc}` +
+        "#Intent;action=android.intent.action.SENDTO;scheme=mailto;" +
+        "package=com.google.android.gm;" +
+        `S.browser_fallback_url=${encodeURIComponent(gmailUrl)};end`;
+      return;
+    }
+
+    // iOS: si tras un momento la página sigue visible, la app no se abrió.
+    let salio = false;
+    const alOcultar = () => {
+      if (document.hidden) salio = true;
+    };
+    document.addEventListener("visibilitychange", alOcultar);
+    window.setTimeout(() => {
+      document.removeEventListener("visibilitychange", alOcultar);
+      if (!salio && !document.hidden) {
+        window.location.href = `mailto:${para}?subject=${asuntoEnc}&body=${cuerpoEnc}`;
+      }
+    }, 1600);
+    window.location.href =
+      `googlegmail:///co?to=${encodeURIComponent(para)}` +
+      `&subject=${asuntoEnc}&body=${cuerpoEnc}`;
   }
 
   async function registrarPedido(): Promise<
@@ -818,8 +1099,26 @@ export default function EnviarPedidoForm() {
     const resultado = await registrarPedido();
     setRegistro(resultado);
     setRegistrando(false);
+    setConfirmando(false);
+    // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
+    // bloquea la apertura automática) y abre el correo.
+    bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     // Se abre Gmail igual: el registro en planilla es complementario al correo.
     abrirGmail();
+  }
+
+  /** Limpia el pedido para armar otro; conserva solicitante y área. */
+  function nuevoPedido() {
+    setLineas([]);
+    setCentroSel("");
+    setClasificador1("");
+    setClasificador2("");
+    setDespacho("");
+    setComentario("");
+    setFechaEntrega(fechaEntregaPorDefecto());
+    setCopiado(false);
+    setRegistro(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function copiarCorreo() {
@@ -872,199 +1171,331 @@ export default function EnviarPedidoForm() {
     );
   }
 
+  const unidadesCompletas = lineasCompletas.reduce(
+    (sum, l) => sum + l.cantidad,
+    0
+  );
+
+  const resumenEnvio: ResumenEnvio = {
+    solicitante: solicitante.trim(),
+    area: areaActual.label,
+    centro: centroDesc,
+    entrega: formatFecha(fechaEntrega),
+    despacho,
+    clasificador1,
+    clasificador2,
+    para: destinatarios,
+    items: lineasCompletas.map((l) => ({
+      id: l.id,
+      nombre: l.nombre,
+      cantidad: l.cantidad,
+      unidad: l.unidad,
+    })),
+    unidades: unidadesCompletas,
+  };
+
+  const COLUMNAS_LINEA =
+    "md:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_11rem_2.5rem]";
+  const miniLabel =
+    "mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:hidden";
+  const botonSecundario =
+    "inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40";
+
   return (
-    <div className="space-y-6">
-      <SectionCard
-        step={1}
-        title="Datos del pedido"
-        description="Estos datos arman el encabezado del correo de solicitud."
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="solicitante" className={labelClass}>
-              Solicitante (nombre) <span className="text-destructive">*</span>
-            </label>
-            <SearchCombobox
-              id="solicitante"
-              ariaLabel="Solicitante"
-              options={opcionesSolicitante}
-              value={solicitante}
-              onChange={setSolicitante}
-              placeholder="Escribe el nombre de quien solicita"
-              allowCustom
-            />
+    <div className="grid items-start gap-6 pb-32 xl:grid-cols-[minmax(0,1fr)_400px] xl:pb-0 2xl:grid-cols-[minmax(0,1fr)_440px]">
+      <div className="min-w-0 space-y-6">
+        {registro && (
+          <div
+            ref={bannerRef}
+            role="status"
+            className={`scroll-mt-24 rounded-xl border p-4 sm:p-5 ${
+              registro.ok
+                ? "border-success/30 bg-success-surface"
+                : "border-warning/40 bg-warning-surface"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <span
+                aria-hidden
+                className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-accent-foreground ${
+                  registro.ok ? "bg-success" : "bg-warning"
+                }`}
+              >
+                {registro.ok ? <IconCheck /> : <IconWarning />}
+              </span>
+              <div className="min-w-0">
+                <p
+                  className={`font-bold ${
+                    registro.ok ? "text-success" : "text-warning"
+                  }`}
+                >
+                  {registro.ok
+                    ? `Pedido registrado · folio ${registro.folio}`
+                    : "No se pudo registrar el pedido en la planilla"}
+                </p>
+                <p className="mt-0.5 text-sm text-card-foreground/80">
+                  {registro.ok
+                    ? "Si Gmail no se abrió solo, toca «Abrir Gmail». Revisa el correo y presiona Enviar."
+                    : `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={abrirGmail}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
+                  >
+                    <IconMail />
+                    Abrir Gmail
+                  </button>
+                  {registro.ok && (
+                    <button
+                      type="button"
+                      onClick={nuevoPedido}
+                      className={botonSecundario}
+                    >
+                      Hacer otro pedido
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
-          <div>
-            <label htmlFor="area" className={labelClass}>
-              Área destino <span className="text-destructive">*</span>
-            </label>
-            <select
-              id="area"
-              className={fieldClass}
-              value={areaDestino}
-              onChange={(e) => cambiarArea(e.target.value)}
-            >
-              {AREAS.map((a) => (
-                <option key={a.email} value={a.email}>
-                  {a.label} — {a.email}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="centro" className={labelClass}>
-              Centro de negocio / Centro de Costo{" "}
-              <span className="text-destructive">*</span>
-            </label>
-            <SearchCombobox
-              key={areaActual.prefijo}
-              id="centro"
-              ariaLabel="Centro de negocio"
-              options={centrosDelArea.map((c) => ({
-                value: c.codigo,
-                label: c.descripcion,
-              }))}
-              value={centroSel}
-              onChange={setCentroSel}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Solo centros de {areaActual.label} ({centrosDelArea.length}
-              {" "}disponibles).
-            </p>
-          </div>
-          <div>
-            <label htmlFor="fechaEntrega" className={labelClass}>
-              Fecha de entrega
-            </label>
-            <input
-              id="fechaEntrega"
-              type="date"
-              className={fieldClass}
-              value={fechaEntrega}
-              onChange={(e) => setFechaEntrega(e.target.value)}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Por defecto, 10 días hábiles desde hoy.
-            </p>
-          </div>
-          <div>
-            <label htmlFor="clasificador1" className={labelClass}>
-              Clasificador 1
-            </label>
-            <select
-              id="clasificador1"
-              className={fieldClass}
-              value={clasificador1}
-              onChange={(e) => setClasificador1(e.target.value)}
-            >
-              <option value="">Opcional</option>
-              {CLASIFICADORES_1.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="clasificador2" className={labelClass}>
-              Clasificador 2
-            </label>
-            <select
-              id="clasificador2"
-              className={fieldClass}
-              value={clasificador2}
-              onChange={(e) => setClasificador2(e.target.value)}
-            >
-              <option value="">Opcional</option>
-              {CLASIFICADORES_2.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="despacho" className={labelClass}>
-              Despacho
-            </label>
-            <select
-              id="despacho"
-              className={fieldClass}
-              value={despacho}
-              onChange={(e) => setDespacho(e.target.value)}
-            >
-              <option value="">Opcional</option>
-              {OPCIONES_DESPACHO.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="mt-4">
-          <label htmlFor="comentario" className={labelClass}>
-            Comentario
-          </label>
-          <textarea
-            id="comentario"
-            className={`${fieldClass} h-auto py-2.5`}
-            rows={2}
-            value={comentario}
-            onChange={(e) => setComentario(e.target.value)}
-            placeholder="Opcional"
-          />
-        </div>
-      </SectionCard>
+        )}
 
-      <SectionCard
-        step={2}
-        title="Artículos del pedido"
-        description="Agrega una fila por artículo. Al escribir en Artículo se busca siempre en todos los artículos, elijas o no una categoría antes; la × de Categoría quita el filtro sin borrar el artículo ya elegido."
-      >
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
-            {lineas.length} {lineas.length === 1 ? "artículo" : "artículos"}
-          </span>
-          {lineas.length > 0 && (
+        <SectionCard
+          step={1}
+          title="Datos del pedido"
+          description="Estos datos arman el encabezado del correo de solicitud."
+        >
+          <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
+            <div>
+              <label htmlFor="solicitante" className={labelClass}>
+                Solicitante (nombre) <span className="text-destructive">*</span>
+              </label>
+              <SearchCombobox
+                id="solicitante"
+                ariaLabel="Solicitante"
+                options={opcionesSolicitante}
+                value={solicitante}
+                onChange={setSolicitante}
+                placeholder="Escribe el nombre de quien solicita"
+                allowCustom
+              />
+            </div>
+            <div>
+              <label htmlFor="fechaEntrega" className={labelClass}>
+                Fecha de entrega
+              </label>
+              <input
+                id="fechaEntrega"
+                type="date"
+                className={fieldClass}
+                value={fechaEntrega}
+                onChange={(e) => setFechaEntrega(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Por defecto, 10 días hábiles desde hoy.
+              </p>
+            </div>
+
+            <fieldset className="md:col-span-2">
+              <legend className={labelClass}>
+                Área destino <span className="text-destructive">*</span>
+              </legend>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {AREAS.map((a) => (
+                  <label key={a.email} className="cursor-pointer">
+                    <input
+                      type="radio"
+                      name="area"
+                      className="peer sr-only"
+                      checked={a.email === areaDestino}
+                      onChange={() => cambiarArea(a.email)}
+                    />
+                    <span className="flex min-h-12 flex-col items-center justify-center rounded-lg border border-border bg-card px-3 py-2 text-center transition-colors hover:bg-muted peer-checked:border-accent peer-checked:bg-accent/10 peer-checked:ring-1 peer-checked:ring-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40">
+                      <span className="text-sm font-semibold text-primary">
+                        {a.label}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {a.email}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <div className="md:col-span-2">
+              <label htmlFor="centro" className={labelClass}>
+                Centro de negocio / Centro de Costo{" "}
+                <span className="text-destructive">*</span>
+              </label>
+              <SearchCombobox
+                key={areaActual.prefijo}
+                id="centro"
+                ariaLabel="Centro de negocio"
+                options={centrosDelArea.map((c) => ({
+                  value: c.codigo,
+                  label: c.descripcion,
+                }))}
+                value={centroSel}
+                onChange={setCentroSel}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Solo centros de {areaActual.label} ({centrosDelArea.length}{" "}
+                disponibles).
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-border pt-5">
+            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-secondary">
+              Clasificación y despacho
+            </p>
+            <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
+              <div>
+                <label htmlFor="clasificador1" className={labelClass}>
+                  Clasificador 1
+                </label>
+                <select
+                  id="clasificador1"
+                  className={fieldClass}
+                  value={clasificador1}
+                  onChange={(e) => setClasificador1(e.target.value)}
+                >
+                  <option value="">Opcional</option>
+                  {CLASIFICADORES_1.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="clasificador2" className={labelClass}>
+                  Clasificador 2
+                </label>
+                <select
+                  id="clasificador2"
+                  className={fieldClass}
+                  value={clasificador2}
+                  onChange={(e) => setClasificador2(e.target.value)}
+                >
+                  <option value="">Opcional</option>
+                  {CLASIFICADORES_2.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label htmlFor="despacho" className={labelClass}>
+                  Despacho
+                </label>
+                <select
+                  id="despacho"
+                  className={fieldClass}
+                  value={despacho}
+                  onChange={(e) => setDespacho(e.target.value)}
+                >
+                  <option value="">Opcional</option>
+                  {OPCIONES_DESPACHO.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label htmlFor="comentario" className={labelClass}>
+              Comentario
+            </label>
+            <textarea
+              id="comentario"
+              className={`${fieldClass} h-auto py-2.5`}
+              rows={2}
+              value={comentario}
+              onChange={(e) => setComentario(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          step={2}
+          title="Artículos del pedido"
+          description="Agrega una fila por artículo y escribe para buscarlo: se busca en todos, elijas o no una categoría."
+        >
+          <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
             <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
-              {totalUnidades.toLocaleString("es-CL")} unidades en total
+              {lineas.length} {lineas.length === 1 ? "artículo" : "artículos"}
             </span>
-          )}
-        </div>
-
-        {lineas.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-            Aún no has agregado artículos. Usa «Agregar artículo» para empezar.
+            {lineas.length > 0 && (
+              <span className="rounded-full bg-muted px-2.5 py-1 font-semibold text-muted-foreground">
+                {totalUnidades.toLocaleString("es-CL")} unidades en total
+              </span>
+            )}
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="py-2 pr-3 font-semibold">Categoría</th>
-                  <th className="py-2 pr-3 font-semibold">Artículo</th>
-                  <th className="py-2 pr-3 font-semibold">Cantidad</th>
-                  <th className="py-2 font-semibold">
-                    <span className="sr-only">Acciones</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {lineas.map((l) => {
+
+          {lineas.length === 0 ? (
+            <button
+              type="button"
+              onClick={agregarLinea}
+              className="flex w-full flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground transition-colors hover:border-accent hover:bg-accent/5"
+            >
+              <span className="grid h-10 w-10 place-items-center rounded-full bg-accent/10 text-accent">
+                <IconPlus />
+              </span>
+              <span className="mt-1 font-semibold text-primary">
+                Agregar el primer artículo
+              </span>
+              <span>Aún no has agregado artículos.</span>
+            </button>
+          ) : (
+            <>
+              <div
+                aria-hidden
+                className={`hidden border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground md:grid md:gap-3 ${COLUMNAS_LINEA}`}
+              >
+                <span>Categoría</span>
+                <span>Artículo</span>
+                <span>Cantidad</span>
+                <span />
+              </div>
+              <ul className="space-y-3 md:space-y-0">
+                {lineas.map((l, idx) => {
                   // Sin categoría elegida, se busca entre todos los
                   // artículos; con categoría, se acota a esa categoría.
                   const artsLinea = l.categoria
                     ? articulosPorCategoria.get(l.categoria) ?? []
                     : todosLosArticulos;
                   return (
-                    <tr
+                    <li
                       key={l.id}
-                      className="border-b border-border/70 align-top last:border-0"
+                      className={`rounded-xl border border-border bg-muted/30 p-3 md:grid md:items-start md:gap-3 md:rounded-none md:border-0 md:border-b md:border-border/70 md:bg-transparent md:px-0 md:py-2.5 md:last:border-b-0 ${COLUMNAS_LINEA}`}
                     >
-                      <td className="py-2.5 pr-3">
+                      <div className="mb-3 flex items-center justify-between md:hidden">
+                        <span className="text-xs font-bold uppercase tracking-wide text-secondary">
+                          Artículo {idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => quitarLinea(l.id)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
+                          aria-label={`Quitar artículo ${idx + 1}`}
+                        >
+                          <IconTrash />
+                          Quitar
+                        </button>
+                      </div>
+
+                      <div className="mb-3 md:mb-0">
+                        <span className={miniLabel}>Categoría</span>
                         <SearchCombobox
-                          inputClassName="min-w-[11rem]"
                           ariaLabel="Categoría del artículo"
                           placeholder="Buscar categoría…"
                           clearable
@@ -1079,10 +1510,11 @@ export default function EnviarPedidoForm() {
                               : limpiarCategoriaLinea(l.id)
                           }
                         />
-                      </td>
-                      <td className="py-2.5 pr-3">
+                      </div>
+
+                      <div className="mb-3 md:mb-0">
+                        <span className={miniLabel}>Artículo</span>
                         <SearchCombobox
-                          inputClassName="min-w-[16rem]"
                           ariaLabel="Artículo"
                           placeholder={
                             l.categoria
@@ -1103,8 +1535,10 @@ export default function EnviarPedidoForm() {
                             cambiarArticuloLinea(l.id, codigo)
                           }
                         />
-                      </td>
-                      <td className="py-2.5 pr-3">
+                      </div>
+
+                      <div>
+                        <span className={miniLabel}>Cantidad</span>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
@@ -1112,7 +1546,7 @@ export default function EnviarPedidoForm() {
                               cambiarCantidad(l.id, l.cantidad - 1)
                             }
                             disabled={l.cantidad <= 1}
-                            className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40 md:h-9 md:w-9"
                             aria-label="Disminuir cantidad"
                           >
                             <IconMinus />
@@ -1131,7 +1565,7 @@ export default function EnviarPedidoForm() {
                             onBlur={() => {
                               if (!(l.cantidad > 0)) cambiarCantidad(l.id, 1);
                             }}
-                            className="h-8 w-16 rounded-md border border-border bg-card px-2 text-center text-sm tabular-nums text-card-foreground outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                            className="h-11 w-20 rounded-lg border border-border bg-card px-2 text-center text-base tabular-nums text-card-foreground outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 md:h-9 md:w-14 md:text-sm"
                             aria-label="Cantidad"
                           />
                           <button
@@ -1139,59 +1573,99 @@ export default function EnviarPedidoForm() {
                             onClick={() =>
                               cambiarCantidad(l.id, l.cantidad + 1)
                             }
-                            className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted"
+                            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted md:h-9 md:w-9"
                             aria-label="Aumentar cantidad"
                           >
                             <IconPlus />
                           </button>
-                          <span className="ml-1 text-xs text-muted-foreground">
+                          <span
+                            className="ml-1 truncate text-xs text-muted-foreground md:max-w-[2rem]"
+                            title={l.unidad}
+                          >
                             {l.unidad || "—"}
                           </span>
                         </div>
-                      </td>
-                      <td className="py-2.5 text-right">
+                      </div>
+
+                      <div className="hidden md:block">
                         <button
                           type="button"
                           onClick={() => quitarLinea(l.id)}
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
-                          aria-label="Quitar fila"
+                          className="grid h-9 w-9 place-items-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
+                          aria-label={`Quitar artículo ${idx + 1}`}
+                          title="Quitar"
                         >
                           <IconTrash />
-                          Quitar
                         </button>
-                      </td>
-                    </tr>
+                      </div>
+                    </li>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </ul>
+              <button
+                type="button"
+                onClick={agregarLinea}
+                className={`${botonSecundario} mt-4 w-full sm:w-auto`}
+              >
+                <IconPlus />
+                Agregar artículo
+              </button>
+            </>
+          )}
+        </SectionCard>
+      </div>
 
-        <button
-          type="button"
-          onClick={agregarLinea}
-          className="mt-4 inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
-        >
-          <IconPlus />
-          Agregar artículo
-        </button>
+      {/* Resumen y acciones: columna fija a la derecha en pantallas grandes */}
+      <aside className="min-w-0 space-y-4 xl:sticky xl:top-24">
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <h2 className="text-base font-bold text-primary">Resumen del pedido</h2>
+          <dl className="mt-3 divide-y divide-border/70 text-sm">
+            <FilaResumen label="Para">
+              <ul className="space-y-0.5">
+                {destinatarios.map((d) => (
+                  <li key={d} className="break-all">
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            </FilaResumen>
+            <FilaResumen label="Área">{areaActual.label}</FilaResumen>
+            <FilaResumen label="Centro">{centroDesc || "—"}</FilaResumen>
+            <FilaResumen label="Entrega">{formatFecha(fechaEntrega) || "—"}</FilaResumen>
+            <FilaResumen label="Artículos">
+              {lineasCompletas.length} ·{" "}
+              {unidadesCompletas.toLocaleString("es-CL")} unidades
+            </FilaResumen>
+          </dl>
 
-        <div className="mt-6 border-t border-border pt-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={registrarYAbrir}
-              disabled={!puedeEnviar || registrando}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-6 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          {faltante && (
+            <p
+              role="status"
+              className="mt-4 flex items-start gap-2 rounded-lg bg-warning-surface px-3 py-2 text-xs font-medium text-warning"
             >
-              {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
-            </button>
+              <span className="mt-px shrink-0">
+                <IconWarning />
+              </span>
+              {faltante}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setConfirmando(true)}
+            disabled={!puedeEnviar || registrando}
+            className="mt-4 hidden h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 xl:inline-flex"
+          >
+            <IconMail />
+            {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
+          </button>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={abrirGmail}
               disabled={!puedeEnviar}
-              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+              className={botonSecundario}
             >
               Solo abrir Gmail
             </button>
@@ -1199,7 +1673,7 @@ export default function EnviarPedidoForm() {
               type="button"
               onClick={copiarCorreo}
               disabled={!puedeEnviar}
-              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+              className={botonSecundario}
             >
               {copiado ? (
                 <>
@@ -1210,45 +1684,82 @@ export default function EnviarPedidoForm() {
                 "Copiar correo"
               )}
             </button>
-            {faltante && (
-              <span className="text-xs text-muted-foreground">{faltante}</span>
-            )}
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">
+
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
             «Registrar y abrir correo» guarda una fila por artículo en la pestaña{" "}
             <span className="font-semibold">Pedidos</span> de la planilla y abre
-            Gmail con el correo listo para {destinatarios.join(", ")}. Revísalo y
+            Gmail (en el celular, la app) con el correo listo. Revísalo y
             presiona Enviar.
           </p>
+        </section>
 
-          {registro && (
-            <p
-              className={`mt-2 text-xs font-semibold ${
-                registro.ok ? "text-success" : "text-warning"
-              }`}
-              role="status"
-            >
-              {registro.ok
-                ? `Pedido registrado en la planilla con folio ${registro.folio}.`
-                : `No se pudo registrar en la planilla: ${registro.error} (el correo se abrió igual).`}
+        {puedeEnviar && (
+          <details className="rounded-xl border border-border bg-card p-4 text-sm shadow-sm">
+            <summary className="cursor-pointer font-semibold text-primary">
+              Vista previa del correo
+            </summary>
+            <p className="mt-3 text-xs font-semibold text-muted-foreground">
+              Asunto: <span className="font-normal">{asunto}</span>
             </p>
-          )}
+            <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-xs text-card-foreground">
+              {cuerpoCorreo}
+            </pre>
+          </details>
+        )}
+      </aside>
 
-          {puedeEnviar && (
-            <details className="mt-4 rounded-lg border border-border bg-muted/40 p-3 text-sm">
-              <summary className="cursor-pointer font-semibold text-primary">
-                Vista previa del correo
-              </summary>
-              <p className="mt-2 text-xs font-semibold text-muted-foreground">
-                Asunto: <span className="font-normal">{asunto}</span>
-              </p>
-              <pre className="mt-2 whitespace-pre-wrap font-sans text-xs text-card-foreground">
-                {cuerpoCorreo}
-              </pre>
-            </details>
-          )}
-        </div>
-      </SectionCard>
+      {/* Barra fija para celular y tablet: el botón principal siempre a mano */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur xl:hidden">
+        <p
+          role="status"
+          className={`mb-2 truncate text-xs ${
+            faltante ? "font-medium text-warning" : "text-muted-foreground"
+          }`}
+        >
+          {faltante ??
+            `${lineasCompletas.length} ${
+              lineasCompletas.length === 1 ? "artículo" : "artículos"
+            } · ${unidadesCompletas.toLocaleString("es-CL")} unidades`}
+        </p>
+        <button
+          type="button"
+          onClick={() => setConfirmando(true)}
+          disabled={!puedeEnviar || registrando}
+          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <IconMail />
+          {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
+        </button>
+      </div>
+
+      {confirmando && (
+        <ConfirmarEnvioDialog
+          resumen={resumenEnvio}
+          enviando={registrando}
+          onCancelar={() => setConfirmando(false)}
+          onConfirmar={registrarYAbrir}
+        />
+      )}
+    </div>
+  );
+}
+
+function FilaResumen({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-2">
+      <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="min-w-0 text-right font-medium text-card-foreground">
+        {children}
+      </dd>
     </div>
   );
 }

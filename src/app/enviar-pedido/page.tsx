@@ -6,15 +6,15 @@ export const metadata = {
 
 export default function EnviarPedidoPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="mx-auto w-full max-w-[1440px]">
       <header className="mb-6">
-        <h1 className="text-2xl font-extrabold tracking-tight text-primary">
+        <h1 className="text-2xl font-extrabold tracking-tight text-primary sm:text-3xl">
           Enviar Pedido
         </h1>
-        <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+        <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           Elige el área y su centro de negocio, arma la lista de artículos y
-          registra el pedido: se guarda en la planilla y se abre el correo de
-          solicitud ya redactado en Gmail para revisarlo y enviarlo.
+          registra el pedido: se guarda en la planilla y se abre Gmail con el
+          correo de solicitud ya redactado para revisarlo y enviarlo.
         </p>
       </header>
       <EnviarPedidoForm />

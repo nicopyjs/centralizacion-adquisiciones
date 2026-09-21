@@ -14,7 +14,7 @@ export default function Navbar() {
   // Gestión de Pedidos usa todo el ancho; el navbar acompaña ese mismo ancho.
   const ancho = pathname.startsWith("/gestion-pedidos")
     ? "max-w-[1800px]"
-    : "max-w-5xl";
+    : "max-w-[1440px]";
 
   return (
     <header className="sticky top-0 z-40 border-b border-border border-t-[3px] border-t-brand bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
