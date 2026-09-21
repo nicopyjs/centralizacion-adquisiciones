@@ -42,6 +42,9 @@ html {
 }
 
 body {
+  /* Evita el desplazamiento horizontal de toda la página en celular
+     (clip, a diferencia de hidden, no rompe los elementos sticky). */
+  overflow-x: clip;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
