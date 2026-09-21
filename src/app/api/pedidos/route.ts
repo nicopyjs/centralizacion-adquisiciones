@@ -30,11 +30,12 @@ const HEADERS = [
   "Cantidad recibida",
   "Consumo interno",
   "Parte de entrada",
+  "Urgente",
 ];
-// Última columna de encabezados (19 columnas -> A..S).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:S1`;
+// Última columna de encabezados (20 columnas -> A..T).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:T1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:S`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:T`;
 
 type ItemInput = {
   codigo?: unknown;
@@ -53,6 +54,7 @@ type PedidoInput = {
   clasificador2?: unknown;
   despacho?: unknown;
   comentario?: unknown;
+  urgente?: unknown;
   items?: unknown;
 };
 
@@ -102,6 +104,8 @@ export async function POST(request: Request) {
   const clasificador2 = str(body.clasificador2);
   const despacho = str(body.despacho);
   const comentario = str(body.comentario);
+  // En la planilla: "Sí" si es urgente, vacío si no.
+  const urgente = body.urgente === true ? "Sí" : "";
   const rawItems = Array.isArray(body.items) ? (body.items as ItemInput[]) : [];
 
   if (!solicitante) {
@@ -162,6 +166,7 @@ export async function POST(request: Request) {
       "",
       "",
       "",
+      urgente,
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -197,6 +202,7 @@ export type PedidoResumen = {
   clasificador2: string;
   despacho: string;
   comentario: string;
+  urgente: boolean;
   items: PedidoItem[];
 };
 
@@ -232,6 +238,10 @@ export async function GET() {
           clasificador2: str(row[8]),
           despacho: str(row[9]),
           comentario: str(row[15]),
+          // Los pedidos anteriores a esta columna quedan como no urgentes.
+          urgente: ["si", "sí", "s", "1", "true", "urgente"].includes(
+            str(row[19]).toLowerCase()
+          ),
           items: [],
         };
         porPedido.set(pedidoId, pedido);

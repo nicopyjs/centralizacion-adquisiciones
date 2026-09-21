@@ -82,11 +82,8 @@ const fieldClass =
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
-// Siempre van en copia; el área destino se agrega como tercer destinatario.
-const DESTINATARIOS_FIJOS = [
-  "adquisiciones@nebchile.cl",
-  "gerencia@nebchile.cl",
-];
+// El correo va directo a Adquisiciones, con copia (CC) al área destino.
+const DESTINATARIO_PRINCIPAL = "adquisiciones@nebchile.cl";
 // Cada área destino filtra los centros de negocio por el prefijo de su código
 // (columna C de la planilla de centros): RCT = Refacciones, SST = Servicio
 // Técnico, INT = Instalaciones.
@@ -157,7 +154,9 @@ type ResumenEnvio = {
   despacho: string;
   clasificador1: string;
   clasificador2: string;
-  para: string[];
+  para: string;
+  cc: string;
+  urgente: boolean;
   items: { id: string; nombre: string; cantidad: number; unidad: string }[];
   unidades: number;
 };
@@ -268,6 +267,11 @@ function ConfirmarEnvioDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+          {resumen.urgente && (
+            <p className="mb-3 rounded-lg bg-warning-surface px-3 py-2 text-sm font-bold text-warning">
+              Este pedido se enviará como URGENTE.
+            </p>
+          )}
           <dl className="grid gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-sm sm:grid-cols-2">
             {datos.map(([k, v]) => (
               <div key={k} className="min-w-0">
@@ -305,7 +309,7 @@ function ConfirmarEnvioDialog({
             ))}
           </ul>
           <p className="mt-3 text-xs text-muted-foreground">
-            Para: {resumen.para.join(", ")}
+            Para: {resumen.para} · CC: {resumen.cc}
           </p>
         </div>
 
@@ -992,6 +996,7 @@ export default function EnviarPedidoForm() {
       saludo,
       "",
       "Junto con saludar, solicito gestión del siguiente pedido:",
+      ...(urgente ? ["", "*** PEDIDO URGENTE ***"] : []),
       "",
       `Área: ${areaActual.label}`.trimEnd(),
       `Centro de Costo: ${centroDesc}`.trimEnd(),
@@ -1024,11 +1029,14 @@ export default function EnviarPedidoForm() {
     solicitante,
   ]);
 
-  const destinatarios = [...DESTINATARIOS_FIJOS, areaDestino];
+  // Directo a Adquisiciones; el área va en copia.
+  const para = DESTINATARIO_PRINCIPAL;
+  const cc = areaDestino;
 
   const gmailUrl =
     "https://mail.google.com/mail/?view=cm&fs=1" +
-    `&to=${encodeURIComponent(destinatarios.join(","))}` +
+    `&to=${encodeURIComponent(para)}` +
+    `&cc=${encodeURIComponent(cc)}` +
     `&su=${encodeURIComponent(asunto)}` +
     `&body=${encodeURIComponent(cuerpoCorreo)}`;
 
@@ -1046,13 +1054,12 @@ export default function EnviarPedidoForm() {
       return;
     }
 
-    const para = destinatarios.join(",");
     const asuntoEnc = encodeURIComponent(asunto);
     const cuerpoEnc = encodeURIComponent(cuerpoCorreo);
 
     if (plataforma === "android") {
       window.location.href =
-        `intent:${para}?subject=${asuntoEnc}&body=${cuerpoEnc}` +
+        `intent:${para}?cc=${cc}&subject=${asuntoEnc}&body=${cuerpoEnc}` +
         "#Intent;action=android.intent.action.SENDTO;scheme=mailto;" +
         "package=com.google.android.gm;" +
         `S.browser_fallback_url=${encodeURIComponent(gmailUrl)};end`;
@@ -1068,11 +1075,12 @@ export default function EnviarPedidoForm() {
     window.setTimeout(() => {
       document.removeEventListener("visibilitychange", alOcultar);
       if (!salio && !document.hidden) {
-        window.location.href = `mailto:${para}?subject=${asuntoEnc}&body=${cuerpoEnc}`;
+        window.location.href = `mailto:${para}?cc=${cc}&subject=${asuntoEnc}&body=${cuerpoEnc}`;
       }
     }, 1600);
     window.location.href =
       `googlegmail:///co?to=${encodeURIComponent(para)}` +
+      `&cc=${encodeURIComponent(cc)}` +
       `&subject=${asuntoEnc}&body=${cuerpoEnc}`;
   }
 
@@ -1090,6 +1098,7 @@ export default function EnviarPedidoForm() {
             ? { codigo: centroActual.codigo, descripcion: centroActual.descripcion }
             : null,
           fechaEntrega: formatFecha(fechaEntrega),
+          urgente,
           clasificador1: clasificador1.trim(),
           clasificador2: clasificador2.trim(),
           despacho: despacho.trim(),
@@ -1149,7 +1158,7 @@ export default function EnviarPedidoForm() {
   async function copiarCorreo() {
     try {
       await navigator.clipboard.writeText(
-        `Para: ${destinatarios.join(", ")}\nAsunto: ${asunto}\n\n${cuerpoCorreo}`
+        `Para: ${para}\nCC: ${cc}\nAsunto: ${asunto}\n\n${cuerpoCorreo}`
       );
       setCopiado(true);
       window.setTimeout(() => setCopiado(false), 2500);
@@ -1209,7 +1218,9 @@ export default function EnviarPedidoForm() {
     despacho,
     clasificador1,
     clasificador2,
-    para: destinatarios,
+    para,
+    cc,
+    urgente,
     items: lineasCompletas.map((l) => ({
       id: l.id,
       nombre: l.nombre,
@@ -1671,13 +1682,10 @@ export default function EnviarPedidoForm() {
           <h2 className="text-base font-bold text-primary">Resumen del pedido</h2>
           <dl className="mt-3 divide-y divide-border/70 text-sm">
             <FilaResumen label="Para">
-              <ul className="space-y-0.5">
-                {destinatarios.map((d) => (
-                  <li key={d} className="break-all">
-                    {d}
-                  </li>
-                ))}
-              </ul>
+              <span className="break-all">{para}</span>
+            </FilaResumen>
+            <FilaResumen label="CC">
+              <span className="break-all">{cc}</span>
             </FilaResumen>
             <FilaResumen label="Área">{areaActual.label}</FilaResumen>
             <FilaResumen label="Centro">{centroDesc || "—"}</FilaResumen>

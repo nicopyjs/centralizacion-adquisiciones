@@ -17,8 +17,9 @@ Formulario para armar un pedido:
 
 1. **Datos del pedido**: `Solicitante` (obligatorio), `Área destino`
    (obligatorio), `Centro de negocio` (obligatorio, se elige de una lista
-   **filtrada por el área**), `Fecha de entrega` (por defecto 10 días hábiles),
-   `Clasificador 1/2`, `Despacho` y `Comentario` (opcionales).
+   **filtrada por el área**), `Fecha de entrega` (mínimo 10 días hábiles; con
+   **Pedido urgente** se puede elegir una fecha anterior), `Clasificador 1/2`,
+   `Despacho` y `Comentario` (opcionales).
    - El área destino filtra los centros por el prefijo del código: `RCT`
      (Refacciones), `SST` (Servicio Técnico), `INT` (Instalaciones). Al cambiar
      de área se limpia el centro elegido.
@@ -28,8 +29,9 @@ Formulario para armar un pedido:
 3. **Registrar y abrir correo en Gmail**: escribe una fila por artículo en la
    pestaña `Pedidos` del spreadsheet de artículos (se crea/actualiza con
    encabezados si hace falta), devuelve un folio `PED-<timestamp>` compartido por
-   todas las líneas y **además** abre Gmail con el correo ya redactado para
-   `adquisiciones@`, `gerencia@` y el correo del área. «Solo abrir Gmail» y
+   todas las líneas y **además** abre Gmail con el correo ya redactado: **Para**
+   `adquisiciones@` y **CC** el correo del área. Si el pedido es urgente, el
+   cuerpo lo indica (`*** PEDIDO URGENTE ***` y la fecha de entrega). «Solo abrir Gmail» y
    «Copiar correo» no tocan la planilla.
 
 **Artículos** (spreadsheet `SHEET_ID`, primera pestaña) — columnas usadas:
@@ -87,11 +89,13 @@ npm run lint
 | ------ | ---------------- | ----------- |
 | GET    | `/api/articulos` | `{ categorias: [{ categoria, categoriaId, articulos: [...] }] }`. Cache 5 min. |
 | GET    | `/api/centros`   | `{ centros: [{ codigo, descripcion }] }` (Imputable=S y Activo=S). Cache 30 min. |
-| POST   | `/api/pedidos`   | Body `{ solicitante, area: { label, email }, centroNegocio: { codigo, descripcion }, fechaEntrega?, clasificador1?, clasificador2?, despacho?, comentario?, items: [{ codigo, nombre, categoria, unidad, cantidad }] }`. Escribe una fila por ítem en la pestaña `Pedidos`. |
+| POST   | `/api/pedidos`   | Body `{ solicitante, area: { label, email }, centroNegocio: { codigo, descripcion }, fechaEntrega?, urgente?, clasificador1?, clasificador2?, despacho?, comentario?, items: [{ codigo, nombre, categoria, unidad, cantidad }] }`. Escribe una fila por ítem en la pestaña `Pedidos`. |
 
-Pestaña `Pedidos` (16 columnas):
-`Pedido ID · Fecha · Solicitante · Área · Centro de negocio · Centro Código · Fecha entrega · Clasificador 1 · Clasificador 2 · Despacho · Categoría · Código · Artículo · Unidad · Cantidad · Comentario`
+Pestaña `Pedidos` (20 columnas, A..T):
+`Pedido ID · Fecha · Solicitante · Área · Centro de negocio · Centro Código · Fecha entrega · Clasificador 1 · Clasificador 2 · Despacho · Categoría · Código · Artículo · Unidad · Cantidad · Comentario · Cantidad recibida · Consumo interno · Parte de entrada · Urgente`
 
-> Si la pestaña `Pedidos` ya existía con el layout anterior (11 columnas), la
-> primera escritura reescribe la fila de encabezados a las 16 nuevas; las filas
-> antiguas quedan como estaban.
+La columna `Urgente` vale `Sí` en los pedidos urgentes y queda vacía en el resto.
+
+> Si la pestaña `Pedidos` ya existía con menos columnas, la primera escritura
+> reescribe la fila de encabezados a las 20 actuales; las filas antiguas quedan
+> como estaban (y cuentan como no urgentes).

@@ -26,11 +26,12 @@ type PedidoResumen = {
   clasificador2: string;
   despacho: string;
   comentario: string;
+  urgente: boolean;
   items: PedidoItem[];
 };
 
 type Estado = "pendiente" | "parcial" | "completo";
-type Filtro = "todos" | Estado;
+type Filtro = "todos" | "urgentes" | Estado;
 
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
   pendiente: {
@@ -77,6 +78,11 @@ function estadoPedido(items: PedidoItem[]): Estado {
   return items.every((it) => estadoLinea(it) === "completo")
     ? "completo"
     : "parcial";
+}
+
+/** Urgente y todavía sin recibir por completo: lo que hay que atender primero. */
+function esUrgentePendiente(p: PedidoResumen): boolean {
+  return p.urgente && estadoPedido(p.items) !== "completo";
 }
 
 // Estado editable de una línea: strings para poder dejar el input vacío
@@ -146,11 +152,12 @@ export default function GestionPedidosPanel() {
       if (!res.ok) throw new Error(data.error || "Error al cargar pedidos");
       const lista: PedidoResumen[] = data.pedidos ?? [];
       setPedidos(lista);
-      // Deja abierto el pedido más reciente para no partir con la pantalla vacía.
+      // Deja abierto un pedido para no partir con la pantalla vacía: el primer
+      // urgente pendiente si hay, si no el más reciente.
       setSeleccionado((prev) =>
         prev && lista.some((p) => p.pedidoId === prev)
           ? prev
-          : (lista[0]?.pedidoId ?? null)
+          : ((lista.find(esUrgentePendiente) ?? lista[0])?.pedidoId ?? null)
       );
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Error desconocido");
@@ -192,28 +199,42 @@ export default function GestionPedidosPanel() {
   const conteo = useMemo(() => {
     const c: Record<Filtro, number> = {
       todos: pedidos.length,
+      urgentes: 0,
       pendiente: 0,
       parcial: 0,
       completo: 0,
     };
-    for (const p of pedidos) c[estadoPedido(p.items)] += 1;
+    for (const p of pedidos) {
+      c[estadoPedido(p.items)] += 1;
+      if (esUrgentePendiente(p)) c.urgentes += 1;
+    }
     return c;
   }, [pedidos]);
 
   const pedidosFiltrados = useMemo(() => {
     const q = normalizar(busqueda.trim());
-    return pedidos.filter((p) => {
-      if (filtro !== "todos" && estadoPedido(p.items) !== filtro) return false;
-      if (!q) return true;
-      const texto = [
-        p.pedidoId,
-        p.solicitante,
-        p.area,
-        p.centroNegocio,
-        ...p.items.flatMap((it) => [it.nombre, it.codigo]),
-      ].join(" ");
-      return normalizar(texto).includes(q);
-    });
+    return pedidos
+      .filter((p) => {
+        if (filtro === "urgentes") {
+          if (!esUrgentePendiente(p)) return false;
+        } else if (filtro !== "todos" && estadoPedido(p.items) !== filtro) {
+          return false;
+        }
+        if (!q) return true;
+        const texto = [
+          p.pedidoId,
+          p.solicitante,
+          p.area,
+          p.centroNegocio,
+          ...p.items.flatMap((it) => [it.nombre, it.codigo]),
+        ].join(" ");
+        return normalizar(texto).includes(q);
+      })
+      // Los urgentes pendientes van primero (el orden sigue siendo por fecha,
+      // del más reciente al más antiguo, dentro de cada grupo).
+      .sort(
+        (a, b) => Number(esUrgentePendiente(b)) - Number(esUrgentePendiente(a))
+      );
   }, [pedidos, busqueda, filtro]);
 
   const pedidoActual = useMemo(
@@ -380,6 +401,7 @@ export default function GestionPedidosPanel() {
 
   const filtros: { key: Filtro; label: string; tono: string }[] = [
     { key: "todos", label: "Todos", tono: "bg-primary" },
+    { key: "urgentes", label: "Urgentes", tono: "bg-destructive" },
     { key: "pendiente", label: "Pendientes", tono: ESTADOS.pendiente.dot },
     { key: "parcial", label: "Parciales", tono: ESTADOS.parcial.dot },
     { key: "completo", label: "Completos", tono: ESTADOS.completo.dot },
@@ -392,10 +414,12 @@ export default function GestionPedidosPanel() {
         <div
           role="group"
           aria-label="Filtrar por estado"
-          className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-4"
+          className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5"
         >
           {filtros.map((f) => {
             const activo = filtro === f.key;
+            // «Urgentes» se marca en rojo cuando hay alguno pendiente.
+            const alerta = f.key === "urgentes" && conteo.urgentes > 0;
             return (
               <button
                 key={f.key}
@@ -404,8 +428,12 @@ export default function GestionPedidosPanel() {
                 onClick={() => setFiltro(f.key)}
                 className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left shadow-sm transition-colors ${
                   activo
-                    ? "border-accent bg-accent/5 ring-1 ring-accent"
-                    : "border-border bg-card hover:bg-muted/60"
+                    ? alerta
+                      ? "border-destructive bg-destructive/5 ring-1 ring-destructive"
+                      : "border-accent bg-accent/5 ring-1 ring-accent"
+                    : alerta
+                      ? "border-destructive/40 bg-destructive/5 hover:bg-destructive/10"
+                      : "border-border bg-card hover:bg-muted/60"
                 }`}
               >
                 <span className="flex items-center gap-2 text-sm font-semibold text-secondary">
@@ -415,7 +443,11 @@ export default function GestionPedidosPanel() {
                   />
                   {f.label}
                 </span>
-                <span className="text-2xl font-extrabold tabular-nums text-primary">
+                <span
+                  className={`text-2xl font-extrabold tabular-nums ${
+                    alerta ? "text-destructive" : "text-primary"
+                  }`}
+                >
                   {conteo[f.key]}
                 </span>
               </button>
@@ -488,6 +520,7 @@ export default function GestionPedidosPanel() {
                   (it) => estadoLinea(it) === "completo"
                 ).length;
                 const sinGuardar = cambiosPorPedido.get(p.pedidoId) ?? 0;
+                const urgentePend = esUrgentePendiente(p);
                 return (
                   <li key={p.pedidoId}>
                     <button
@@ -495,14 +528,31 @@ export default function GestionPedidosPanel() {
                       onClick={() => abrirPedido(p)}
                       aria-current={activo ? "true" : undefined}
                       className={`block w-full border-l-4 px-4 py-3 text-left transition-colors ${
-                        activo
-                          ? "border-l-accent bg-accent/5"
-                          : "border-l-transparent hover:bg-muted/60"
+                        urgentePend
+                          ? activo
+                            ? "border-l-destructive bg-destructive/10"
+                            : "border-l-destructive bg-destructive/5 hover:bg-destructive/10"
+                          : activo
+                            ? "border-l-accent bg-accent/5"
+                            : "border-l-transparent hover:bg-muted/60"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-primary">
-                          {p.pedidoId}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="text-sm font-bold text-primary">
+                            {p.pedidoId}
+                          </span>
+                          {p.urgente && (
+                            <span
+                              className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide ${
+                                urgentePend
+                                  ? "bg-destructive text-destructive-foreground"
+                                  : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              Urgente
+                            </span>
+                          )}
                         </span>
                         <span
                           className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${estado.chip}`}
@@ -632,7 +682,19 @@ function Detalle({
   const datos: { label: string; valor: React.ReactNode; ancho?: boolean }[] = [
     { label: "Solicitante", valor: pedido.solicitante || "—" },
     { label: "Fecha del pedido", valor: formatFecha(pedido.fecha) },
-    { label: "Fecha de entrega", valor: pedido.fechaEntrega || "—" },
+    {
+      label: "Fecha de entrega",
+      valor: (
+        <>
+          {pedido.fechaEntrega || "—"}
+          {pedido.urgente && (
+            <span className="ml-2 rounded bg-destructive px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-destructive-foreground">
+              Urgente
+            </span>
+          )}
+        </>
+      ),
+    },
     { label: "Despacho", valor: pedido.despacho || "—" },
     { label: "Área", valor: pedido.area || "—" },
     {
@@ -660,6 +722,11 @@ function Detalle({
             <h2 className="text-lg font-extrabold tracking-tight text-primary">
               {pedido.pedidoId}
             </h2>
+            {pedido.urgente && (
+              <span className="rounded bg-destructive px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide text-destructive-foreground">
+                Urgente
+              </span>
+            )}
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${estado.chip}`}
             >
