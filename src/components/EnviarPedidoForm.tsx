@@ -756,6 +756,7 @@ export default function EnviarPedidoForm() {
   const [clasificador2, setClasificador2] = useState("");
   const [despacho, setDespacho] = useState("");
   const [fechaEntrega, setFechaEntrega] = useState(fechaEntregaPorDefecto);
+  const [urgente, setUrgente] = useState(false);
   const [comentario, setComentario] = useState("");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
@@ -939,6 +940,26 @@ export default function EnviarPedidoForm() {
 
   const centroDesc = centroActual?.descripcion ?? "";
 
+  // Pedido normal: la entrega es desde 10 días hábiles en adelante. Pedido
+  // urgente: puede ser cualquier fecha desde hoy.
+  const minEntrega = urgente
+    ? toInputDate(new Date())
+    : fechaEntregaPorDefecto();
+
+  function cambiarUrgente(valor: boolean) {
+    setUrgente(valor);
+    // Al quitar «urgente», una fecha anterior al mínimo vuelve al mínimo.
+    if (!valor && fechaEntrega && fechaEntrega < fechaEntregaPorDefecto()) {
+      setFechaEntrega(fechaEntregaPorDefecto());
+    }
+  }
+
+  // Se corrige al salir del campo (no mientras se escribe, porque el año se
+  // teclea de a un dígito y pasaría por fechas intermedias menores al mínimo).
+  function corregirFechaEntrega() {
+    if (fechaEntrega && fechaEntrega < minEntrega) setFechaEntrega(minEntrega);
+  }
+
   const faltante =
     solicitante.trim().length === 0
       ? "Ingresa el solicitante."
@@ -946,7 +967,9 @@ export default function EnviarPedidoForm() {
         ? "Selecciona un centro de negocio."
         : lineasCompletas.length === 0
           ? "Agrega al menos un artículo con cantidad."
-          : null;
+          : fechaEntrega && fechaEntrega < minEntrega
+            ? `La fecha de entrega debe ser desde el ${formatFecha(minEntrega)} (10 días hábiles). Marca «Pedido urgente» para elegir una anterior.`
+            : null;
 
   const puedeEnviar = !faltante;
 
@@ -975,7 +998,7 @@ export default function EnviarPedidoForm() {
       `Clasificador 1: ${clasificador1}`.trimEnd(),
       `Clasificador 2: ${clasificador2}`.trimEnd(),
       `Despacho: ${despacho}`.trimEnd(),
-      `Fecha de entrega: ${formatFecha(fechaEntrega)}`.trimEnd(),
+      `Fecha de entrega: ${formatFecha(fechaEntrega)}${urgente ? " (PEDIDO URGENTE)" : ""}`.trimEnd(),
       "",
       "Elementos a solicitar:",
       elementos,
@@ -996,6 +1019,7 @@ export default function EnviarPedidoForm() {
     comentario,
     despacho,
     fechaEntrega,
+    urgente,
     lineasCompletas,
     solicitante,
   ]);
@@ -1116,6 +1140,7 @@ export default function EnviarPedidoForm() {
     setDespacho("");
     setComentario("");
     setFechaEntrega(fechaEntregaPorDefecto());
+    setUrgente(false);
     setCopiado(false);
     setRegistro(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1180,7 +1205,7 @@ export default function EnviarPedidoForm() {
     solicitante: solicitante.trim(),
     area: areaActual.label,
     centro: centroDesc,
-    entrega: formatFecha(fechaEntrega),
+    entrega: `${formatFecha(fechaEntrega)}${urgente ? " · URGENTE" : ""}`,
     despacho,
     clasificador1,
     clasificador2,
@@ -1283,18 +1308,43 @@ export default function EnviarPedidoForm() {
               />
             </div>
             <div>
-              <label htmlFor="fechaEntrega" className={labelClass}>
-                Fecha de entrega
-              </label>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label htmlFor="fechaEntrega" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Fecha de entrega
+                </label>
+                <label
+                  className={`-my-1 inline-flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm font-semibold transition-colors ${
+                    urgente
+                      ? "bg-warning-surface text-warning"
+                      : "text-secondary hover:bg-muted"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 cursor-pointer accent-warning"
+                    checked={urgente}
+                    onChange={(e) => cambiarUrgente(e.target.checked)}
+                  />
+                  Pedido urgente
+                </label>
+              </div>
               <input
                 id="fechaEntrega"
                 type="date"
                 className={fieldClass}
                 value={fechaEntrega}
+                min={minEntrega}
                 onChange={(e) => setFechaEntrega(e.target.value)}
+                onBlur={corregirFechaEntrega}
               />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Por defecto, 10 días hábiles desde hoy.
+              <p
+                className={`mt-1 text-xs ${
+                  urgente ? "font-medium text-warning" : "text-muted-foreground"
+                }`}
+              >
+                {urgente
+                  ? "Pedido urgente: puedes elegir una fecha anterior a 10 días hábiles."
+                  : `Mínimo 10 días hábiles desde hoy (desde el ${formatFecha(minEntrega)}).`}
               </p>
             </div>
 
@@ -1631,7 +1681,14 @@ export default function EnviarPedidoForm() {
             </FilaResumen>
             <FilaResumen label="Área">{areaActual.label}</FilaResumen>
             <FilaResumen label="Centro">{centroDesc || "—"}</FilaResumen>
-            <FilaResumen label="Entrega">{formatFecha(fechaEntrega) || "—"}</FilaResumen>
+            <FilaResumen label="Entrega">
+              {formatFecha(fechaEntrega) || "—"}
+              {urgente && (
+                <span className="ml-2 rounded-full bg-warning-surface px-2 py-0.5 text-xs font-bold text-warning">
+                  Urgente
+                </span>
+              )}
+            </FilaResumen>
             <FilaResumen label="Artículos">
               {lineasCompletas.length} ·{" "}
               {unidadesCompletas.toLocaleString("es-CL")} unidades
