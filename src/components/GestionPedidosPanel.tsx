@@ -104,6 +104,11 @@ export default function GestionPedidosPanel() {
     setLoadError(null);
     try {
       const res = await fetch("/api/pedidos", { cache: "no-store" });
+      if (res.status === 401) {
+        // Sesión vencida: la página vuelve a pedir la contraseña.
+        window.location.reload();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al cargar pedidos");
       setPedidos(data.pedidos ?? []);
@@ -177,6 +182,10 @@ export default function GestionPedidosPanel() {
           parteDeEntrada: edicion.parteDeEntrada.trim(),
         }),
       });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "No se pudo guardar.");
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { haySesion } from "@/lib/auth";
 import {
   appendRows,
   articulosSheetId,
@@ -57,6 +58,10 @@ type PedidoInput = {
 
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : v == null ? "" : String(v);
+}
+
+function noAutorizado() {
+  return NextResponse.json({ error: "No autorizado." }, { status: 401 });
 }
 
 async function asegurarPedidosSheet(sheetId: string) {
@@ -196,6 +201,7 @@ export type PedidoResumen = {
 };
 
 export async function GET() {
+  if (!(await haySesion())) return noAutorizado();
   const sheetId = articulosSheetId();
   try {
     const meta = await getSpreadsheetMeta(sheetId);
@@ -265,6 +271,7 @@ type PatchInput = {
 };
 
 export async function PATCH(request: Request) {
+  if (!(await haySesion())) return noAutorizado();
   let body: PatchInput;
   try {
     body = (await request.json()) as PatchInput;
