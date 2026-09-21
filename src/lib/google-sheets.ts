@@ -29,6 +29,11 @@ export function centrosSheetId(): string {
   return requireEnv("CENTROS_SHEET_ID");
 }
 
+/** Spreadsheet con la nómina de solicitantes (con columna de activos). */
+export function solicitantesSheetId(): string {
+  return requireEnv("SOLICITANTES_SHEET_ID");
+}
+
 let cachedClient: JWT | null = null;
 
 function getClient(): JWT {

@@ -37,6 +37,14 @@ function nuevaLineaId() {
   return `linea-${Date.now()}-${lineaSeq}`;
 }
 
+/** Minúsculas y sin tildes, para buscar "jose" y encontrar "José". */
+function sinTildes(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
 /** "2026-09-22" -> "22-09-26". Devuelve el valor original si no calza. */
 function formatFecha(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
@@ -193,6 +201,7 @@ function SearchCombobox({
   placeholder = "Escribe para buscar…",
   disabled,
   clearable,
+  allowCustom,
   inputClassName = "",
 }: {
   id?: string;
@@ -211,6 +220,11 @@ function SearchCombobox({
   disabled?: boolean;
   /** Muestra una «×» para limpiar la selección sin abrir la lista. */
   clearable?: boolean;
+  /**
+   * Modo texto libre: lo que se escribe pasa a ser el valor (aunque no esté en
+   * las opciones) y las opciones actúan solo como sugerencias.
+   */
+  allowCustom?: boolean;
   inputClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -232,9 +246,9 @@ function SearchCombobox({
   );
 
   const filtradas = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = sinTildes(query.trim());
     if (!q) return options;
-    return universoBusqueda.filter((o) => o.label.toLowerCase().includes(q));
+    return universoBusqueda.filter((o) => sinTildes(o.label).includes(q));
   }, [options, universoBusqueda, query]);
 
   function actualizarRect() {
@@ -279,7 +293,9 @@ function SearchCombobox({
     setOpen(false);
   }
 
-  const displayValue = open ? query : selected?.label ?? "";
+  const displayValue = open
+    ? query
+    : selected?.label ?? (allowCustom ? value : "");
   const mostrarLimpiar = clearable && !disabled && !!value;
 
   return (
@@ -299,10 +315,13 @@ function SearchCombobox({
         value={displayValue}
         onChange={(e) => {
           setQuery(e.target.value);
+          if (allowCustom) onChange(e.target.value);
           setActiveIndex(0);
           if (!open) setOpen(true);
         }}
         onFocus={() => {
+          // En texto libre el valor ya escrito queda editable al abrir.
+          if (allowCustom) setQuery(value);
           setActiveIndex(0);
           setOpen(true);
         }}
@@ -487,6 +506,7 @@ function IconCheck() {
 export default function EnviarPedidoForm() {
   const [categorias, setCategorias] = useState<CategoriaConArticulos[]>([]);
   const [centros, setCentros] = useState<CentroNegocio[]>([]);
+  const [solicitantes, setSolicitantes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -539,6 +559,26 @@ export default function EnviarPedidoForm() {
       cancelado = true;
     };
   }, []);
+
+  // Las sugerencias de solicitante son opcionales: si fallan, el campo sigue
+  // funcionando como texto libre.
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/solicitantes")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelado && d?.solicitantes) setSolicitantes(d.solicitantes);
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  const opcionesSolicitante = useMemo(
+    () => solicitantes.map((n) => ({ value: n, label: n })),
+    [solicitantes]
+  );
 
   const articulosPorCategoria = useMemo(() => {
     const m = new Map<string, Articulo[]>();
@@ -844,13 +884,14 @@ export default function EnviarPedidoForm() {
             <label htmlFor="solicitante" className={labelClass}>
               Solicitante (nombre) <span className="text-destructive">*</span>
             </label>
-            <input
+            <SearchCombobox
               id="solicitante"
-              className={fieldClass}
+              ariaLabel="Solicitante"
+              options={opcionesSolicitante}
               value={solicitante}
-              onChange={(e) => setSolicitante(e.target.value)}
-              placeholder="Nombre de quien solicita"
-              autoComplete="name"
+              onChange={setSolicitante}
+              placeholder="Escribe el nombre de quien solicita"
+              allowCustom
             />
           </div>
           <div>
