@@ -6,7 +6,7 @@ export const metadata = {
 
 // Categorías de artículos disponibles en este flujo reducido.
 const CATEGORIAS_MATERIALES_MENORES = [
-  "INSUMO GENERICO",
+  "INSUMOS GENERICO",
   "FIJACIONES GENERICO",
   "EPP GENERICO",
   "EPP ROPA",
