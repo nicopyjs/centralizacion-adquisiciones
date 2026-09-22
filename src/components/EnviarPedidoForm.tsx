@@ -38,6 +38,15 @@ function nuevaLineaId() {
   return `linea-${Date.now()}-${lineaSeq}`;
 }
 
+/** Normaliza para comparar categorías sin importar tildes/mayúsculas. */
+function normalizarCategoria(v: string): string {
+  return v
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+}
+
 /** "2026-09-22" -> "22-09-26". Devuelve el valor original si no calza. */
 function formatFecha(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
@@ -526,13 +535,10 @@ export default function EnviarPedidoForm({
           throw new Error(dCen.error || "Error al cargar centros de negocio");
         if (!cancelado) {
           const todas: CategoriaConArticulos[] = dArt.categorias ?? [];
-          const filtradas = categoriasPermitidas
+          const permitidasNorm = categoriasPermitidas?.map(normalizarCategoria);
+          const filtradas = permitidasNorm
             ? todas.filter((c) =>
-                categoriasPermitidas.some(
-                  (permitida) =>
-                    permitida.trim().toLowerCase() ===
-                    c.categoria.trim().toLowerCase()
-                )
+                permitidasNorm.includes(normalizarCategoria(c.categoria))
               )
             : todas;
           setCategorias(filtradas);
