@@ -537,9 +537,17 @@ export default function GestionPedidosPanel() {
               {pedidosFiltrados.map((p) => {
                 const estado = ESTADOS[estadoPedido(p.items)];
                 const activo = p.pedidoId === seleccionado;
-                const completas = p.items.filter(
-                  (it) => estadoLinea(it) === "completo"
-                ).length;
+                const totalPedido = p.items.reduce(
+                  (sum, it) => sum + it.cantidad,
+                  0
+                );
+                const totalRecibido = p.items.reduce(
+                  (sum, it) => sum + (it.cantidadRecibida ?? 0),
+                  0
+                );
+                const porcentaje = totalPedido
+                  ? Math.min(100, (totalRecibido / totalPedido) * 100)
+                  : 0;
                 const sinGuardar = cambiosPorPedido.get(p.pedidoId) ?? 0;
                 const urgentePend = esUrgentePendiente(p);
                 return (
@@ -601,16 +609,12 @@ export default function GestionPedidosPanel() {
                             <span
                               className="block h-full rounded-full bg-success transition-[width]"
                               style={{
-                                width: `${
-                                  p.items.length
-                                    ? (completas / p.items.length) * 100
-                                    : 0
-                                }%`,
+                                width: `${porcentaje}%`,
                               }}
                             />
                           </span>
                           <span className="tabular-nums">
-                            {completas}/{p.items.length} recibidos
+                            {totalRecibido}/{totalPedido} unid.
                           </span>
                         </span>
                       </div>
