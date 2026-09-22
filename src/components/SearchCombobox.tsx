@@ -83,9 +83,14 @@ export default function SearchCombobox({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(
-    null
-  );
+  const [rect, setRect] = useState<{
+    top: number;
+    bottom: number;
+    left: number;
+    width: number;
+    openUp: boolean;
+    maxHeight: number;
+  } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -108,7 +113,25 @@ export default function SearchCombobox({
     const el = inputRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setRect({ top: r.bottom, left: r.left, width: r.width });
+    const margen = 8;
+    const espacioAbajo = window.innerHeight - r.bottom - margen;
+    const espacioArriba = r.top - margen;
+    // Si no cabe abajo pero sí hay más espacio arriba, la lista se abre
+    // hacia arriba (por ejemplo, cuando el combo está cerca del pie de
+    // pantalla y el navegador achica el viewport, como al hacer zoom).
+    const openUp = espacioAbajo < 160 && espacioArriba > espacioAbajo;
+    const maxHeight = Math.max(
+      120,
+      Math.min(256, openUp ? espacioArriba : espacioAbajo)
+    );
+    setRect({
+      top: r.bottom,
+      bottom: window.innerHeight - r.top,
+      left: r.left,
+      width: r.width,
+      openUp,
+      maxHeight,
+    });
   }
 
   useEffect(() => {
@@ -235,11 +258,14 @@ export default function SearchCombobox({
             role="listbox"
             style={{
               position: "fixed",
-              top: rect.top + 4,
+              ...(rect.openUp
+                ? { bottom: rect.bottom + 4 }
+                : { top: rect.top + 4 }),
               left: rect.left,
               width: rect.width,
+              maxHeight: rect.maxHeight,
             }}
-            className="z-50 max-h-64 overflow-auto rounded-lg border border-border bg-card py-1 text-sm shadow-lg"
+            className="z-50 overflow-auto rounded-lg border border-border bg-card py-1 text-sm shadow-lg"
           >
             {filtradas.length === 0 ? (
               <li className="px-3 py-2 text-muted-foreground">Sin resultados</li>
