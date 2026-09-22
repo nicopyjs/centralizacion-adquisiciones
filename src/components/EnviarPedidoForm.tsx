@@ -472,7 +472,15 @@ function IconCheck() {
   );
 }
 
-export default function EnviarPedidoForm() {
+type EnviarPedidoFormProps = {
+  // Si se pasa, solo se muestran (y quedan seleccionables) estas categorías
+  // de artículos, comparando sin distinguir mayúsculas/minúsculas.
+  categoriasPermitidas?: string[];
+};
+
+export default function EnviarPedidoForm({
+  categoriasPermitidas,
+}: EnviarPedidoFormProps = {}) {
   const [categorias, setCategorias] = useState<CategoriaConArticulos[]>([]);
   const [centros, setCentros] = useState<CentroNegocio[]>([]);
   const [solicitantes, setSolicitantes] = useState<string[]>([]);
@@ -517,7 +525,17 @@ export default function EnviarPedidoForm() {
         if (!rCen.ok)
           throw new Error(dCen.error || "Error al cargar centros de negocio");
         if (!cancelado) {
-          setCategorias(dArt.categorias ?? []);
+          const todas: CategoriaConArticulos[] = dArt.categorias ?? [];
+          const filtradas = categoriasPermitidas
+            ? todas.filter((c) =>
+                categoriasPermitidas.some(
+                  (permitida) =>
+                    permitida.trim().toLowerCase() ===
+                    c.categoria.trim().toLowerCase()
+                )
+              )
+            : todas;
+          setCategorias(filtradas);
           setCentros(dCen.centros ?? []);
         }
       } catch (err) {
@@ -530,6 +548,10 @@ export default function EnviarPedidoForm() {
     return () => {
       cancelado = true;
     };
+    // categoriasPermitidas es una constante fija por página (no cambia en
+    // la vida del componente), así que se omite a propósito para no volver
+    // a pedir /api/articulos en cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Las sugerencias de solicitante son opcionales: si fallan, el campo sigue
