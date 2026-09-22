@@ -30,7 +30,14 @@ type LineaPedido = {
   nombre: string;
   unidad: string;
   cantidad: number;
+  // Artículo escrito a mano porque no está en el catálogo de Defontana.
+  manual: boolean;
 };
+
+// Código con el que se guardan los artículos manuales en la planilla: no
+// corresponde a un código real de Defontana, así que Adquisiciones lo ve
+// como señal de que hay que revisar el nombre escrito a mano.
+const CODIGO_MANUAL = "MANUAL";
 
 let lineaSeq = 0;
 function nuevaLineaId() {
@@ -83,6 +90,10 @@ const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
+// Como fieldClass, pero sin w-full: se usa en inputs dentro de un flex row
+// (nombre + unidad del artículo manual) donde el ancho lo da flex/w-16.
+const manualFieldClass =
+  "h-11 md:h-9 rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40";
 
 // El correo va directo a Adquisiciones, con copia (CC) al área destino.
 const DESTINATARIO_PRINCIPAL = "adquisiciones@nebchile.cl";
@@ -630,6 +641,7 @@ export default function EnviarPedidoForm({
         nombre: "",
         unidad: "",
         cantidad: 1,
+        manual: false,
       },
     ]);
     setCopiado(false);
@@ -677,6 +689,40 @@ export default function EnviarPedidoForm({
     setCopiado(false);
   }
 
+  // Artículos que no están en el catálogo de Defontana: se escriben a mano
+  // (nombre y unidad libres) en vez de elegirse del combobox.
+  function activarArticuloManual(id: string) {
+    setLineas((prev) =>
+      prev.map((l) =>
+        l.id === id
+          ? { ...l, manual: true, codigo: CODIGO_MANUAL, nombre: "", unidad: "UN" }
+          : l
+      )
+    );
+    setCopiado(false);
+  }
+
+  function desactivarArticuloManual(id: string) {
+    setLineas((prev) =>
+      prev.map((l) =>
+        l.id === id
+          ? { ...l, manual: false, codigo: "", nombre: "", unidad: "" }
+          : l
+      )
+    );
+    setCopiado(false);
+  }
+
+  function cambiarNombreManual(id: string, nombre: string) {
+    setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, nombre } : l)));
+    setCopiado(false);
+  }
+
+  function cambiarUnidadManual(id: string, unidad: string) {
+    setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, unidad } : l)));
+    setCopiado(false);
+  }
+
   function cambiarCantidad(id: string, valor: number) {
     if (Number.isNaN(valor)) return;
     const v = valor < 0 ? 0 : valor;
@@ -692,7 +738,13 @@ export default function EnviarPedidoForm({
   }
 
   const lineasCompletas = useMemo(
-    () => lineas.filter((l) => l.codigo && l.cantidad > 0),
+    () =>
+      lineas.filter(
+        (l) =>
+          l.codigo &&
+          l.cantidad > 0 &&
+          (!l.manual || l.nombre.trim().length > 0)
+      ),
     [lineas]
   );
 
@@ -1329,27 +1381,66 @@ export default function EnviarPedidoForm({
 
                       <div className="mb-3 md:mb-0">
                         <span className={miniLabel}>Artículo</span>
-                        <SearchCombobox
-                          ariaLabel="Artículo"
-                          placeholder={
-                            l.categoria
-                              ? "Buscar artículo (en esta categoría o escribe para buscar en todos)…"
-                              : "Buscar en todos los artículos…"
+                        {l.manual ? (
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={l.nombre}
+                              onChange={(e) =>
+                                cambiarNombreManual(l.id, e.target.value)
+                              }
+                              placeholder="Nombre del artículo…"
+                              className={`${manualFieldClass} min-w-0 flex-1`}
+                              aria-label="Nombre del artículo (fuera de catálogo)"
+                            />
+                            <input
+                              type="text"
+                              value={l.unidad}
+                              onChange={(e) =>
+                                cambiarUnidadManual(l.id, e.target.value)
+                              }
+                              placeholder="UN"
+                              className={`${manualFieldClass} w-16 shrink-0 text-center`}
+                              aria-label="Unidad de medida"
+                              maxLength={10}
+                            />
+                          </div>
+                        ) : (
+                          <SearchCombobox
+                            ariaLabel="Artículo"
+                            placeholder={
+                              l.categoria
+                                ? "Buscar artículo (en esta categoría o escribe para buscar en todos)…"
+                                : "Buscar en todos los artículos…"
+                            }
+                            clearable
+                            options={artsLinea.map((a) => ({
+                              value: a.codigo,
+                              label: `${a.nombre} — ${a.codigo}`,
+                            }))}
+                            searchOptions={todosLosArticulos.map((a) => ({
+                              value: a.codigo,
+                              label: `${a.nombre} — ${a.codigo}`,
+                            }))}
+                            value={l.codigo}
+                            onChange={(codigo) =>
+                              cambiarArticuloLinea(l.id, codigo)
+                            }
+                          />
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            l.manual
+                              ? desactivarArticuloManual(l.id)
+                              : activarArticuloManual(l.id)
                           }
-                          clearable
-                          options={artsLinea.map((a) => ({
-                            value: a.codigo,
-                            label: `${a.nombre} — ${a.codigo}`,
-                          }))}
-                          searchOptions={todosLosArticulos.map((a) => ({
-                            value: a.codigo,
-                            label: `${a.nombre} — ${a.codigo}`,
-                          }))}
-                          value={l.codigo}
-                          onChange={(codigo) =>
-                            cambiarArticuloLinea(l.id, codigo)
-                          }
-                        />
+                          className="mt-1 text-xs font-semibold text-accent hover:underline"
+                        >
+                          {l.manual
+                            ? "Volver a buscar en el catálogo"
+                            : "¿No está en la lista? Escribirlo a mano"}
+                        </button>
                       </div>
 
                       <div>
