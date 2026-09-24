@@ -274,7 +274,7 @@ function ConfirmarEnvioDialog({
               className="mt-1 text-sm text-muted-foreground"
             >
               Al confirmar se registra en la planilla y se abre el correo listo
-              para enviar.
+              para enviar. No podrás editarlo: tendrás que enviarlo sí o sí.
             </p>
           </div>
         </div>
@@ -518,7 +518,6 @@ export default function EnviarPedidoForm({
   const [comentario, setComentario] = useState("");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
-  const [copiado, setCopiado] = useState(false);
   const [registrando, setRegistrando] = useState(false);
   const [registro, setRegistro] = useState<
     { ok: true; folio: string } | { ok: false; error: string } | null
@@ -622,7 +621,6 @@ export default function EnviarPedidoForm({
     setAreaDestino(email);
     // El centro elegido puede no pertenecer a la nueva área: se limpia siempre.
     setCentroSel("");
-    setCopiado(false);
     setRegistro(null);
   }
 
@@ -644,7 +642,6 @@ export default function EnviarPedidoForm({
         manual: false,
       },
     ]);
-    setCopiado(false);
   }
 
   function cambiarCategoriaLinea(id: string, categoria: string) {
@@ -655,7 +652,6 @@ export default function EnviarPedidoForm({
           : l
       )
     );
-    setCopiado(false);
   }
 
   // Quita el filtro de categoría de la fila sin tocar el artículo ya
@@ -664,7 +660,6 @@ export default function EnviarPedidoForm({
     setLineas((prev) =>
       prev.map((l) => (l.id === id ? { ...l, categoria: "" } : l))
     );
-    setCopiado(false);
   }
 
   function cambiarArticuloLinea(id: string, codigo: string) {
@@ -686,7 +681,6 @@ export default function EnviarPedidoForm({
         };
       })
     );
-    setCopiado(false);
   }
 
   // Artículos que no están en el catálogo de Defontana: se escriben a mano
@@ -699,7 +693,6 @@ export default function EnviarPedidoForm({
           : l
       )
     );
-    setCopiado(false);
   }
 
   function desactivarArticuloManual(id: string) {
@@ -710,17 +703,14 @@ export default function EnviarPedidoForm({
           : l
       )
     );
-    setCopiado(false);
   }
 
   function cambiarNombreManual(id: string, nombre: string) {
     setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, nombre } : l)));
-    setCopiado(false);
   }
 
   function cambiarUnidadManual(id: string, unidad: string) {
     setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, unidad } : l)));
-    setCopiado(false);
   }
 
   function cambiarCantidad(id: string, valor: number) {
@@ -729,12 +719,10 @@ export default function EnviarPedidoForm({
     setLineas((prev) =>
       prev.map((l) => (l.id === id ? { ...l, cantidad: v } : l))
     );
-    setCopiado(false);
   }
 
   function quitarLinea(id: string) {
     setLineas((prev) => prev.filter((l) => l.id !== id));
-    setCopiado(false);
   }
 
   const lineasCompletas = useMemo(
@@ -956,21 +944,8 @@ export default function EnviarPedidoForm({
     setComentario("");
     setFechaEntrega(fechaEntregaPorDefecto());
     setUrgente(false);
-    setCopiado(false);
     setRegistro(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function copiarCorreo() {
-    try {
-      await navigator.clipboard.writeText(
-        `Para: ${para}\nCC: ${cc}\nAsunto: ${asunto}\n\n${cuerpoCorreo}`
-      );
-      setCopiado(true);
-      window.setTimeout(() => setCopiado(false), 2500);
-    } catch {
-      setCopiado(false);
-    }
   }
 
   if (loading) {
@@ -1570,37 +1545,12 @@ export default function EnviarPedidoForm({
             {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
           </button>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={abrirGmail}
-              disabled={!puedeEnviar}
-              className={botonSecundario}
-            >
-              Solo abrir Gmail
-            </button>
-            <button
-              type="button"
-              onClick={copiarCorreo}
-              disabled={!puedeEnviar}
-              className={botonSecundario}
-            >
-              {copiado ? (
-                <>
-                  <IconCheck />
-                  Copiado
-                </>
-              ) : (
-                "Copiar correo"
-              )}
-            </button>
-          </div>
-
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            «Registrar y abrir correo» guarda una fila por artículo en la pestaña{" "}
-            <span className="font-semibold">Pedidos</span> de la planilla y abre
-            Gmail (en el celular, la app) con el correo listo. Revísalo y
-            presiona Enviar.
+          <p className="mt-3 rounded-lg bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
+            <span className="font-bold">Importante:</span> una vez que presiones
+            «Sí, enviar» no podrás editar el pedido ni el correo, y tendrás que
+            enviarlo sí o sí. Revisa bien los detalles tal como se muestran y,
+            cuando estés seguro, envía el correo para que el pedido quede
+            registrado correctamente en la planilla de Pedidos.
           </p>
         </section>
 
