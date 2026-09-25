@@ -145,6 +145,14 @@ const OPCIONES_DESPACHO = [
 
 type Plataforma = "ios" | "android" | null;
 
+type CorreoGmail = {
+  para: string;
+  cc: string;
+  asunto: string;
+  cuerpoCorreo: string;
+  gmailUrl: string;
+};
+
 /** Detecta si se está en un celular/tablet (donde conviene abrir la app de Gmail). */
 function detectarPlataforma(): Plataforma {
   if (typeof navigator === "undefined") return null;
@@ -522,6 +530,9 @@ export default function EnviarPedidoForm({
   const [registro, setRegistro] = useState<
     { ok: true; folio: string } | { ok: false; error: string } | null
   >(null);
+  const [correoRegistrado, setCorreoRegistrado] = useState<CorreoGmail | null>(
+    null
+  );
   const [confirmando, setConfirmando] = useState(false);
   const bannerRef = useRef<HTMLDivElement>(null);
 
@@ -836,6 +847,8 @@ export default function EnviarPedidoForm({
     `&su=${encodeURIComponent(asunto)}` +
     `&body=${encodeURIComponent(cuerpoCorreo)}`;
 
+  const correoActual: CorreoGmail = { para, cc, asunto, cuerpoCorreo, gmailUrl };
+
   /**
    * En PC abre Gmail web en otra pestaña. En celular abre la APP de Gmail con
    * el correo ya redactado (la versión web móvil es incómoda y falla).
@@ -843,7 +856,8 @@ export default function EnviarPedidoForm({
    *    Gmail web.
    *  - iOS: esquema googlegmail://; si la app no se abre, cae a mailto:.
    */
-  function abrirGmail() {
+  function abrirGmail(correo: CorreoGmail = correoActual) {
+    const { para, cc, asunto, cuerpoCorreo, gmailUrl } = correo;
     const plataforma = detectarPlataforma();
     if (!plataforma) {
       window.open(gmailUrl, "_blank", "noopener,noreferrer");
@@ -929,15 +943,21 @@ export default function EnviarPedidoForm({
     setRegistro(resultado);
     setRegistrando(false);
     setConfirmando(false);
+    if (resultado.ok) {
+      // Copia del correo para «Abrir Gmail» y limpieza de los campos, así el
+      // pedido no se puede volver a registrar por error.
+      setCorreoRegistrado(correoActual);
+      limpiarCampos();
+    }
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
     // bloquea la apertura automática) y abre el correo.
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     // Se abre Gmail igual: el registro en planilla es complementario al correo.
-    abrirGmail();
+    abrirGmail(correoActual);
   }
 
-  /** Limpia el pedido para armar otro; conserva solicitante y área. */
-  function nuevoPedido() {
+  /** Vacía el pedido; conserva solicitante y área. */
+  function limpiarCampos() {
     setLineas([]);
     setCentroSel("");
     setClasificador1("");
@@ -946,7 +966,11 @@ export default function EnviarPedidoForm({
     setComentario("");
     setFechaEntrega(fechaEntregaPorDefecto());
     setUrgente(false);
+  }
+
+  function nuevoPedido() {
     setRegistro(null);
+    setCorreoRegistrado(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -1060,7 +1084,13 @@ export default function EnviarPedidoForm({
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={abrirGmail}
+                    onClick={() =>
+                      abrirGmail(
+                        registro.ok && correoRegistrado
+                          ? correoRegistrado
+                          : correoActual
+                      )
+                    }
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
                   >
                     <IconMail />
