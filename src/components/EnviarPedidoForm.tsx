@@ -827,8 +827,10 @@ export default function EnviarPedidoForm({
   const para = DESTINATARIO_PRINCIPAL;
   const cc = areaDestino;
 
+  // /a/nebchile.cl/ fuerza la cuenta Workspace de NEB aunque el navegador
+  // tenga una cuenta personal como principal (/u/0/).
   const gmailUrl =
-    "https://mail.google.com/mail/?view=cm&fs=1" +
+    "https://mail.google.com/a/nebchile.cl/mail/?view=cm&fs=1" +
     `&to=${encodeURIComponent(para)}` +
     `&cc=${encodeURIComponent(cc)}` +
     `&su=${encodeURIComponent(asunto)}` +
