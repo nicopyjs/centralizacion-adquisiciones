@@ -129,6 +129,12 @@ export default function GestionPedidosPanel() {
   const [busqueda, setBusqueda] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
+  const [fSolicitante, setFSolicitante] = useState("");
+  const [fArea, setFArea] = useState("");
+  const [fCentro, setFCentro] = useState("");
+  const [fDespacho, setFDespacho] = useState("");
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
 
   // Solo las filas que el usuario tocó; el resto se lee de `pedidos`.
   const [ediciones, setEdiciones] = useState<Record<number, LineaEdit>>({});
@@ -232,10 +238,51 @@ export default function GestionPedidosPanel() {
     return c;
   }, [pedidos]);
 
+  // Opciones de los desplegables: valores distintos presentes en los pedidos.
+  const opciones = useMemo(() => {
+    const unicos = (f: (p: PedidoResumen) => string) =>
+      Array.from(new Set(pedidos.map((p) => f(p).trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b, "es")
+      );
+    return {
+      solicitante: unicos((p) => p.solicitante),
+      area: unicos((p) => p.area),
+      centro: unicos((p) => p.centroNegocio),
+      despacho: unicos((p) => p.despacho),
+    };
+  }, [pedidos]);
+
+  const hayFiltrosExtra = Boolean(
+    fSolicitante || fArea || fCentro || fDespacho || fDesde || fHasta
+  );
+
+  function limpiarFiltros() {
+    setFiltro("todos");
+    setBusqueda("");
+    setFSolicitante("");
+    setFArea("");
+    setFCentro("");
+    setFDespacho("");
+    setFDesde("");
+    setFHasta("");
+  }
+
   const pedidosFiltrados = useMemo(() => {
     const q = normalizar(busqueda.trim());
     return pedidos
       .filter((p) => {
+        if (fSolicitante && p.solicitante.trim() !== fSolicitante) return false;
+        if (fArea && p.area.trim() !== fArea) return false;
+        if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
+        if (fDespacho && p.despacho.trim() !== fDespacho) return false;
+        if (fDesde || fHasta) {
+          const dia = /^\d{4}-\d{2}-\d{2}/.test(p.fecha)
+            ? p.fecha.slice(0, 10)
+            : "";
+          if (!dia) return false;
+          if (fDesde && dia < fDesde) return false;
+          if (fHasta && dia > fHasta) return false;
+        }
         if (filtro === "urgentes") {
           if (!esUrgentePendiente(p)) return false;
         } else if (filtro !== "todos" && estadoPedido(p.items) !== filtro) {
@@ -256,7 +303,17 @@ export default function GestionPedidosPanel() {
       .sort(
         (a, b) => Number(esUrgentePendiente(b)) - Number(esUrgentePendiente(a))
       );
-  }, [pedidos, busqueda, filtro]);
+  }, [
+    pedidos,
+    busqueda,
+    filtro,
+    fSolicitante,
+    fArea,
+    fCentro,
+    fDespacho,
+    fDesde,
+    fHasta,
+  ]);
 
   const pedidoActual = useMemo(
     () => pedidos.find((p) => p.pedidoId === seleccionado) ?? null,
@@ -505,6 +562,66 @@ export default function GestionPedidosPanel() {
             {refrescando ? "Actualizando" : "Actualizar"}
           </button>
         </div>
+      </div>
+
+      {/* Filtros adicionales */}
+      <div
+        role="group"
+        aria-label="Filtros adicionales"
+        className={`${cardClass} grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_150px_150px_auto] xl:items-end`}
+      >
+        {(
+          [
+            ["Solicitante", fSolicitante, setFSolicitante, opciones.solicitante],
+            ["Área", fArea, setFArea, opciones.area],
+            ["Centro de negocio", fCentro, setFCentro, opciones.centro],
+            ["Despacho", fDespacho, setFDespacho, opciones.despacho],
+          ] as const
+        ).map(([label, valor, setValor, lista]) => (
+          <label key={label} className="block min-w-0">
+            <span className={labelClass}>{label}</span>
+            <select
+              className={fieldClass}
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+            >
+              <option value="">Todos</option>
+              {lista.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <label className="block min-w-0">
+          <span className={labelClass}>Pedido desde</span>
+          <input
+            type="date"
+            className={fieldClass}
+            value={fDesde}
+            max={fHasta || undefined}
+            onChange={(e) => setFDesde(e.target.value)}
+          />
+        </label>
+        <label className="block min-w-0">
+          <span className={labelClass}>Pedido hasta</span>
+          <input
+            type="date"
+            className={fieldClass}
+            value={fHasta}
+            min={fDesde || undefined}
+            onChange={(e) => setFHasta(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={limpiarFiltros}
+          disabled={!hayFiltrosExtra && filtro === "todos" && !busqueda}
+          className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
+        >
+          Limpiar filtros
+        </button>
       </div>
 
       {loadError && (
