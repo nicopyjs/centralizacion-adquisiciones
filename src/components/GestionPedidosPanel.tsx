@@ -580,18 +580,30 @@ export default function GestionPedidosPanel() {
         ).map(([label, valor, setValor, lista]) => (
           <label key={label} className="block min-w-0">
             <span className={labelClass}>{label}</span>
-            <select
-              className={fieldClass}
-              value={valor}
-              onChange={(e) => setValor(e.target.value)}
-            >
-              <option value="">Todos</option>
-              {lista.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
+            {label === "Solicitante" || label === "Centro de negocio" ? (
+              <SearchCombobox
+                ariaLabel={label}
+                size="sm"
+                clearable
+                placeholder="Todos"
+                options={lista.map((o) => ({ value: o, label: o }))}
+                value={valor}
+                onChange={setValor}
+              />
+            ) : (
+              <select
+                className={fieldClass}
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {lista.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
         ))}
         <label className="block min-w-0">
