@@ -31,11 +31,12 @@ const HEADERS = [
   "Consumo interno",
   "Recepcionado por",
   "Urgente",
+  "Fecha entrega real",
 ];
-// Última columna de encabezados (20 columnas -> A..T).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:T1`;
+// Última columna de encabezados (21 columnas -> A..U).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:U1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:T`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:U`;
 
 type ItemInput = {
   codigo?: unknown;
@@ -169,6 +170,7 @@ export async function POST(request: Request) {
       "",
       "",
       urgente,
+      "", // Fecha entrega real: se completa sola cuando se registra "Recepcionado por".
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -190,6 +192,8 @@ export type PedidoItem = {
   cantidadRecibida: number | null;
   consumoInterno: string;
   recepcionadoPor: string;
+  /** Fecha real en que se entregó a quien lo pidió (ISO). Vacía si aún no se entrega. */
+  fechaRecepcion: string;
 };
 
 export type PedidoResumen = {
@@ -261,6 +265,7 @@ export async function GET() {
           cantidadRecibidaRaw === "" ? null : Number(cantidadRecibidaRaw),
         consumoInterno: str(row[17]),
         recepcionadoPor: str(row[18]),
+        fechaRecepcion: str(row[20]),
       });
     });
 
@@ -311,9 +316,17 @@ export async function PATCH(request: Request) {
     }
 
     // Lee los valores actuales de la fila para no pisar los campos que no
-    // vienen en este PATCH (se guarda de a un campo o de a varios).
-    const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`);
-    const [curRecibida = "", curConsumo = "", curRecepcion = ""] = actual[0] ?? [];
+    // vienen en este PATCH (se guarda de a un campo o de a varios). Incluye
+    // T (Urgente, para no perderlo al reescribir el bloque) y U (Fecha
+    // recepción, para saber si ya estaba registrada).
+    const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:U${fila}`);
+    const [
+      curRecibida = "",
+      curConsumo = "",
+      curRecepcion = "",
+      curUrgente = "",
+      curFechaRecepcion = "",
+    ] = actual[0] ?? [];
 
     const cantidadRecibida =
       body.cantidadRecibida === undefined
@@ -336,11 +349,27 @@ export async function PATCH(request: Request) {
       );
     }
 
-    await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:S${fila}`, [
-      [cantidadRecibida, consumoInterno, recepcionadoPor],
+    // Fecha real de entrega (para el KPI de cumplimiento de plazo): no es
+    // cuando Adquisiciones recibe del proveedor (eso es "Cantidad
+    // recibida"), sino cuando Adquisiciones le entrega el pedido a quien lo
+    // solicitó, es decir, cuando se completa "Recepcionado por". Se registra
+    // sola la primera vez que ese campo deja de estar vacío. Si se corrige
+    // después, no se pisa la fecha ya registrada; si se borra "Recepcionado
+    // por" (se vuelve a dejar sin entregar), se borra también.
+    let fechaRecepcion = str(curFechaRecepcion);
+    if (body.recepcionadoPor !== undefined) {
+      if (recepcionadoPor === "") {
+        fechaRecepcion = "";
+      } else if (!fechaRecepcion) {
+        fechaRecepcion = new Date().toISOString();
+      }
+    }
+
+    await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:U${fila}`, [
+      [cantidadRecibida, consumoInterno, recepcionadoPor, curUrgente, fechaRecepcion],
     ]);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, fechaRecepcion });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });

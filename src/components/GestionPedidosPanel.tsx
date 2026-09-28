@@ -13,6 +13,8 @@ type PedidoItem = {
   cantidadRecibida: number | null;
   consumoInterno: string;
   recepcionadoPor: string;
+  /** Fecha real en que se entregó a quien lo pidió (ISO). Vacía si aún no se entrega. */
+  fechaRecepcion: string;
 };
 
 type PedidoResumen = {
@@ -84,6 +86,50 @@ function estadoPedido(items: PedidoItem[]): Estado {
 /** Urgente y todavía sin recibir por completo: lo que hay que atender primero. */
 function esUrgentePendiente(p: PedidoResumen): boolean {
   return p.urgente && estadoPedido(p.items) !== "completo";
+}
+
+/** La "Fecha de entrega" del pedido se guarda como texto "DD-MM-YY". */
+function parseFechaEntrega(s: string): Date | null {
+  const m = /^(\d{2})-(\d{2})-(\d{2})$/.exec(s.trim());
+  if (m) {
+    const [, d, mo, y] = m;
+    const fecha = new Date(2000 + Number(y), Number(mo) - 1, Number(d));
+    return Number.isNaN(fecha.getTime()) ? null : fecha;
+  }
+  const fecha = new Date(s);
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
+/** Trunca a medianoche local para comparar solo el día, no la hora. */
+function soloFecha(d: Date): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * Fecha real de entrega del pedido: la más tardía entre las fechas en que
+ * cada línea quedó entregada a quien la pidió (campo "Recepcionado por").
+ * Solo se considera "conocida" cuando todas las líneas tienen fecha
+ * registrada (si falta alguna, es que aún no se le entrega todo al
+ * solicitante, o el pedido es anterior a que existiera este campo).
+ */
+function fechaRecepcionPedido(p: PedidoResumen): Date | null {
+  const fechas = p.items.map((it) =>
+    it.fechaRecepcion ? new Date(it.fechaRecepcion) : null
+  );
+  if (fechas.some((d) => d === null || Number.isNaN(d.getTime()))) return null;
+  return new Date(Math.max(...(fechas as Date[]).map((d) => d.getTime())));
+}
+
+/**
+ * ¿Se entregó a tiempo? null cuando aún no está completo o no hay datos
+ * suficientes para saberlo (pedidos antiguos sin fecha de recepción).
+ */
+function entregadoATiempo(p: PedidoResumen): boolean | null {
+  if (estadoPedido(p.items) !== "completo") return null;
+  const real = fechaRecepcionPedido(p);
+  const programada = parseFechaEntrega(p.fechaEntrega);
+  if (!real || !programada) return null;
+  return soloFecha(real) <= soloFecha(programada);
 }
 
 // Estado editable de una línea: strings para poder dejar el input vacío
@@ -236,6 +282,24 @@ export default function GestionPedidosPanel() {
       if (esUrgentePendiente(p)) c.urgentes += 1;
     }
     return c;
+  }, [pedidos]);
+
+  // KPI: de los pedidos completos con fecha de recepción conocida, cuántos
+  // llegaron a tiempo respecto a la fecha de entrega comprometida.
+  const kpiATiempo = useMemo(() => {
+    let conDatos = 0;
+    let aTiempo = 0;
+    for (const p of pedidos) {
+      const resultado = entregadoATiempo(p);
+      if (resultado === null) continue;
+      conDatos += 1;
+      if (resultado) aTiempo += 1;
+    }
+    return {
+      conDatos,
+      aTiempo,
+      porcentaje: conDatos ? Math.round((aTiempo / conDatos) * 100) : null,
+    };
   }, [pedidos]);
 
   // Opciones de los desplegables: valores distintos presentes en los pedidos.
@@ -400,6 +464,10 @@ export default function GestionPedidosPanel() {
                   cantidadRecibida,
                   consumoInterno: edicion.consumoInterno.trim(),
                   recepcionadoPor: edicion.recepcionadoPor.trim(),
+                  fechaRecepcion:
+                    typeof data.fechaRecepcion === "string"
+                      ? data.fechaRecepcion
+                      : x.fechaRecepcion,
                 }
               : x
           ),
@@ -563,6 +631,32 @@ export default function GestionPedidosPanel() {
           </button>
         </div>
       </div>
+
+      {/* KPI: cumplimiento de plazo de entrega */}
+      {kpiATiempo.conDatos > 0 && (
+        <div
+          className={`${cardClass} flex flex-wrap items-center justify-between gap-2 px-4 py-2.5`}
+        >
+          <span className="text-sm font-semibold text-secondary">
+            Entregas a tiempo
+          </span>
+          <span className="flex items-center gap-2">
+            <span
+              className={`text-lg font-extrabold tabular-nums ${
+                kpiATiempo.porcentaje !== null && kpiATiempo.porcentaje < 80
+                  ? "text-warning"
+                  : "text-success"
+              }`}
+            >
+              {kpiATiempo.porcentaje}%
+            </span>
+            <span className="text-xs text-muted-foreground">
+              ({kpiATiempo.aTiempo}/{kpiATiempo.conDatos} pedidos completos con
+              fecha registrada)
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* Filtros adicionales */}
       <div
@@ -852,6 +946,34 @@ function Detalle({
         </>
       ),
     },
+    {
+      label: "Fecha de entrega real",
+      valor: (() => {
+        const real = fechaRecepcionPedido(pedido);
+        const aTiempo = entregadoATiempo(pedido);
+        if (!real) {
+          return estadoPedido(pedido.items) === "completo"
+            ? "Sin registro"
+            : "Pendiente";
+        }
+        return (
+          <>
+            {formatFecha(real.toISOString())}
+            {aTiempo !== null && (
+              <span
+                className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide ${
+                  aTiempo
+                    ? "bg-success-surface text-success"
+                    : "bg-destructive/10 text-destructive"
+                }`}
+              >
+                {aTiempo ? "A tiempo" : "Atrasado"}
+              </span>
+            )}
+          </>
+        );
+      })(),
+    },
     { label: "Despacho", valor: pedido.despacho || "—" },
     { label: "Área", valor: pedido.area || "—" },
     {
@@ -1059,6 +1181,11 @@ function Detalle({
                       value={edicion.recepcionadoPor}
                       onChange={(v) => onCambiar(it, "recepcionadoPor", v)}
                     />
+                    {!sucia && it.fechaRecepcion && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Entregado el {formatFecha(it.fechaRecepcion)}
+                      </p>
+                    )}
                   </td>
                   <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right">
                     <button
