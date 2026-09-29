@@ -31,12 +31,26 @@ const HEADERS = [
   "Consumo interno",
   "Recepcionado por",
   "Urgente",
-  "Fecha entrega real",
+  "Fecha recepción bodega",
+  "Fecha entrega solicitante",
 ];
-// Última columna de encabezados (21 columnas -> A..U).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:U1`;
+// Última columna de encabezados (22 columnas -> A..V).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:V1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:U`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:V`;
+
+/** Fecha de hoy en horario local como "YYYY-MM-DD" (formato de <input type="date">). */
+function hoyYMD(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+/** "" o "YYYY-MM-DD" válido. */
+function fechaValida(s: string): boolean {
+  return s === "" || /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
 
 type ItemInput = {
   codigo?: unknown;
@@ -170,7 +184,8 @@ export async function POST(request: Request) {
       "",
       "",
       urgente,
-      "", // Fecha entrega real: se completa sola cuando se registra "Recepcionado por".
+      "", // Fecha recepción bodega
+      "", // Fecha entrega solicitante
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -192,8 +207,10 @@ export type PedidoItem = {
   cantidadRecibida: number | null;
   consumoInterno: string;
   recepcionadoPor: string;
-  /** Fecha real en que se entregó a quien lo pidió (ISO). Vacía si aún no se entrega. */
-  fechaRecepcion: string;
+  /** Fecha en que el pedido llega a bodega de Adquisiciones ("YYYY-MM-DD"). Editable. */
+  fechaRecepcionBodega: string;
+  /** Fecha en que se entrega al solicitante/supervisor ("YYYY-MM-DD"). Editable. */
+  fechaEntregaSolicitante: string;
 };
 
 export type PedidoResumen = {
@@ -265,7 +282,8 @@ export async function GET() {
           cantidadRecibidaRaw === "" ? null : Number(cantidadRecibidaRaw),
         consumoInterno: str(row[17]),
         recepcionadoPor: str(row[18]),
-        fechaRecepcion: str(row[20]),
+        fechaRecepcionBodega: str(row[20]),
+        fechaEntregaSolicitante: str(row[21]),
       });
     });
 
@@ -285,6 +303,10 @@ type PatchInput = {
   cantidadRecibida?: unknown;
   consumoInterno?: unknown;
   recepcionadoPor?: unknown;
+  /** "YYYY-MM-DD" o "" para borrarla. Si no viene, no se toca (salvo auto-relleno). */
+  fechaRecepcionBodega?: unknown;
+  /** "YYYY-MM-DD" o "" para borrarla. Si no viene, no se toca (salvo auto-relleno). */
+  fechaEntregaSolicitante?: unknown;
 };
 
 export async function PATCH(request: Request) {
@@ -317,15 +339,16 @@ export async function PATCH(request: Request) {
 
     // Lee los valores actuales de la fila para no pisar los campos que no
     // vienen en este PATCH (se guarda de a un campo o de a varios). Incluye
-    // T (Urgente, para no perderlo al reescribir el bloque) y U (Fecha
-    // recepción, para saber si ya estaba registrada).
-    const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:U${fila}`);
+    // T (Urgente, para no perderlo al reescribir el bloque) y U/V (las dos
+    // fechas, para saber si ya estaban registradas).
+    const actual = await readRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:V${fila}`);
     const [
       curRecibida = "",
       curConsumo = "",
       curRecepcion = "",
       curUrgente = "",
-      curFechaRecepcion = "",
+      curFechaBodega = "",
+      curFechaSolicitante = "",
     ] = actual[0] ?? [];
 
     const cantidadRecibida =
@@ -349,27 +372,58 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Fecha real de entrega (para el KPI de cumplimiento de plazo): no es
-    // cuando Adquisiciones recibe del proveedor (eso es "Cantidad
-    // recibida"), sino cuando Adquisiciones le entrega el pedido a quien lo
-    // solicitó, es decir, cuando se completa "Recepcionado por". Se registra
-    // sola la primera vez que ese campo deja de estar vacío. Si se corrige
-    // después, no se pisa la fecha ya registrada; si se borra "Recepcionado
-    // por" (se vuelve a dejar sin entregar), se borra también.
-    let fechaRecepcion = str(curFechaRecepcion);
-    if (body.recepcionadoPor !== undefined) {
-      if (recepcionadoPor === "") {
-        fechaRecepcion = "";
-      } else if (!fechaRecepcion) {
-        fechaRecepcion = new Date().toISOString();
-      }
+    // Las dos fechas del KPI de cumplimiento son editables desde el panel:
+    // 1) cuándo llega el pedido a bodega de Adquisiciones.
+    // 2) cuándo se le entrega al solicitante/supervisor.
+    // Si el PATCH trae la fecha explícita (el usuario la tipeó o la borró en
+    // el campo de fecha), esa manda. Si no viene, pero sí viene la cantidad
+    // recibida / el nombre de quien recepcionó por primera vez, se rellena
+    // sola con la fecha de hoy como comodidad (y se puede corregir después).
+    let fechaRecepcionBodega = str(curFechaBodega);
+    if (body.fechaRecepcionBodega !== undefined) {
+      fechaRecepcionBodega = str(body.fechaRecepcionBodega);
+    } else if (
+      body.cantidadRecibida !== undefined &&
+      cantidadRecibida !== "" &&
+      !fechaRecepcionBodega
+    ) {
+      fechaRecepcionBodega = hoyYMD();
     }
 
-    await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:U${fila}`, [
-      [cantidadRecibida, consumoInterno, recepcionadoPor, curUrgente, fechaRecepcion],
+    let fechaEntregaSolicitante = str(curFechaSolicitante);
+    if (body.fechaEntregaSolicitante !== undefined) {
+      fechaEntregaSolicitante = str(body.fechaEntregaSolicitante);
+    } else if (
+      body.recepcionadoPor !== undefined &&
+      recepcionadoPor !== "" &&
+      !fechaEntregaSolicitante
+    ) {
+      fechaEntregaSolicitante = hoyYMD();
+    }
+
+    if (!fechaValida(fechaRecepcionBodega) || !fechaValida(fechaEntregaSolicitante)) {
+      return NextResponse.json(
+        { error: "Fecha inválida (debe ser AAAA-MM-DD)." },
+        { status: 400 }
+      );
+    }
+
+    await writeRange(sheetId, `${PEDIDOS_SHEET}!Q${fila}:V${fila}`, [
+      [
+        cantidadRecibida,
+        consumoInterno,
+        recepcionadoPor,
+        curUrgente,
+        fechaRecepcionBodega,
+        fechaEntregaSolicitante,
+      ],
     ]);
 
-    return NextResponse.json({ ok: true, fechaRecepcion });
+    return NextResponse.json({
+      ok: true,
+      fechaRecepcionBodega,
+      fechaEntregaSolicitante,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });

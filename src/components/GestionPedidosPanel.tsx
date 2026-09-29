@@ -13,8 +13,10 @@ type PedidoItem = {
   cantidadRecibida: number | null;
   consumoInterno: string;
   recepcionadoPor: string;
-  /** Fecha real en que se entregó a quien lo pidió (ISO). Vacía si aún no se entrega. */
-  fechaRecepcion: string;
+  /** Fecha en que el pedido llega a bodega de Adquisiciones ("YYYY-MM-DD"). Editable. */
+  fechaRecepcionBodega: string;
+  /** Fecha en que se entrega al solicitante/supervisor ("YYYY-MM-DD"). Editable. */
+  fechaEntregaSolicitante: string;
 };
 
 type PedidoResumen = {
@@ -70,6 +72,15 @@ function formatFecha(iso: string): string {
   });
 }
 
+/** "YYYY-MM-DD" -> Date a medianoche local (sin desfase de huso horario). */
+function parseFechaYMD(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const fecha = new Date(Number(y), Number(mo) - 1, Number(d));
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
 function estadoLinea(it: PedidoItem): Estado {
   if (it.cantidadRecibida === null) return "pendiente";
   return it.cantidadRecibida >= it.cantidad ? "completo" : "parcial";
@@ -113,10 +124,15 @@ function soloFecha(d: Date): number {
  * solicitante, o el pedido es anterior a que existiera este campo).
  */
 function fechaRecepcionPedido(p: PedidoResumen): Date | null {
-  const fechas = p.items.map((it) =>
-    it.fechaRecepcion ? new Date(it.fechaRecepcion) : null
-  );
-  if (fechas.some((d) => d === null || Number.isNaN(d.getTime()))) return null;
+  const fechas = p.items.map((it) => parseFechaYMD(it.fechaEntregaSolicitante));
+  if (fechas.some((d) => d === null)) return null;
+  return new Date(Math.max(...(fechas as Date[]).map((d) => d.getTime())));
+}
+
+/** La más tardía entre las fechas de llegada a bodega de las líneas del pedido. */
+function fechaBodegaPedido(p: PedidoResumen): Date | null {
+  const fechas = p.items.map((it) => parseFechaYMD(it.fechaRecepcionBodega));
+  if (fechas.some((d) => d === null)) return null;
   return new Date(Math.max(...(fechas as Date[]).map((d) => d.getTime())));
 }
 
@@ -138,6 +154,8 @@ type LineaEdit = {
   cantidadRecibida: string;
   consumoInterno: string;
   recepcionadoPor: string;
+  fechaRecepcionBodega: string;
+  fechaEntregaSolicitante: string;
 };
 
 function lineaEditDesdeItem(it: PedidoItem): LineaEdit {
@@ -146,7 +164,17 @@ function lineaEditDesdeItem(it: PedidoItem): LineaEdit {
       it.cantidadRecibida === null ? "" : String(it.cantidadRecibida),
     consumoInterno: it.consumoInterno,
     recepcionadoPor: it.recepcionadoPor,
+    fechaRecepcionBodega: it.fechaRecepcionBodega,
+    fechaEntregaSolicitante: it.fechaEntregaSolicitante,
   };
+}
+
+/** Fecha de hoy en horario local como "YYYY-MM-DD" (formato de <input type="date">). */
+function hoyYMD(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
 /** ¿Lo escrito en la fila difiere de lo que hay guardado en la planilla? */
@@ -156,7 +184,9 @@ function tieneCambios(it: PedidoItem, ed: LineaEdit | undefined): boolean {
   return (
     ed.cantidadRecibida.trim() !== base.cantidadRecibida ||
     ed.consumoInterno.trim() !== base.consumoInterno.trim() ||
-    ed.recepcionadoPor.trim() !== base.recepcionadoPor.trim()
+    ed.recepcionadoPor.trim() !== base.recepcionadoPor.trim() ||
+    ed.fechaRecepcionBodega !== base.fechaRecepcionBodega ||
+    ed.fechaEntregaSolicitante !== base.fechaEntregaSolicitante
   );
 }
 
@@ -400,10 +430,20 @@ export default function GestionPedidosPanel() {
     campo: keyof LineaEdit,
     valor: string
   ) {
-    setEdiciones((prev) => ({
-      ...prev,
-      [it.fila]: { ...(prev[it.fila] ?? lineaEditDesdeItem(it)), [campo]: valor },
-    }));
+    setEdiciones((prev) => {
+      const base = prev[it.fila] ?? lineaEditDesdeItem(it);
+      const next: LineaEdit = { ...base, [campo]: valor };
+      // Comodidad: al marcar por primera vez cantidad recibida o quién
+      // recepcionó, se propone la fecha de hoy en el campo de fecha
+      // correspondiente (si estaba vacío). Sigue siendo editable a mano.
+      if (campo === "cantidadRecibida" && valor.trim() !== "" && !base.fechaRecepcionBodega) {
+        next.fechaRecepcionBodega = hoyYMD();
+      }
+      if (campo === "recepcionadoPor" && valor.trim() !== "" && !base.fechaEntregaSolicitante) {
+        next.fechaEntregaSolicitante = hoyYMD();
+      }
+      return { ...prev, [it.fila]: next };
+    });
     setGuardado((prev) => ({ ...prev, [it.fila]: false }));
   }
 
@@ -411,9 +451,11 @@ export default function GestionPedidosPanel() {
     setEdiciones((prev) => {
       const next = { ...prev };
       for (const it of items) {
+        const base = prev[it.fila] ?? lineaEditDesdeItem(it);
         next[it.fila] = {
-          ...(prev[it.fila] ?? lineaEditDesdeItem(it)),
+          ...base,
           cantidadRecibida: String(it.cantidad),
+          fechaRecepcionBodega: base.fechaRecepcionBodega || hoyYMD(),
         };
       }
       return next;
@@ -445,6 +487,8 @@ export default function GestionPedidosPanel() {
           cantidadRecibida,
           consumoInterno: edicion.consumoInterno.trim(),
           recepcionadoPor: edicion.recepcionadoPor.trim(),
+          fechaRecepcionBodega: edicion.fechaRecepcionBodega,
+          fechaEntregaSolicitante: edicion.fechaEntregaSolicitante,
         }),
       });
       if (res.status === 401) {
@@ -464,10 +508,14 @@ export default function GestionPedidosPanel() {
                   cantidadRecibida,
                   consumoInterno: edicion.consumoInterno.trim(),
                   recepcionadoPor: edicion.recepcionadoPor.trim(),
-                  fechaRecepcion:
-                    typeof data.fechaRecepcion === "string"
-                      ? data.fechaRecepcion
-                      : x.fechaRecepcion,
+                  fechaRecepcionBodega:
+                    typeof data.fechaRecepcionBodega === "string"
+                      ? data.fechaRecepcionBodega
+                      : x.fechaRecepcionBodega,
+                  fechaEntregaSolicitante:
+                    typeof data.fechaEntregaSolicitante === "string"
+                      ? data.fechaEntregaSolicitante
+                      : x.fechaEntregaSolicitante,
                 }
               : x
           ),
@@ -947,6 +995,13 @@ function Detalle({
       ),
     },
     {
+      label: "Llegó a bodega",
+      valor: (() => {
+        const bodega = fechaBodegaPedido(pedido);
+        return bodega ? formatFecha(bodega.toISOString()) : "Sin registro";
+      })(),
+    },
+    {
       label: "Fecha de entrega real",
       valor: (() => {
         const real = fechaRecepcionPedido(pedido);
@@ -1062,14 +1117,16 @@ function Detalle({
       </dl>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[920px] border-collapse text-sm">
+        <table className="w-full min-w-[1240px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="py-2.5 pl-5 pr-3 font-semibold">Artículo</th>
               <th className="px-3 py-2.5 font-semibold">Pedido</th>
               <th className="px-3 py-2.5 font-semibold">Recibido</th>
+              <th className="px-3 py-2.5 font-semibold">Llegó a bodega</th>
               <th className="px-3 py-2.5 font-semibold">Consumo interno</th>
               <th className="px-3 py-2.5 font-semibold">Recepcionado por</th>
+              <th className="px-3 py-2.5 font-semibold">Entregado al solicitante</th>
               <th className="py-2.5 pl-3 pr-5 text-right font-semibold">
                 <span className="sr-only">Guardar</span>
               </th>
@@ -1160,6 +1217,18 @@ function Detalle({
                   </td>
                   <td className="px-3 py-3">
                     <input
+                      type="date"
+                      aria-label={`Fecha en que llegó a bodega ${it.nombre}`}
+                      className={`${fieldClass} w-[150px]`}
+                      value={edicion.fechaRecepcionBodega}
+                      onChange={(e) =>
+                        onCambiar(it, "fechaRecepcionBodega", e.target.value)
+                      }
+                      onKeyDown={enter}
+                    />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input
                       aria-label={`Consumo interno de ${it.nombre}`}
                       className={fieldClass}
                       value={edicion.consumoInterno}
@@ -1181,11 +1250,18 @@ function Detalle({
                       value={edicion.recepcionadoPor}
                       onChange={(v) => onCambiar(it, "recepcionadoPor", v)}
                     />
-                    {!sucia && it.fechaRecepcion && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Entregado el {formatFecha(it.fechaRecepcion)}
-                      </p>
-                    )}
+                  </td>
+                  <td className="px-3 py-3">
+                    <input
+                      type="date"
+                      aria-label={`Fecha en que se entregó al solicitante ${it.nombre}`}
+                      className={`${fieldClass} w-[150px]`}
+                      value={edicion.fechaEntregaSolicitante}
+                      onChange={(e) =>
+                        onCambiar(it, "fechaEntregaSolicitante", e.target.value)
+                      }
+                      onKeyDown={enter}
+                    />
                   </td>
                   <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right">
                     <button
