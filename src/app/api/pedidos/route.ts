@@ -33,11 +33,40 @@ const HEADERS = [
   "Urgente",
   "Fecha recepción bodega",
   "Fecha entrega solicitante",
+  "Comentario artículo",
 ];
-// Última columna de encabezados (22 columnas -> A..V).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:V1`;
+// Última columna de encabezados (23 columnas -> A..W).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:W1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:V`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:W`;
+
+// Prefijos de centro de negocio -> prefijo del folio del pedido (igual al
+// prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
+const PREFIJOS_FOLIO = ["RCT", "SST", "INT"];
+
+/** Prefijo del folio a partir del código de centro (p. ej. "RCTA25008..." -> "RCT"). */
+function prefijoFolio(centroCodigo: string): string {
+  const cod = centroCodigo.toUpperCase();
+  const match = PREFIJOS_FOLIO.find((p) => cod.startsWith(p));
+  return match ?? "PED";
+}
+
+/**
+ * Siguiente folio correlativo para un prefijo (p. ej. "RCT-1", "RCT-2", …).
+ * Se calcula leyendo los folios ya usados en la columna A y tomando el mayor
+ * número visto para ese prefijo, +1. Pedidos antiguos con formato
+ * "PED-<timestamp>" no matchean el patrón y simplemente se ignoran.
+ */
+async function siguienteFolio(sheetId: string, prefijo: string): Promise<string> {
+  const col = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:A`);
+  const patron = new RegExp(`^${prefijo}-(\\d+)$`);
+  let max = 0;
+  for (const row of col) {
+    const m = patron.exec(str(row[0]));
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `${prefijo}-${max + 1}`;
+}
 
 /** Fecha de hoy en horario local como "YYYY-MM-DD" (formato de <input type="date">). */
 function hoyYMD(): string {
@@ -58,6 +87,7 @@ type ItemInput = {
   categoria?: unknown;
   unidad?: unknown;
   cantidad?: unknown;
+  comentario?: unknown;
 };
 
 type PedidoInput = {
@@ -119,10 +149,14 @@ export async function POST(request: Request) {
   const fechaEntrega = str(body.fechaEntrega);
   const clasificador1 = str(body.clasificador1);
   const clasificador2 = str(body.clasificador2);
-  const despacho = str(body.despacho);
+  let despacho = str(body.despacho);
   const comentario = str(body.comentario);
+  const esUrgente = body.urgente === true;
   // En la planilla: "Sí" si es urgente, vacío si no.
-  const urgente = body.urgente === true ? "Sí" : "";
+  const urgente = esUrgente ? "Sí" : "";
+  // Red de seguridad del lado del servidor: un pedido urgente siempre se
+  // retira directo (no pasa por despacho de proveedor/logística).
+  if (esUrgente) despacho = "RETIRA SOLICITANTE";
   const rawItems = Array.isArray(body.items) ? (body.items as ItemInput[]) : [];
 
   if (!solicitante) {
@@ -139,6 +173,13 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!clasificador1 || !clasificador2) {
+    return NextResponse.json(
+      { error: "Clasificador 1 y Clasificador 2 son obligatorios." },
+      { status: 400 }
+    );
+  }
+
   const items = rawItems
     .map((it) => ({
       codigo: str(it.codigo),
@@ -146,6 +187,7 @@ export async function POST(request: Request) {
       categoria: str(it.categoria),
       unidad: str(it.unidad) || "UN",
       cantidad: Number(it.cantidad),
+      comentario: str(it.comentario),
     }))
     .filter((it) => it.codigo && Number.isFinite(it.cantidad) && it.cantidad > 0);
 
@@ -156,12 +198,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const pedidoId = `PED-${Date.now()}`;
-  const fecha = new Date().toISOString();
   const sheetId = articulosSheetId();
 
   try {
     await asegurarPedidosSheet(sheetId);
+
+    const pedidoId = await siguienteFolio(sheetId, prefijoFolio(centroCodigo));
+    const fecha = new Date().toISOString();
 
     const rows = items.map((it) => [
       pedidoId,
@@ -186,6 +229,7 @@ export async function POST(request: Request) {
       urgente,
       "", // Fecha recepción bodega
       "", // Fecha entrega solicitante
+      it.comentario, // Comentario artículo
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -211,6 +255,8 @@ export type PedidoItem = {
   fechaRecepcionBodega: string;
   /** Fecha en que se entrega al solicitante/supervisor ("YYYY-MM-DD"). Editable. */
   fechaEntregaSolicitante: string;
+  /** Comentario/detalle propio de este artículo, escrito al armar el pedido. */
+  comentarioArticulo: string;
 };
 
 export type PedidoResumen = {
@@ -284,6 +330,7 @@ export async function GET() {
         recepcionadoPor: str(row[18]),
         fechaRecepcionBodega: str(row[20]),
         fechaEntregaSolicitante: str(row[21]),
+        comentarioArticulo: str(row[22]),
       });
     });
 

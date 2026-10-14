@@ -17,6 +17,8 @@ type PedidoItem = {
   fechaRecepcionBodega: string;
   /** Fecha en que se entrega al solicitante/supervisor ("YYYY-MM-DD"). Editable. */
   fechaEntregaSolicitante: string;
+  /** Comentario/detalle propio de este artículo, escrito al armar el pedido. */
+  comentarioArticulo: string;
 };
 
 type PedidoResumen = {
@@ -219,6 +221,10 @@ export default function GestionPedidosPanel() {
   const [errores, setErrores] = useState<Record<number, string>>({});
   const [guardandoTodo, setGuardandoTodo] = useState(false);
 
+  // Selección múltiple de filas (dentro del pedido abierto) para rellenar
+  // varios artículos a la vez con los mismos datos de recepción.
+  const [seleccionFilas, setSeleccionFilas] = useState<Set<number>>(new Set());
+
   const detalleRef = useRef<HTMLElement>(null);
 
   async function cargarPedidos(inicial = false) {
@@ -416,6 +422,7 @@ export default function GestionPedidosPanel() {
 
   function abrirPedido(p: PedidoResumen) {
     setSeleccionado(p.pedidoId);
+    setSeleccionFilas(new Set());
     // En pantallas angostas el detalle queda debajo de la lista.
     if (window.innerWidth < 1024) {
       window.setTimeout(
@@ -423,6 +430,25 @@ export default function GestionPedidosPanel() {
         0
       );
     }
+  }
+
+  function alternarFila(fila: number) {
+    setSeleccionFilas((prev) => {
+      const next = new Set(prev);
+      if (next.has(fila)) next.delete(fila);
+      else next.add(fila);
+      return next;
+    });
+  }
+
+  function alternarTodasLasFilas(items: PedidoItem[]) {
+    setSeleccionFilas((prev) =>
+      items.every((it) => prev.has(it.fila)) ? new Set() : new Set(items.map((it) => it.fila))
+    );
+  }
+
+  function limpiarSeleccion() {
+    setSeleccionFilas(new Set());
   }
 
   function cambiarCampo(
@@ -458,6 +484,43 @@ export default function GestionPedidosPanel() {
           fechaRecepcionBodega: base.fechaRecepcionBodega || hoyYMD(),
         };
       }
+      return next;
+    });
+  }
+
+  /**
+   * Rellena en bloque los campos comunes (quién recepcionó, fechas, consumo
+   * interno) de varias filas seleccionadas a la vez, para no tener que
+   * tipearlos uno a uno en pedidos grandes. Solo toca los campos con valor;
+   * deja vacío = no tocar esa columna.
+   */
+  function aplicarCamposEnBloque(
+    items: PedidoItem[],
+    campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
+  ) {
+    const entradas = Object.entries(campos).filter(
+      ([, v]) => v !== undefined && v !== ""
+    ) as [keyof LineaEdit, string][];
+    if (entradas.length === 0 || items.length === 0) return;
+    setEdiciones((prev) => {
+      const next = { ...prev };
+      for (const it of items) {
+        const base = prev[it.fila] ?? lineaEditDesdeItem(it);
+        const actualizado: LineaEdit = { ...base };
+        for (const [campo, valor] of entradas) actualizado[campo] = valor;
+        // Mismo comodín que al editar una fila sola: si se fija quién
+        // recepcionó y no había fecha de entrega al solicitante, se propone hoy.
+        if (campos.recepcionadoPor && !base.fechaEntregaSolicitante) {
+          actualizado.fechaEntregaSolicitante =
+            actualizado.fechaEntregaSolicitante || hoyYMD();
+        }
+        next[it.fila] = actualizado;
+      }
+      return next;
+    });
+    setGuardado((prev) => {
+      const next = { ...prev };
+      for (const it of items) next[it.fila] = false;
       return next;
     });
   }
@@ -929,10 +992,15 @@ export default function GestionPedidosPanel() {
               guardandoTodo={guardandoTodo}
               empleados={empleados}
               cambios={cambiosPorPedido.get(pedidoActual.pedidoId) ?? 0}
+              seleccionFilas={seleccionFilas}
               onCambiar={cambiarCampo}
               onMarcarRecibido={marcarRecibido}
               onGuardarLinea={guardarLinea}
               onGuardarTodo={() => guardarTodo(pedidoActual)}
+              onAlternarFila={alternarFila}
+              onAlternarTodasLasFilas={alternarTodasLasFilas}
+              onLimpiarSeleccion={limpiarSeleccion}
+              onAplicarCamposEnBloque={aplicarCamposEnBloque}
             />
           )}
         </section>
@@ -950,10 +1018,15 @@ function Detalle({
   guardandoTodo,
   empleados,
   cambios,
+  seleccionFilas,
   onCambiar,
   onMarcarRecibido,
   onGuardarLinea,
   onGuardarTodo,
+  onAlternarFila,
+  onAlternarTodasLasFilas,
+  onLimpiarSeleccion,
+  onAplicarCamposEnBloque,
 }: {
   pedido: PedidoResumen;
   ediciones: Record<number, LineaEdit>;
@@ -963,11 +1036,50 @@ function Detalle({
   guardandoTodo: boolean;
   empleados: ComboOption[];
   cambios: number;
+  seleccionFilas: Set<number>;
   onCambiar: (it: PedidoItem, campo: keyof LineaEdit, valor: string) => void;
   onMarcarRecibido: (items: PedidoItem[]) => void;
   onGuardarLinea: (it: PedidoItem) => Promise<boolean>;
   onGuardarTodo: () => void;
+  onAlternarFila: (fila: number) => void;
+  onAlternarTodasLasFilas: (items: PedidoItem[]) => void;
+  onLimpiarSeleccion: () => void;
+  onAplicarCamposEnBloque: (
+    items: PedidoItem[],
+    campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
+  ) => void;
 }) {
+  const itemsSeleccionados = pedido.items.filter((it) =>
+    seleccionFilas.has(it.fila)
+  );
+  const todasSeleccionadas =
+    pedido.items.length > 0 &&
+    pedido.items.every((it) => seleccionFilas.has(it.fila));
+
+  const [bulkRecepcionadoPor, setBulkRecepcionadoPor] = useState("");
+  const [bulkFechaBodega, setBulkFechaBodega] = useState("");
+  const [bulkFechaEntrega, setBulkFechaEntrega] = useState("");
+  const [bulkConsumo, setBulkConsumo] = useState("");
+
+  function aplicarBulk() {
+    onAplicarCamposEnBloque(itemsSeleccionados, {
+      recepcionadoPor: bulkRecepcionadoPor.trim(),
+      fechaRecepcionBodega: bulkFechaBodega,
+      fechaEntregaSolicitante: bulkFechaEntrega,
+      consumoInterno: bulkConsumo.trim(),
+    });
+    setBulkRecepcionadoPor("");
+    setBulkFechaBodega("");
+    setBulkFechaEntrega("");
+    setBulkConsumo("");
+  }
+
+  const hayDatosBulk = Boolean(
+    bulkRecepcionadoPor.trim() ||
+      bulkFechaBodega ||
+      bulkFechaEntrega ||
+      bulkConsumo.trim()
+  );
   const estado = ESTADOS[estadoPedido(pedido.items)];
   const faltantes = pedido.items.filter((it) => {
     const ed = ediciones[it.fila];
@@ -1116,11 +1228,99 @@ function Detalle({
         )}
       </dl>
 
+      {/* Edición en bloque: útil en pedidos grandes, para no rellenar fila
+          por fila. Solo aparece cuando hay artículos seleccionados. */}
+      {itemsSeleccionados.length > 0 && (
+        <div className="flex flex-wrap items-end gap-3 border-b border-border bg-accent/5 px-5 py-3">
+          <p className="mr-1 w-full text-xs font-bold uppercase tracking-wide text-accent sm:w-auto">
+            {itemsSeleccionados.length}{" "}
+            {itemsSeleccionados.length === 1
+              ? "artículo seleccionado"
+              : "artículos seleccionados"}
+          </p>
+          <label className="block w-44">
+            <span className={labelClass}>Recepcionado por</span>
+            <SearchCombobox
+              size="sm"
+              allowCustom
+              clearable
+              ariaLabel="Recepcionado por (en bloque)"
+              placeholder="Buscar persona…"
+              options={empleados}
+              value={bulkRecepcionadoPor}
+              onChange={setBulkRecepcionadoPor}
+            />
+          </label>
+          <label className="block w-40">
+            <span className={labelClass}>Llegó a bodega</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={bulkFechaBodega}
+              onChange={(e) => setBulkFechaBodega(e.target.value)}
+            />
+          </label>
+          <label className="block w-40">
+            <span className={labelClass}>Entregado al solicitante</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={bulkFechaEntrega}
+              onChange={(e) => setBulkFechaEntrega(e.target.value)}
+            />
+          </label>
+          <label className="block w-40">
+            <span className={labelClass}>Consumo interno</span>
+            <input
+              className={fieldClass}
+              value={bulkConsumo}
+              onChange={(e) => setBulkConsumo(e.target.value)}
+              placeholder="Opcional"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={aplicarBulk}
+            disabled={!hayDatosBulk}
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-3.5 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Aplicar a los seleccionados
+          </button>
+          <button
+            type="button"
+            onClick={() => onMarcarRecibido(itemsSeleccionados)}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3.5 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+          >
+            Marcar recibido completo
+          </button>
+          <button
+            type="button"
+            onClick={onLimpiarSeleccion}
+            className="ml-auto inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted"
+          >
+            Quitar selección
+          </button>
+          <p className="w-full text-[11px] text-muted-foreground">
+            Rellena solo los campos que quieras cambiar; se guardan al
+            presionar «Guardar cambios» como cualquier otra edición.
+          </p>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1240px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-              <th className="py-2.5 pl-5 pr-3 font-semibold">Artículo</th>
+              <th className="py-2.5 pl-5 pr-1.5 font-semibold">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer accent-accent"
+                  aria-label="Seleccionar todos los artículos"
+                  checked={todasSeleccionadas}
+                  onChange={() => onAlternarTodasLasFilas(pedido.items)}
+                />
+              </th>
+              <th className="py-2.5 pr-3 font-semibold">Artículo</th>
               <th className="px-3 py-2.5 font-semibold">Pedido</th>
               <th className="px-3 py-2.5 font-semibold">Recibido</th>
               <th className="px-3 py-2.5 font-semibold">Llegó a bodega</th>
@@ -1148,15 +1348,29 @@ function Detalle({
                   void onGuardarLinea(it);
                 }
               };
+              const seleccionada = seleccionFilas.has(it.fila);
               return (
                 <tr
                   key={it.fila}
                   className={`border-b border-border/70 align-top last:border-0 ${
-                    sucia ? "bg-accent/5" : ""
+                    seleccionada
+                      ? "bg-accent/10"
+                      : sucia
+                        ? "bg-accent/5"
+                        : ""
                   }`}
                 >
+                  <td className="py-3 pl-5 pr-1.5">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-accent"
+                      aria-label={`Seleccionar ${it.nombre}`}
+                      checked={seleccionada}
+                      onChange={() => onAlternarFila(it.fila)}
+                    />
+                  </td>
                   <td
-                    className={`border-l-4 py-3 pl-4 pr-3 ${
+                    className={`border-l-4 py-3 pr-3 ${
                       sucia ? "border-l-accent" : "border-l-transparent"
                     }`}
                   >
@@ -1172,6 +1386,11 @@ function Detalle({
                         {estadoIt.label}
                       </span>
                     </div>
+                    {it.comentarioArticulo && (
+                      <p className="mt-1 max-w-[220px] text-xs italic text-muted-foreground">
+                        {it.comentarioArticulo}
+                      </p>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 tabular-nums">
                     <span className="text-base font-bold text-primary">
@@ -1184,6 +1403,7 @@ function Detalle({
                       <input
                         type="number"
                         min="0"
+                        max={it.cantidad}
                         step="any"
                         inputMode="decimal"
                         aria-label={`Cantidad recibida de ${it.nombre}`}
@@ -1192,9 +1412,19 @@ function Detalle({
                         }`}
                         placeholder="—"
                         value={edicion.cantidadRecibida}
-                        onChange={(e) =>
-                          onCambiar(it, "cantidadRecibida", e.target.value)
-                        }
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          // Rara vez llega más de lo pedido: se topa a la
+                          // cantidad pedida en vez de dejar escribir de más.
+                          const n = Number(raw);
+                          const valor =
+                            raw !== "" &&
+                            Number.isFinite(n) &&
+                            n > it.cantidad
+                              ? String(it.cantidad)
+                              : raw;
+                          onCambiar(it, "cantidadRecibida", valor);
+                        }}
                         onKeyDown={enter}
                       />
                       <button

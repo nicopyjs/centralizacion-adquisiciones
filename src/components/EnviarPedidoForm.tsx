@@ -32,6 +32,9 @@ type LineaPedido = {
   cantidad: number;
   // Artículo escrito a mano porque no está en el catálogo de Defontana.
   manual: boolean;
+  // Detalle específico de este artículo (p. ej. color, medida, repuesto para
+  // qué equipo). Se agrega al correo junto a la línea del artículo.
+  comentario: string;
 };
 
 // Código con el que se guardan los artículos manuales en la planilla: no
@@ -178,7 +181,13 @@ type ResumenEnvio = {
   para: string;
   cc: string;
   urgente: boolean;
-  items: { id: string; nombre: string; cantidad: number; unidad: string }[];
+  items: {
+    id: string;
+    nombre: string;
+    cantidad: number;
+    unidad: string;
+    comentario: string;
+  }[];
   unidades: number;
 };
 
@@ -313,19 +322,23 @@ function ConfirmarEnvioDialog({
           </p>
           <ul className="divide-y divide-border/70 rounded-lg border border-border text-sm">
             {resumen.items.map((it) => (
-              <li
-                key={it.id}
-                className="flex items-start justify-between gap-3 px-3 py-2"
-              >
-                <span className="min-w-0 break-words text-card-foreground">
-                  {it.nombre}
-                </span>
-                <span className="shrink-0 font-bold tabular-nums text-primary">
-                  {it.cantidad.toLocaleString("es-CL")}{" "}
-                  <span className="font-normal text-muted-foreground">
-                    {it.unidad}
+              <li key={it.id} className="px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 break-words text-card-foreground">
+                    {it.nombre}
                   </span>
-                </span>
+                  <span className="shrink-0 font-bold tabular-nums text-primary">
+                    {it.cantidad.toLocaleString("es-CL")}{" "}
+                    <span className="font-normal text-muted-foreground">
+                      {it.unidad}
+                    </span>
+                  </span>
+                </div>
+                {it.comentario && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {it.comentario}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
@@ -651,6 +664,7 @@ export default function EnviarPedidoForm({
         unidad: "",
         cantidad: 1,
         manual: false,
+        comentario: "",
       },
     ]);
   }
@@ -724,6 +738,12 @@ export default function EnviarPedidoForm({
     setLineas((prev) => prev.map((l) => (l.id === id ? { ...l, unidad } : l)));
   }
 
+  function cambiarComentarioLinea(id: string, comentario: string) {
+    setLineas((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, comentario } : l))
+    );
+  }
+
   function cambiarCantidad(id: string, valor: number) {
     if (Number.isNaN(valor)) return;
     const v = valor < 0 ? 0 : valor;
@@ -761,6 +781,14 @@ export default function EnviarPedidoForm({
     if (!valor && fechaEntrega && fechaEntrega < fechaEntregaPorDefecto()) {
       setFechaEntrega(fechaEntregaPorDefecto());
     }
+    // Pedido urgente: siempre lo retira el solicitante (no pasa por
+    // logística/proveedor). Al desmarcar «urgente» se limpia para que lo
+    // vuelvan a elegir.
+    if (valor) {
+      setDespacho("RETIRA SOLICITANTE");
+    } else {
+      setDespacho("");
+    }
   }
 
   // Se corrige al salir del campo (no mientras se escribe, porque el año se
@@ -774,11 +802,15 @@ export default function EnviarPedidoForm({
       ? "Ingresa el solicitante."
       : !centroSel
         ? "Selecciona un centro de negocio."
-        : lineasCompletas.length === 0
-          ? "Agrega al menos un artículo con cantidad."
-          : fechaEntrega && fechaEntrega < minEntrega
-            ? `La fecha de entrega debe ser desde el ${formatFecha(minEntrega)} (10 días hábiles). Marca «Pedido urgente» para elegir una anterior.`
-            : null;
+        : !clasificador1
+          ? "Selecciona el Clasificador 1."
+          : !clasificador2
+            ? "Selecciona el Clasificador 2."
+            : lineasCompletas.length === 0
+              ? "Agrega al menos un artículo con cantidad."
+              : fechaEntrega && fechaEntrega < minEntrega
+                ? `La fecha de entrega debe ser desde el ${formatFecha(minEntrega)} (10 días hábiles). Marca «Pedido urgente» para elegir una anterior.`
+                : null;
 
   const puedeEnviar = !faltante;
 
@@ -794,7 +826,12 @@ export default function EnviarPedidoForm({
           : "Buenas noches, estimados";
 
     const elementos = lineasCompletas
-      .map((l) => `- ${l.cantidad.toLocaleString("es-CL")} ${l.nombre}`)
+      .map((l) => {
+        const base = `- ${l.cantidad.toLocaleString("es-CL")} ${l.nombre}`;
+        return l.comentario.trim()
+          ? `${base} (Comentario: ${l.comentario.trim()})`
+          : base;
+      })
       .join("\n");
 
     const partes = [
@@ -919,6 +956,7 @@ export default function EnviarPedidoForm({
             categoria: l.categoria,
             unidad: l.unidad,
             cantidad: l.cantidad,
+            comentario: l.comentario.trim(),
           })),
         }),
       });
@@ -1033,6 +1071,7 @@ export default function EnviarPedidoForm({
       nombre: l.nombre,
       cantidad: l.cantidad,
       unidad: l.unidad,
+      comentario: l.comentario.trim(),
     })),
     unidades: unidadesCompletas,
   };
@@ -1229,7 +1268,7 @@ export default function EnviarPedidoForm({
             <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
               <div>
                 <label htmlFor="clasificador1" className={labelClass}>
-                  Clasificador 1
+                  Clasificador 1 <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="clasificador1"
@@ -1237,7 +1276,7 @@ export default function EnviarPedidoForm({
                   value={clasificador1}
                   onChange={(e) => setClasificador1(e.target.value)}
                 >
-                  <option value="">Opcional</option>
+                  <option value="">Selecciona…</option>
                   {CLASIFICADORES_1.map((o) => (
                     <option key={o} value={o}>
                       {o}
@@ -1247,7 +1286,7 @@ export default function EnviarPedidoForm({
               </div>
               <div>
                 <label htmlFor="clasificador2" className={labelClass}>
-                  Clasificador 2
+                  Clasificador 2 <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="clasificador2"
@@ -1255,7 +1294,7 @@ export default function EnviarPedidoForm({
                   value={clasificador2}
                   onChange={(e) => setClasificador2(e.target.value)}
                 >
-                  <option value="">Opcional</option>
+                  <option value="">Selecciona…</option>
                   {CLASIFICADORES_2.map((o) => (
                     <option key={o} value={o}>
                       {o}
@@ -1271,6 +1310,7 @@ export default function EnviarPedidoForm({
                   id="despacho"
                   className={fieldClass}
                   value={despacho}
+                  disabled={urgente}
                   onChange={(e) => setDespacho(e.target.value)}
                 >
                   <option value="">Opcional</option>
@@ -1280,6 +1320,11 @@ export default function EnviarPedidoForm({
                     </option>
                   ))}
                 </select>
+                {urgente && (
+                  <p className="mt-1 text-xs font-medium text-warning">
+                    Pedido urgente: siempre lo retira el solicitante.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -1510,6 +1555,22 @@ export default function EnviarPedidoForm({
                         >
                           <IconTrash />
                         </button>
+                      </div>
+
+                      <div className="mt-2 md:col-span-4 md:mt-1.5">
+                        <span className={miniLabel}>
+                          Comentario del artículo
+                        </span>
+                        <input
+                          type="text"
+                          value={l.comentario}
+                          onChange={(e) =>
+                            cambiarComentarioLinea(l.id, e.target.value)
+                          }
+                          placeholder="Detalle de este artículo (opcional): medida, color, para qué equipo…"
+                          className={`${manualFieldClass} w-full`}
+                          aria-label={`Comentario del artículo ${idx + 1}`}
+                        />
                       </div>
                     </li>
                   );
