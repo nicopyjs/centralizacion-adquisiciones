@@ -815,7 +815,10 @@ export default function EnviarPedidoForm({
 
   const puedeEnviar = !faltante;
 
-  const asunto = `NEB Chile // Adquisiciones // ${areaActual.label} // ${centroDesc}`;
+  const comentarioAsunto = comentario.replace(/\s+/g, " ").trim();
+  const asunto = `NEB Chile // Adquisiciones // ${centroDesc}${
+    comentarioAsunto ? ` // ${comentarioAsunto}` : ""
+  }`;
 
   const cuerpoCorreo = useMemo(() => {
     const h = new Date().getHours();
@@ -828,7 +831,7 @@ export default function EnviarPedidoForm({
 
     const elementos = lineasCompletas
       .map((l) => {
-        const base = `- ${l.cantidad.toLocaleString("es-CL")} ${l.nombre}`;
+        const base = `- ${l.cantidad.toLocaleString("es-CL")} ${l.unidad ? `${l.unidad} ` : ""}${l.nombre}`;
         return l.comentario.trim()
           ? `${base} (Comentario: ${l.comentario.trim()})`
           : base;
