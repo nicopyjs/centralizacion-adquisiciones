@@ -3,15 +3,39 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
-const TABS = [
+const TAB_GESTION = { href: "/gestion-pedidos", label: "Gestión de Pedidos" };
+const TAB_MIS_PEDIDOS = { href: "/mis-pedidos", label: "Mis Pedidos" };
+const TABS_BASE = [
   { href: "/enviar-pedido", label: "Enviar Pedido" },
   { href: "/materiales-menores", label: "Materiales Menores" },
-  { href: "/gestion-pedidos", label: "Gestión de Pedidos" },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
+  // Cada perfil ve solo su sección; sin sesión aparecen ambas.
+  const [perfil, setPerfil] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelado) setPerfil(d?.perfil ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, [pathname]);
+  const TABS = [
+    ...TABS_BASE,
+    ...(perfil === null
+      ? [TAB_GESTION, TAB_MIS_PEDIDOS]
+      : perfil === "adquisiciones"
+        ? [TAB_GESTION]
+        : [TAB_MIS_PEDIDOS]),
+  ];
   // Gestión de Pedidos usa todo el ancho; el navbar acompaña ese mismo ancho.
   const ancho = pathname.startsWith("/gestion-pedidos")
     ? "max-w-[1800px]"

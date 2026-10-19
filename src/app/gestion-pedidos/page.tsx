@@ -1,7 +1,8 @@
+import { redirect } from "next/navigation";
 import CerrarSesionButton from "@/components/CerrarSesionButton";
 import GestionPedidosPanel from "@/components/GestionPedidosPanel";
 import LoginGestion from "@/components/LoginGestion";
-import { GESTION_USUARIO, haySesion } from "@/lib/auth";
+import { getPerfil, perfilLabel } from "@/lib/auth";
 
 export const metadata = {
   title: "Gestión de Pedidos | Centralización Adquisiciones",
@@ -11,13 +12,16 @@ export const metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function GestionPedidosPage() {
-  if (!(await haySesion())) {
+  const perfil = await getPerfil();
+  if (!perfil) {
     return (
       <div className="py-8">
-        <LoginGestion usuario={GESTION_USUARIO} />
+        <LoginGestion usuarioInicial="adquisiciones" />
       </div>
     );
   }
+  // Supervisor y Maestro solo consultan: van a su vista.
+  if (perfil !== "adquisiciones") redirect("/mis-pedidos");
 
   return (
     <div className="mx-auto w-full max-w-[1800px]">
@@ -33,7 +37,7 @@ export default async function GestionPedidosPage() {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            Sesión: {GESTION_USUARIO}
+            Sesión: {perfilLabel(perfil)}
           </span>
           <CerrarSesionButton />
         </div>

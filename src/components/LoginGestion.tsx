@@ -8,7 +8,18 @@ const fieldClass =
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
-export default function LoginGestion({ usuario }: { usuario: string }) {
+const PERFILES = [
+  { id: "adquisiciones", label: "Adquisiciones" },
+  { id: "supervisor", label: "Supervisor" },
+  { id: "maestro", label: "Maestro" },
+];
+
+export default function LoginGestion({
+  usuarioInicial = "adquisiciones",
+}: {
+  usuarioInicial?: string;
+}) {
+  const [usuario, setUsuario] = useState(usuarioInicial);
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -23,7 +34,7 @@ export default function LoginGestion({ usuario }: { usuario: string }) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ usuario, password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "No se pudo iniciar sesión.");
@@ -43,23 +54,27 @@ export default function LoginGestion({ usuario }: { usuario: string }) {
         Acceso restringido
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Esta sección es solo para el equipo de Adquisiciones.
+        Elige tu perfil e ingresa la contraseña para continuar.
       </p>
 
       <div className="mt-5">
         <label htmlFor="usuario" className={labelClass}>
           Usuario
         </label>
-        {/* Fijo; se deja como campo para los gestores de contraseñas. */}
-        <input
+        <select
           id="usuario"
           name="username"
           autoComplete="username"
           className={fieldClass}
           value={usuario}
-          readOnly
-          tabIndex={-1}
-        />
+          onChange={(e) => setUsuario(e.target.value)}
+        >
+          {PERFILES.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="mt-4">

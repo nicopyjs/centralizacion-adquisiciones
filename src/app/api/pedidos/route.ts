@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { haySesion } from "@/lib/auth";
+import { getPerfil, haySesion, rolDe } from "@/lib/auth";
 import {
   appendRows,
   articulosSheetId,
@@ -275,8 +275,17 @@ export type PedidoResumen = {
   items: PedidoItem[];
 };
 
-export async function GET() {
-  if (!(await haySesion())) return noAutorizado();
+export async function GET(request: Request) {
+  // Adquisiciones ve todo; supervisor/maestro solo los pedidos del solicitante
+  // indicado en ?solicitante= (solo lectura: PATCH exige Adquisiciones).
+  const perfil = await getPerfil();
+  if (!perfil) return noAutorizado();
+  const soloSolicitante =
+    rolDe(perfil) === "solicitante"
+      ? new URL(request.url).searchParams.get("solicitante")?.trim() ?? ""
+      : null;
+  if (soloSolicitante === "") return NextResponse.json({ pedidos: [] });
+
   const sheetId = articulosSheetId();
   try {
     const meta = await getSpreadsheetMeta(sheetId);
@@ -334,9 +343,13 @@ export async function GET() {
       });
     });
 
-    const pedidos = Array.from(porPedido.values()).sort((a, b) =>
-      b.fecha.localeCompare(a.fecha)
-    );
+    const pedidos = Array.from(porPedido.values())
+      .filter(
+        (p) =>
+          soloSolicitante === null ||
+          p.solicitante.trim().toLowerCase() === soloSolicitante.toLowerCase()
+      )
+      .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
     return NextResponse.json({ pedidos });
   } catch (err) {
