@@ -107,6 +107,7 @@ const AREAS = [
   { label: "Refacciones", email: "refacciones@nebchile.cl", prefijo: "RCT" },
   { label: "Servicio Técnico", email: "serviciotecnico@nebchile.cl", prefijo: "SST" },
   { label: "Instalaciones", email: "instalaciones@nebchile.cl", prefijo: "INT" },
+  { label: "Transición y Postventa", email: "typ@nebchile.cl", prefijo: "TYP" },
 ];
 
 // Clasificador 1 (AREA_TRAB) y Clasificador 2 (AREA_NEG): "código - descripción".
@@ -1215,7 +1216,7 @@ export default function EnviarPedidoForm({
               <legend className={labelClass}>
                 Área destino <span className="text-destructive">*</span>
               </legend>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {AREAS.map((a) => (
                   <label key={a.email} className="cursor-pointer">
                     <input
