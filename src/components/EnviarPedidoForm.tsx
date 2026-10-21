@@ -181,6 +181,8 @@ type ResumenEnvio = {
   clasificador2: string;
   para: string;
   cc: string;
+  asunto: string;
+  cuerpo: string;
   urgente: boolean;
   items: {
     id: string;
@@ -209,6 +211,7 @@ function ConfirmarEnvioDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const volverRef = useRef<HTMLButtonElement>(null);
+  const [vista, setVista] = useState<"correo" | "resumen">("correo");
   const propsRef = useRef({ enviando, onCancelar });
   useEffect(() => {
     propsRef.current = { enviando, onCancelar };
@@ -303,6 +306,43 @@ function ConfirmarEnvioDialog({
               Este pedido se enviará como URGENTE.
             </p>
           )}
+          <div
+            role="tablist"
+            aria-label="Qué revisar"
+            className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 text-sm font-semibold"
+          >
+            {(
+              [
+                ["correo", "Correo a enviar"],
+                ["resumen", "Resumen"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={vista === id}
+                onClick={() => setVista(id)}
+                className={`h-9 rounded-md transition-colors ${
+                  vista === id
+                    ? "bg-card text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-primary"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {vista === "correo" ? (
+            <EmailPreview
+              para={resumen.para}
+              cc={resumen.cc}
+              asunto={resumen.asunto}
+              cuerpo={resumen.cuerpo}
+            />
+          ) : (
+          <>
           <dl className="grid gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-sm sm:grid-cols-2">
             {datos.map(([k, v]) => (
               <div key={k} className="min-w-0">
@@ -346,6 +386,8 @@ function ConfirmarEnvioDialog({
           <p className="mt-3 text-xs text-muted-foreground">
             Para: {resumen.para} · CC: {resumen.cc}
           </p>
+          </>
+          )}
         </div>
 
         <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:justify-end">
@@ -411,19 +453,66 @@ function IconMail() {
   );
 }
 
+/** Correo tal como lo verá Gmail: Para / CC / Asunto y cuerpo en texto plano. */
+function EmailPreview({
+  para,
+  cc,
+  asunto,
+  cuerpo,
+  cuerpoClassName = "",
+}: {
+  para: string;
+  cc: string;
+  asunto: string;
+  cuerpo: string;
+  cuerpoClassName?: string;
+}) {
+  const cabecera: [string, string][] = [
+    ["Para", para],
+    ["CC", cc],
+    ["Asunto", asunto],
+  ];
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <dl className="divide-y divide-border/70 bg-muted/40 text-xs">
+        {cabecera.map(([k, v]) => (
+          <div key={k} className="flex gap-3 px-3 py-1.5">
+            <dt className="w-12 shrink-0 font-semibold text-muted-foreground">
+              {k}
+            </dt>
+            <dd className="min-w-0 break-words font-medium text-card-foreground">
+              {v}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <pre
+        className={`whitespace-pre-wrap break-words border-t border-border px-3 py-3 font-sans text-[13px] leading-relaxed text-card-foreground ${cuerpoClassName}`}
+      >
+        {cuerpo}
+      </pre>
+    </div>
+  );
+}
+
 function SectionCard({
   step,
   title,
   description,
+  id,
   children,
 }: {
+  id?: string;
   step: number;
   title: string;
   description?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-6">
+    <section
+      id={id}
+      className="scroll-mt-24 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-6"
+    >
       <div className="flex items-start gap-3">
         <span
           aria-hidden
@@ -496,11 +585,11 @@ function IconTrash() {
   );
 }
 
-function IconCheck() {
+function IconCheck({ size = 18 }: { size?: number }) {
   return (
     <svg
-      width="18"
-      height="18"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -548,6 +637,10 @@ export default function EnviarPedidoForm({
     null
   );
   const [confirmando, setConfirmando] = useState(false);
+  // Se activa al intentar enviar con campos faltantes: marca los vacíos en rojo.
+  const [mostrarErrores, setMostrarErrores] = useState(false);
+  // Fila recién agregada: su buscador de artículo recibe el foco al montarse.
+  const [lineaNuevaId, setLineaNuevaId] = useState<string | null>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
 
   const areaActual = useMemo(
@@ -655,10 +748,12 @@ export default function EnviarPedidoForm({
   );
 
   function agregarLinea() {
+    const id = nuevaLineaId();
+    setLineaNuevaId(id);
     setLineas((prev) => [
       ...prev,
       {
-        id: nuevaLineaId(),
+        id,
         categoria: "",
         codigo: "",
         nombre: "",
@@ -814,6 +909,41 @@ export default function EnviarPedidoForm({
                 : null;
 
   const puedeEnviar = !faltante;
+  const fechaInvalida = Boolean(fechaEntrega && fechaEntrega < minEntrega);
+  const errores = mostrarErrores;
+  const claseCampo = (invalido: boolean) =>
+    invalido ? fieldClass.replace("border-border", "border-destructive") : fieldClass;
+
+  /** Con el pedido incompleto no envía: marca lo faltante y lleva al primero. */
+  function intentarEnviar() {
+    if (puedeEnviar) {
+      setConfirmando(true);
+      return;
+    }
+    setMostrarErrores(true);
+    const idPrimero = !solicitante.trim()
+      ? "solicitante"
+      : !centroSel
+        ? "centro"
+        : !clasificador1
+          ? "clasificador1"
+          : !clasificador2
+            ? "clasificador2"
+            : lineasCompletas.length === 0
+              ? "seccion-articulos"
+              : "fechaEntrega";
+    const el = document.getElementById(idPrimero);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (idPrimero !== "seccion-articulos") el?.focus({ preventScroll: true });
+  }
+
+  const requisitos = [
+    { label: "Solicitante", ok: solicitante.trim().length > 0 },
+    { label: "Centro de negocio", ok: Boolean(centroSel) },
+    { label: "Clasificador 1", ok: Boolean(clasificador1) },
+    { label: "Clasificador 2", ok: Boolean(clasificador2) },
+    { label: "Al menos un artículo con cantidad", ok: lineasCompletas.length > 0 },
+  ];
 
   const comentarioAsunto = comentario.replace(/\s+/g, " ").trim();
   const asunto = `NEB Chile // Adquisiciones // ${centroDesc}${
@@ -1000,6 +1130,7 @@ export default function EnviarPedidoForm({
 
   /** Vacía el pedido; conserva solicitante y área. */
   function limpiarCampos() {
+    setMostrarErrores(false);
     setLineas([]);
     setCentroSel("");
     setClasificador1("");
@@ -1069,6 +1200,8 @@ export default function EnviarPedidoForm({
     clasificador2,
     para,
     cc,
+    asunto,
+    cuerpo: cuerpoCorreo,
     urgente,
     items: lineasCompletas.map((l) => ({
       id: l.id,
@@ -1088,7 +1221,7 @@ export default function EnviarPedidoForm({
     "inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40";
 
   return (
-    <div className="grid items-start gap-6 pb-32 xl:grid-cols-[minmax(0,1fr)_400px] xl:pb-0 2xl:grid-cols-[minmax(0,1fr)_440px]">
+    <div className="grid items-start gap-6 pb-44 xl:grid-cols-[minmax(0,1fr)_400px] xl:pb-0 2xl:grid-cols-[minmax(0,1fr)_440px]">
       <div className="min-w-0 space-y-6">
         {registro && (
           <div
@@ -1170,6 +1303,7 @@ export default function EnviarPedidoForm({
                 options={opcionesSolicitante}
                 value={solicitante}
                 onChange={setSolicitante}
+                invalid={errores && !solicitante.trim()}
                 placeholder="Escribe el nombre de quien solicita"
                 allowCustom
               />
@@ -1198,7 +1332,7 @@ export default function EnviarPedidoForm({
               <input
                 id="fechaEntrega"
                 type="date"
-                className={fieldClass}
+                className={claseCampo(errores && fechaInvalida)}
                 value={fechaEntrega}
                 min={minEntrega}
                 onChange={(e) => setFechaEntrega(e.target.value)}
@@ -1257,6 +1391,7 @@ export default function EnviarPedidoForm({
                 }))}
                 value={centroSel}
                 onChange={setCentroSel}
+                invalid={errores && !centroSel}
               />
               <p className="mt-1 text-xs text-muted-foreground">
                 Solo centros de {areaActual.label} ({centrosDelArea.length}{" "}
@@ -1276,7 +1411,7 @@ export default function EnviarPedidoForm({
                 </label>
                 <select
                   id="clasificador1"
-                  className={fieldClass}
+                  className={claseCampo(errores && !clasificador1)}
                   value={clasificador1}
                   onChange={(e) => setClasificador1(e.target.value)}
                 >
@@ -1294,7 +1429,7 @@ export default function EnviarPedidoForm({
                 </label>
                 <select
                   id="clasificador2"
-                  className={fieldClass}
+                  className={claseCampo(errores && !clasificador2)}
                   value={clasificador2}
                   onChange={(e) => setClasificador2(e.target.value)}
                 >
@@ -1349,6 +1484,7 @@ export default function EnviarPedidoForm({
         </SectionCard>
 
         <SectionCard
+          id="seccion-articulos"
           step={2}
           title="Artículos del pedido"
           description="Agrega una fila por artículo y escribe para buscarlo: se busca en todos, elijas o no una categoría."
@@ -1368,7 +1504,9 @@ export default function EnviarPedidoForm({
             <button
               type="button"
               onClick={agregarLinea}
-              className="flex w-full flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground transition-colors hover:border-accent hover:bg-accent/5"
+              className={`flex w-full flex-col items-center gap-1 rounded-xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground transition-colors hover:border-accent hover:bg-accent/5 ${
+                errores ? "border-destructive" : "border-border"
+              }`}
             >
               <span className="grid h-10 w-10 place-items-center rounded-full bg-accent/10 text-accent">
                 <IconPlus />
@@ -1482,6 +1620,8 @@ export default function EnviarPedidoForm({
                             onChange={(codigo) =>
                               cambiarArticuloLinea(l.id, codigo)
                             }
+                            autoFocus={l.id === lineaNuevaId}
+                            invalid={errores && !l.codigo}
                           />
                         )}
                         <button
@@ -1593,77 +1733,107 @@ export default function EnviarPedidoForm({
         </SectionCard>
       </div>
 
-      {/* Resumen y acciones: columna fija a la derecha en pantallas grandes */}
-      <aside className="min-w-0 space-y-4 xl:sticky xl:top-24">
+      {/* Resumen, requisitos y vista previa: columna fija a la derecha en pantallas grandes */}
+      <aside className="min-w-0 space-y-4 xl:sticky xl:top-24 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto xl:pr-1">
         <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
-          <h2 className="text-base font-bold text-primary">Resumen del pedido</h2>
-          <dl className="mt-3 divide-y divide-border/70 text-sm">
-            <FilaResumen label="Para">
-              <span className="break-all">{para}</span>
-            </FilaResumen>
-            <FilaResumen label="CC">
-              <span className="break-all">{cc}</span>
-            </FilaResumen>
-            <FilaResumen label="Área">{areaActual.label}</FilaResumen>
-            <FilaResumen label="Centro">{centroDesc || "—"}</FilaResumen>
-            <FilaResumen label="Entrega">
-              {formatFecha(fechaEntrega) || "—"}
-              {urgente && (
-                <span className="ml-2 rounded-full bg-warning-surface px-2 py-0.5 text-xs font-bold text-warning">
-                  Urgente
-                </span>
-              )}
-            </FilaResumen>
-            <FilaResumen label="Artículos">
-              {lineasCompletas.length} ·{" "}
-              {unidadesCompletas.toLocaleString("es-CL")} unidades
-            </FilaResumen>
-          </dl>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-primary">Tu pedido</h2>
+            <span className="text-xs font-semibold text-muted-foreground">
+              {lineasCompletas.length}{" "}
+              {lineasCompletas.length === 1 ? "artículo" : "artículos"} ·{" "}
+              {unidadesCompletas.toLocaleString("es-CL")} un.
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {areaActual.label} · entrega {formatFecha(fechaEntrega) || "—"}
+            {urgente && (
+              <span className="ml-2 rounded-full bg-warning-surface px-2 py-0.5 font-bold text-warning">
+                Urgente
+              </span>
+            )}
+          </p>
 
-          {faltante && (
+          <ul className="mt-3 space-y-1.5 text-sm">
+            {requisitos.map((r) => (
+              <li
+                key={r.label}
+                className={`flex items-center gap-2 ${
+                  r.ok
+                    ? "text-card-foreground"
+                    : errores
+                      ? "text-destructive"
+                      : "text-muted-foreground"
+                }`}
+              >
+                <span
+                  aria-hidden
+                  className={`grid h-5 w-5 shrink-0 place-items-center rounded-full ${
+                    r.ok
+                      ? "bg-success text-accent-foreground"
+                      : errores
+                        ? "border border-destructive"
+                        : "border border-border"
+                  }`}
+                >
+                  {r.ok && <IconCheck size={12} />}
+                </span>
+                <span className={r.ok ? "" : "font-medium"}>{r.label}</span>
+                <span className="sr-only">{r.ok ? "(listo)" : "(falta)"}</span>
+              </li>
+            ))}
+          </ul>
+
+          {fechaInvalida && (
             <p
               role="status"
-              className="mt-4 flex items-start gap-2 rounded-lg bg-warning-surface px-3 py-2 text-xs font-medium text-warning"
+              className="mt-3 flex items-start gap-2 rounded-lg bg-warning-surface px-3 py-2 text-xs font-medium text-warning"
             >
               <span className="mt-px shrink-0">
                 <IconWarning />
               </span>
-              {faltante}
+              La fecha de entrega debe ser desde el {formatFecha(minEntrega)} (10
+              días hábiles). Marca «Pedido urgente» para elegir una anterior.
             </p>
           )}
 
           <button
             type="button"
-            onClick={() => setConfirmando(true)}
-            disabled={!puedeEnviar || registrando}
-            className="mt-4 hidden h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 xl:inline-flex"
+            onClick={intentarEnviar}
+            disabled={registrando}
+            data-incompleto={!puedeEnviar || undefined}
+            className="mt-4 hidden h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 data-[incompleto]:opacity-60 xl:inline-flex"
           >
             <IconMail />
-            {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
+            {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
           </button>
 
-          <p className="mt-3 rounded-lg bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
-            <span className="font-bold">Importante:</span> una vez que presiones
-            «Sí, enviar» no podrás editar el pedido ni el correo, y tendrás que
-            enviarlo sí o sí. Revisa bien los detalles tal como se muestran y,
-            cuando estés seguro, envía el correo para que el pedido quede
-            registrado correctamente en la planilla de Pedidos.
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-bold text-warning">Importante:</span> al
+            confirmar no podrás editar el pedido y tendrás que enviar el correo
+            sí o sí.
           </p>
         </section>
 
-        {puedeEnviar && (
-          <details className="rounded-xl border border-border bg-card p-4 text-sm shadow-sm">
-            <summary className="cursor-pointer font-semibold text-primary">
+        <section
+          id="vista-previa"
+          className="scroll-mt-24 rounded-xl border border-border bg-card p-4 shadow-sm"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-base font-bold text-primary">
               Vista previa del correo
-            </summary>
-            <p className="mt-3 text-xs font-semibold text-muted-foreground">
-              Asunto: <span className="font-normal">{asunto}</span>
-            </p>
-            <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-xs text-card-foreground">
-              {cuerpoCorreo}
-            </pre>
-          </details>
-        )}
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Se actualiza al escribir
+            </span>
+          </div>
+          <EmailPreview
+            para={para}
+            cc={cc}
+            asunto={asunto}
+            cuerpo={cuerpoCorreo}
+            cuerpoClassName="max-h-96 overflow-y-auto"
+          />
+        </section>
       </aside>
 
       {/* Barra fija para celular y tablet: el botón principal siempre a mano */}
@@ -1681,13 +1851,20 @@ export default function EnviarPedidoForm({
         </p>
         <button
           type="button"
-          onClick={() => setConfirmando(true)}
-          disabled={!puedeEnviar || registrando}
-          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={intentarEnviar}
+          disabled={registrando}
+          data-incompleto={!puedeEnviar || undefined}
+          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 data-[incompleto]:opacity-60"
         >
           <IconMail />
-          {registrando ? "Registrando…" : "Registrar y abrir correo en Gmail"}
+          {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
         </button>
+        <a
+          href="#vista-previa"
+          className="mt-1 block text-center text-xs font-semibold text-accent hover:underline"
+        >
+          Ver vista previa del correo
+        </a>
       </div>
 
       {confirmando && (
@@ -1698,25 +1875,6 @@ export default function EnviarPedidoForm({
           onConfirmar={registrarYAbrir}
         />
       )}
-    </div>
-  );
-}
-
-function FilaResumen({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-2">
-      <dt className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </dt>
-      <dd className="min-w-0 text-right font-medium text-card-foreground">
-        {children}
-      </dd>
     </div>
   );
 }

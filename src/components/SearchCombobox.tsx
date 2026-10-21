@@ -54,6 +54,8 @@ export default function SearchCombobox({
   allowCustom,
   size = "md",
   inputClassName = "",
+  invalid,
+  autoFocus,
 }: {
   id?: string;
   ariaLabel?: string;
@@ -79,6 +81,10 @@ export default function SearchCombobox({
   /** «sm» (h-9) para tablas densas; «md» (h-11) para formularios. */
   size?: "sm" | "md";
   inputClassName?: string;
+  /** Borde rojo: campo obligatorio sin completar. */
+  invalid?: boolean;
+  /** Enfoca el campo al montarse (p. ej. una fila recién agregada). */
+  autoFocus?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -95,6 +101,12 @@ export default function SearchCombobox({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
+
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+    // Solo al montar: re-renders posteriores no deben robar el foco.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const universoBusqueda = searchOptions ?? options;
 
@@ -186,7 +198,8 @@ export default function SearchCombobox({
         aria-label={ariaLabel}
         autoComplete="off"
         disabled={disabled}
-        className={`${fieldBase} ${size === "sm" ? "h-9" : "h-11"} ${
+        aria-invalid={invalid || undefined}
+        className={`${invalid ? fieldBase.replace("border-border", "border-destructive") : fieldBase} ${size === "sm" ? "h-9" : "h-11"} ${
           mostrarLimpiar ? "pr-16" : "pr-9"
         } ${inputClassName}`}
         placeholder={placeholder}
