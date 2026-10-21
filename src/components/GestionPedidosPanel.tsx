@@ -34,11 +34,14 @@ type PedidoResumen = {
   despacho: string;
   comentario: string;
   urgente: boolean;
+  /** Cierre/anulación decidido por Adquisiciones; vacío = según lo recibido. */
+  estadoManual: "" | "cerrado" | "anulado";
+  motivoEstado: string;
   items: PedidoItem[];
 };
 
-type Estado = "pendiente" | "parcial" | "completo";
-type Filtro = "todos" | "urgentes" | Estado;
+type Estado = "pendiente" | "parcial" | "completo" | "cerrado" | "anulado";
+type Filtro = "todos" | "urgentes" | "atrasados" | Estado;
 
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
   pendiente: {
@@ -55,6 +58,16 @@ const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
     label: "Completo",
     chip: "bg-success-surface text-success",
     dot: "bg-success",
+  },
+  cerrado: {
+    label: "Cerrado",
+    chip: "bg-muted text-secondary",
+    dot: "bg-secondary",
+  },
+  anulado: {
+    label: "Anulado",
+    chip: "bg-destructive/10 text-destructive",
+    dot: "bg-destructive/50",
   },
 };
 
@@ -96,9 +109,14 @@ function estadoPedido(items: PedidoItem[]): Estado {
     : "parcial";
 }
 
+/** Estado efectivo: el cierre/anulación manual manda sobre lo recibido. */
+function estadoDe(p: PedidoResumen): Estado {
+  return p.estadoManual || estadoPedido(p.items);
+}
+
 /** Urgente y todavía sin recibir por completo: lo que hay que atender primero. */
 function esUrgentePendiente(p: PedidoResumen): boolean {
-  return p.urgente && estadoPedido(p.items) !== "completo";
+  return p.urgente && ["pendiente", "parcial"].includes(estadoDe(p));
 }
 
 /** La "Fecha de entrega" del pedido se guarda como texto "DD-MM-YY". */
@@ -116,6 +134,14 @@ function parseFechaEntrega(s: string): Date | null {
 /** Trunca a medianoche local para comparar solo el día, no la hora. */
 function soloFecha(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/** Con fecha de entrega comprometida ya vencida y sin recibir por completo. */
+function esAtrasado(p: PedidoResumen): boolean {
+  if (!["pendiente", "parcial"].includes(estadoDe(p))) return false;
+  const programada = parseFechaEntrega(p.fechaEntrega);
+  if (!programada) return false;
+  return soloFecha(programada) < soloFecha(new Date());
 }
 
 /**
@@ -143,7 +169,7 @@ function fechaBodegaPedido(p: PedidoResumen): Date | null {
  * suficientes para saberlo (pedidos antiguos sin fecha de recepción).
  */
 function entregadoATiempo(p: PedidoResumen): boolean | null {
-  if (estadoPedido(p.items) !== "completo") return null;
+  if (estadoDe(p) !== "completo") return null;
   const real = fechaRecepcionPedido(p);
   const programada = parseFechaEntrega(p.fechaEntrega);
   if (!real || !programada) return null;
@@ -192,6 +218,17 @@ function tieneCambios(it: PedidoItem, ed: LineaEdit | undefined): boolean {
   );
 }
 
+/** ¿Dos ediciones de una misma fila tienen exactamente los mismos valores? */
+function mismaEdicion(a: LineaEdit, b: LineaEdit): boolean {
+  return (
+    a.cantidadRecibida === b.cantidadRecibida &&
+    a.consumoInterno === b.consumoInterno &&
+    a.recepcionadoPor === b.recepcionadoPor &&
+    a.fechaRecepcionBodega === b.fechaRecepcionBodega &&
+    a.fechaEntregaSolicitante === b.fechaEntregaSolicitante
+  );
+}
+
 function normalizar(s: string): string {
   return s
     .normalize("NFD")
@@ -207,6 +244,7 @@ export default function GestionPedidosPanel() {
   const [busqueda, setBusqueda] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [fSolicitante, setFSolicitante] = useState("");
   const [fArea, setFArea] = useState("");
   const [fCentro, setFCentro] = useState("");
@@ -220,12 +258,31 @@ export default function GestionPedidosPanel() {
   const [guardado, setGuardado] = useState<Record<number, boolean>>({});
   const [errores, setErrores] = useState<Record<number, string>>({});
   const [guardandoTodo, setGuardandoTodo] = useState(false);
+  const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
 
-  // Selección múltiple de filas (dentro del pedido abierto) para rellenar
-  // varios artículos a la vez con los mismos datos de recepción.
+  // Selección de pedidos completos (casillas de la lista) y de artículos
+  // sueltos dentro del pedido abierto. La barra inferior actúa sobre ambos.
+  const [selPedidos, setSelPedidos] = useState<Set<string>>(new Set());
   const [seleccionFilas, setSeleccionFilas] = useState<Set<number>>(new Set());
+  const ultimoClic = useRef<string | null>(null);
+
+  // Campos de la edición en bloque.
+  const [bulkRecepcionadoPor, setBulkRecepcionadoPor] = useState("");
+  const [bulkFechaBodega, setBulkFechaBodega] = useState("");
+  const [bulkFechaEntrega, setBulkFechaEntrega] = useState("");
+  const [bulkConsumo, setBulkConsumo] = useState("");
+
+  // Cierre / anulación / reapertura de un pedido (con diálogo de confirmación).
+  const [accion, setAccion] = useState<{
+    pedidoId: string;
+    tipo: "cerrado" | "anulado" | "";
+  } | null>(null);
+  const [motivoAccion, setMotivoAccion] = useState("");
+  const [enviandoEstado, setEnviandoEstado] = useState(false);
+  const [errorEstado, setErrorEstado] = useState<string | null>(null);
 
   const detalleRef = useRef<HTMLElement>(null);
+  const ultimaCarga = useRef(0);
 
   async function cargarPedidos(inicial = false) {
     if (!inicial) setRefrescando(true);
@@ -241,6 +298,7 @@ export default function GestionPedidosPanel() {
       if (!res.ok) throw new Error(data.error || "Error al cargar pedidos");
       const lista: PedidoResumen[] = data.pedidos ?? [];
       setPedidos(lista);
+      ultimaCarga.current = Date.now();
       // Deja abierto un pedido para no partir con la pantalla vacía: el primer
       // urgente pendiente si hay, si no el más reciente.
       setSeleccionado((prev) =>
@@ -257,7 +315,8 @@ export default function GestionPedidosPanel() {
   }
 
   useEffect(() => {
-    cargarPedidos(true);
+    const t = window.setTimeout(() => void cargarPedidos(true), 0);
+    return () => window.clearTimeout(t);
   }, []);
 
   // Personas activas del maestro de empleados, para «Recepcionado por». Es
@@ -305,17 +364,47 @@ export default function GestionPedidosPanel() {
     return () => window.removeEventListener("beforeunload", avisar);
   }, [totalCambios]);
 
+  // Al volver a la pestaña (pasado un minuto) se actualiza la lista sola, para
+  // ver los pedidos nuevos sin apretar «Actualizar». No si hay cambios sin
+  // guardar, para no mover el piso mientras se trabaja.
+  const refrescarAlVolver = useRef<() => void>(() => {});
+  useEffect(() => {
+    refrescarAlVolver.current = () => {
+      if (
+        document.visibilityState === "visible" &&
+        totalCambios === 0 &&
+        Date.now() - ultimaCarga.current > 60_000
+      ) {
+        void cargarPedidos();
+      }
+    };
+  });
+  useEffect(() => {
+    const f = () => refrescarAlVolver.current();
+    document.addEventListener("visibilitychange", f);
+    window.addEventListener("focus", f);
+    return () => {
+      document.removeEventListener("visibilitychange", f);
+      window.removeEventListener("focus", f);
+    };
+  }, []);
+
   const conteo = useMemo(() => {
     const c: Record<Filtro, number> = {
-      todos: pedidos.length,
+      todos: 0,
       urgentes: 0,
+      atrasados: 0,
       pendiente: 0,
       parcial: 0,
       completo: 0,
+      cerrado: 0,
+      anulado: 0,
     };
     for (const p of pedidos) {
-      c[estadoPedido(p.items)] += 1;
+      c[estadoDe(p)] += 1;
+      if (p.estadoManual !== "anulado") c.todos += 1;
       if (esUrgentePendiente(p)) c.urgentes += 1;
+      if (esAtrasado(p)) c.atrasados += 1;
     }
     return c;
   }, [pedidos]);
@@ -352,9 +441,14 @@ export default function GestionPedidosPanel() {
     };
   }, [pedidos]);
 
-  const hayFiltrosExtra = Boolean(
-    fSolicitante || fArea || fCentro || fDespacho || fDesde || fHasta
-  );
+  const nFiltrosExtra = [
+    fSolicitante,
+    fArea,
+    fCentro,
+    fDespacho,
+    fDesde,
+    fHasta,
+  ].filter(Boolean).length;
 
   function limpiarFiltros() {
     setFiltro("todos");
@@ -385,7 +479,12 @@ export default function GestionPedidosPanel() {
         }
         if (filtro === "urgentes") {
           if (!esUrgentePendiente(p)) return false;
-        } else if (filtro !== "todos" && estadoPedido(p.items) !== filtro) {
+        } else if (filtro === "atrasados") {
+          if (!esAtrasado(p)) return false;
+        } else if (filtro === "todos") {
+          // Los anulados solo se ven en su propia pestaña.
+          if (p.estadoManual === "anulado") return false;
+        } else if (estadoDe(p) !== filtro) {
           return false;
         }
         if (!q) return true;
@@ -420,6 +519,32 @@ export default function GestionPedidosPanel() {
     [pedidos, seleccionado]
   );
 
+  const indiceActual = pedidoActual
+    ? pedidosFiltrados.findIndex((p) => p.pedidoId === pedidoActual.pedidoId)
+    : -1;
+
+  // Pedidos marcados que siguen visibles con el filtro actual.
+  const pedidosMarcados = useMemo(
+    () => pedidosFiltrados.filter((p) => selPedidos.has(p.pedidoId)),
+    [pedidosFiltrados, selPedidos]
+  );
+
+  // Artículos sobre los que actúa la barra de edición en bloque: todos los de
+  // los pedidos marcados + los artículos marcados en el pedido abierto.
+  const objetivo = useMemo(() => {
+    const m = new Map<number, PedidoItem>();
+    for (const p of pedidosMarcados) {
+      if (p.estadoManual) continue;
+      for (const it of p.items) m.set(it.fila, it);
+    }
+    if (pedidoActual && !pedidoActual.estadoManual) {
+      for (const it of pedidoActual.items) {
+        if (seleccionFilas.has(it.fila)) m.set(it.fila, it);
+      }
+    }
+    return Array.from(m.values());
+  }, [pedidosMarcados, pedidoActual, seleccionFilas]);
+
   function abrirPedido(p: PedidoResumen) {
     setSeleccionado(p.pedidoId);
     setSeleccionFilas(new Set());
@@ -430,6 +555,59 @@ export default function GestionPedidosPanel() {
         0
       );
     }
+  }
+
+  function irAPedido(delta: number) {
+    if (pedidosFiltrados.length === 0) return;
+    const base = indiceActual === -1 ? (delta > 0 ? -1 : 0) : indiceActual;
+    const destino = Math.min(
+      pedidosFiltrados.length - 1,
+      Math.max(0, base + delta)
+    );
+    const p = pedidosFiltrados[destino];
+    if (p && p.pedidoId !== seleccionado) {
+      setSeleccionado(p.pedidoId);
+      setSeleccionFilas(new Set());
+      document
+        .getElementById(`pedido-${p.pedidoId}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function alternarPedido(id: string, rango: boolean) {
+    setSelPedidos((prev) => {
+      const next = new Set(prev);
+      const ids = pedidosFiltrados.map((p) => p.pedidoId);
+      const desde = ultimoClic.current ? ids.indexOf(ultimoClic.current) : -1;
+      const hasta = ids.indexOf(id);
+      const marcar = !prev.has(id);
+      if (rango && desde !== -1 && hasta !== -1) {
+        const [a, b] = desde < hasta ? [desde, hasta] : [hasta, desde];
+        for (const x of ids.slice(a, b + 1)) {
+          if (marcar) next.add(x);
+          else next.delete(x);
+        }
+      } else if (marcar) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    ultimoClic.current = id;
+  }
+
+  const todosMarcados =
+    pedidosFiltrados.length > 0 &&
+    pedidosFiltrados.every((p) => selPedidos.has(p.pedidoId));
+
+  function alternarTodosLosPedidos() {
+    setSelPedidos((prev) => {
+      const next = new Set(prev);
+      if (pedidosFiltrados.every((p) => prev.has(p.pedidoId))) {
+        for (const p of pedidosFiltrados) next.delete(p.pedidoId);
+      } else {
+        for (const p of pedidosFiltrados) next.add(p.pedidoId);
+      }
+      return next;
+    });
   }
 
   function alternarFila(fila: number) {
@@ -443,11 +621,14 @@ export default function GestionPedidosPanel() {
 
   function alternarTodasLasFilas(items: PedidoItem[]) {
     setSeleccionFilas((prev) =>
-      items.every((it) => prev.has(it.fila)) ? new Set() : new Set(items.map((it) => it.fila))
+      items.every((it) => prev.has(it.fila))
+        ? new Set()
+        : new Set(items.map((it) => it.fila))
     );
   }
 
   function limpiarSeleccion() {
+    setSelPedidos(new Set());
     setSeleccionFilas(new Set());
   }
 
@@ -486,13 +667,17 @@ export default function GestionPedidosPanel() {
       }
       return next;
     });
+    setGuardado((prev) => {
+      const next = { ...prev };
+      for (const it of items) next[it.fila] = false;
+      return next;
+    });
   }
 
   /**
    * Rellena en bloque los campos comunes (quién recepcionó, fechas, consumo
-   * interno) de varias filas seleccionadas a la vez, para no tener que
-   * tipearlos uno a uno en pedidos grandes. Solo toca los campos con valor;
-   * deja vacío = no tocar esa columna.
+   * interno) de varias filas a la vez, para no tipearlos uno a uno. Solo toca
+   * los campos con valor; deja vacío = no tocar esa columna.
    */
   function aplicarCamposEnBloque(
     items: PedidoItem[],
@@ -525,34 +710,86 @@ export default function GestionPedidosPanel() {
     });
   }
 
-  async function guardarLinea(it: PedidoItem): Promise<boolean> {
-    const edicion = ediciones[it.fila];
-    if (!edicion) return true;
-    const fila = it.fila;
+  function aplicarBulk() {
+    aplicarCamposEnBloque(objetivo, {
+      recepcionadoPor: bulkRecepcionadoPor.trim(),
+      fechaRecepcionBodega: bulkFechaBodega,
+      fechaEntregaSolicitante: bulkFechaEntrega,
+      consumoInterno: bulkConsumo.trim(),
+    });
+    setBulkRecepcionadoPor("");
+    setBulkFechaBodega("");
+    setBulkFechaEntrega("");
+    setBulkConsumo("");
+  }
 
-    const cantidadRecibida =
-      edicion.cantidadRecibida.trim() === ""
-        ? null
-        : Number(edicion.cantidadRecibida);
-    if (cantidadRecibida !== null && !Number.isFinite(cantidadRecibida)) {
-      setErrores((prev) => ({ ...prev, [fila]: "Cantidad inválida." }));
-      return false;
+  const hayDatosBulk = Boolean(
+    bulkRecepcionadoPor.trim() ||
+      bulkFechaBodega ||
+      bulkFechaEntrega ||
+      bulkConsumo.trim()
+  );
+
+  /**
+   * Guarda todas las filas con cambios de `items` en una sola llamada (la API
+   * escribe el lote completo de una vez, en vez de una escritura por fila).
+   */
+  async function guardarFilas(items: PedidoItem[]): Promise<boolean> {
+    const sucias = items.filter((it) => tieneCambios(it, ediciones[it.fila]));
+    if (sucias.length === 0) return true;
+
+    const enviadas: Record<number, LineaEdit> = {};
+    const lineas: {
+      fila: number;
+      cantidadRecibida: number | null;
+      consumoInterno: string;
+      recepcionadoPor: string;
+      fechaRecepcionBodega: string;
+      fechaEntregaSolicitante: string;
+    }[] = [];
+    for (const it of sucias) {
+      const ed = ediciones[it.fila];
+      const cantidadRecibida =
+        ed.cantidadRecibida.trim() === "" ? null : Number(ed.cantidadRecibida);
+      if (cantidadRecibida !== null && !Number.isFinite(cantidadRecibida)) {
+        setErrores((prev) => ({ ...prev, [it.fila]: "Cantidad inválida." }));
+        setErrorGuardado(`Revisa la cantidad de «${it.nombre}».`);
+        setSeleccionado(
+          pedidos.find((p) => p.items.some((x) => x.fila === it.fila))
+            ?.pedidoId ?? seleccionado
+        );
+        return false;
+      }
+      enviadas[it.fila] = ed;
+      lineas.push({
+        fila: it.fila,
+        cantidadRecibida,
+        consumoInterno: ed.consumoInterno.trim(),
+        recepcionadoPor: ed.recepcionadoPor.trim(),
+        fechaRecepcionBodega: ed.fechaRecepcionBodega,
+        fechaEntregaSolicitante: ed.fechaEntregaSolicitante,
+      });
     }
 
-    setGuardando((prev) => ({ ...prev, [fila]: true }));
-    setErrores((prev) => ({ ...prev, [fila]: "" }));
+    const filas = lineas.map((l) => l.fila);
+    const marcar = (v: boolean) =>
+      setGuardando((prev) => {
+        const next = { ...prev };
+        for (const f of filas) next[f] = v;
+        return next;
+      });
+    marcar(true);
+    setErrorGuardado(null);
+    setErrores((prev) => {
+      const next = { ...prev };
+      for (const f of filas) next[f] = "";
+      return next;
+    });
     try {
       const res = await fetch("/api/pedidos", {
-        method: "PATCH",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fila,
-          cantidadRecibida,
-          consumoInterno: edicion.consumoInterno.trim(),
-          recepcionadoPor: edicion.recepcionadoPor.trim(),
-          fechaRecepcionBodega: edicion.fechaRecepcionBodega,
-          fechaEntregaSolicitante: edicion.fechaEntregaSolicitante,
-        }),
+        body: JSON.stringify({ lineas }),
       });
       if (res.status === 401) {
         window.location.reload();
@@ -561,74 +798,195 @@ export default function GestionPedidosPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "No se pudo guardar.");
 
+      const porFila = new Map<
+        number,
+        { fechaRecepcionBodega?: string; fechaEntregaSolicitante?: string }
+      >();
+      for (const r of (data.resultados ?? []) as {
+        fila: number;
+        fechaRecepcionBodega?: string;
+        fechaEntregaSolicitante?: string;
+      }[]) {
+        porFila.set(r.fila, r);
+      }
+      const lineaPorFila = new Map(lineas.map((l) => [l.fila, l]));
+
       setPedidos((prev) =>
         prev.map((p) => ({
           ...p,
-          items: p.items.map((x) =>
-            x.fila === fila
-              ? {
-                  ...x,
-                  cantidadRecibida,
-                  consumoInterno: edicion.consumoInterno.trim(),
-                  recepcionadoPor: edicion.recepcionadoPor.trim(),
-                  fechaRecepcionBodega:
-                    typeof data.fechaRecepcionBodega === "string"
-                      ? data.fechaRecepcionBodega
-                      : x.fechaRecepcionBodega,
-                  fechaEntregaSolicitante:
-                    typeof data.fechaEntregaSolicitante === "string"
-                      ? data.fechaEntregaSolicitante
-                      : x.fechaEntregaSolicitante,
-                }
-              : x
-          ),
+          items: p.items.map((x) => {
+            const l = lineaPorFila.get(x.fila);
+            if (!l) return x;
+            const r = porFila.get(x.fila);
+            return {
+              ...x,
+              cantidadRecibida: l.cantidadRecibida,
+              consumoInterno: l.consumoInterno,
+              recepcionadoPor: l.recepcionadoPor,
+              fechaRecepcionBodega:
+                r?.fechaRecepcionBodega ?? l.fechaRecepcionBodega,
+              fechaEntregaSolicitante:
+                r?.fechaEntregaSolicitante ?? l.fechaEntregaSolicitante,
+            };
+          }),
         }))
       );
+      // Solo se descartan las ediciones que siguen iguales a lo enviado; si
+      // alguien siguió escribiendo durante el guardado, eso se conserva.
       setEdiciones((prev) => {
         const next = { ...prev };
-        delete next[fila];
+        for (const f of filas) {
+          if (prev[f] && mismaEdicion(prev[f], enviadas[f])) delete next[f];
+        }
         return next;
       });
-      setGuardado((prev) => ({ ...prev, [fila]: true }));
+      setGuardado((prev) => {
+        const next = { ...prev };
+        for (const f of filas) next[f] = true;
+        return next;
+      });
       window.setTimeout(
-        () => setGuardado((prev) => ({ ...prev, [fila]: false })),
+        () =>
+          setGuardado((prev) => {
+            const next = { ...prev };
+            for (const f of filas) next[f] = false;
+            return next;
+          }),
         2500
       );
       return true;
     } catch (err) {
-      setErrores((prev) => ({
-        ...prev,
-        [fila]: err instanceof Error ? err.message : "Error de red.",
-      }));
+      const msg = err instanceof Error ? err.message : "Error de red.";
+      setErrorGuardado(msg);
+      setErrores((prev) => {
+        const next = { ...prev };
+        for (const f of filas) next[f] = msg;
+        return next;
+      });
       return false;
     } finally {
-      setGuardando((prev) => ({ ...prev, [fila]: false }));
+      marcar(false);
     }
   }
 
-  async function guardarTodo(p: PedidoResumen) {
+  function abrirAccion(tipo: "cerrado" | "anulado" | "") {
+    if (!pedidoActual) return;
+    setAccion({ pedidoId: pedidoActual.pedidoId, tipo });
+    setMotivoAccion("");
+    setErrorEstado(null);
+  }
+
+  async function confirmarAccion() {
+    if (!accion) return;
+    const motivo = motivoAccion.trim();
+    if (accion.tipo === "anulado" && !motivo) {
+      setErrorEstado("Indica el motivo: quién pidió anularlo y por qué.");
+      return;
+    }
+    setEnviandoEstado(true);
+    setErrorEstado(null);
+    try {
+      const res = await fetch("/api/pedidos/estado", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pedidoId: accion.pedidoId,
+          estado: accion.tipo,
+          motivo,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo actualizar.");
+      setPedidos((prev) =>
+        prev.map((p) =>
+          p.pedidoId === accion.pedidoId
+            ? {
+                ...p,
+                estadoManual: accion.tipo,
+                motivoEstado: accion.tipo === "" ? "" : motivo,
+              }
+            : p
+        )
+      );
+      setSelPedidos((prev) => {
+        const next = new Set(prev);
+        next.delete(accion.pedidoId);
+        return next;
+      });
+      setSeleccionFilas(new Set());
+      setAccion(null);
+    } catch (err) {
+      setErrorEstado(err instanceof Error ? err.message : "Error de red.");
+    } finally {
+      setEnviandoEstado(false);
+    }
+  }
+
+  async function guardarTodo() {
+    if (guardandoTodo) return;
     setGuardandoTodo(true);
     try {
-      for (const it of p.items) {
-        if (tieneCambios(it, ediciones[it.fila])) await guardarLinea(it);
-      }
+      await guardarFilas(pedidos.flatMap((p) => p.items));
     } finally {
       setGuardandoTodo(false);
     }
   }
 
+  function descartarTodo() {
+    if (!window.confirm(`¿Descartar ${totalCambios} cambio(s) sin guardar?`))
+      return;
+    setEdiciones({});
+    setErrores({});
+    setErrorGuardado(null);
+  }
+
+  // Atajos de teclado: Ctrl+S guarda todo; J/K (o ↓/↑ fuera de un campo)
+  // cambian de pedido; X marca/desmarca el pedido abierto para edición en
+  // bloque; Esc quita la selección.
+  const atajos = useRef<(e: KeyboardEvent) => void>(() => {});
+  useEffect(() => {
+    atajos.current = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (totalCambios > 0) void guardarTodo();
+        return;
+      }
+      const el = e.target as HTMLElement | null;
+      const escribiendo =
+        !!el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable);
+      if (escribiendo || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        irAPedido(1);
+      } else if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        irAPedido(-1);
+      } else if (e.key === "x" && pedidoActual) {
+        alternarPedido(pedidoActual.pedidoId, false);
+      } else if (e.key === "Escape") {
+        limpiarSeleccion();
+      }
+    };
+  });
+  useEffect(() => {
+    const f = (e: KeyboardEvent) => atajos.current(e);
+    window.addEventListener("keydown", f);
+    return () => window.removeEventListener("keydown", f);
+  }, []);
+
   if (loading) {
     return (
-      <div aria-busy="true" aria-live="polite" className="space-y-4">
+      <div aria-busy="true" aria-live="polite" className="space-y-3">
         <span className="sr-only">Cargando pedidos…</span>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-[72px] animate-pulse rounded-xl border border-border bg-muted/50"
-            />
-          ))}
-        </div>
+        <div className="h-12 animate-pulse rounded-xl border border-border bg-muted/50" />
         <div className="grid gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
           <div className="h-96 animate-pulse rounded-xl border border-border bg-muted/50" />
           <div className="h-96 animate-pulse rounded-xl border border-border bg-muted/50" />
@@ -656,53 +1014,66 @@ export default function GestionPedidosPanel() {
     );
   }
 
-  const filtros: { key: Filtro; label: string; tono: string }[] = [
+  const filtros = [
     { key: "todos", label: "Todos", tono: "bg-primary" },
     { key: "urgentes", label: "Urgentes", tono: "bg-destructive" },
+    { key: "atrasados", label: "Atrasados", tono: "bg-destructive/60" },
     { key: "pendiente", label: "Pendientes", tono: ESTADOS.pendiente.dot },
     { key: "parcial", label: "Parciales", tono: ESTADOS.parcial.dot },
     { key: "completo", label: "Completos", tono: ESTADOS.completo.dot },
-  ];
+    { key: "cerrado", label: "Cerrados", tono: ESTADOS.cerrado.dot },
+    { key: "anulado", label: "Anulados", tono: ESTADOS.anulado.dot },
+  ].filter(
+    (f) =>
+      (f.key !== "cerrado" && f.key !== "anulado") ||
+      conteo[f.key] > 0 ||
+      filtro === f.key
+  ) as { key: Filtro; label: string; tono: string }[];
+
+  const hayBarra = objetivo.length > 0 || totalCambios > 0;
+  const objetivoPendientes = objetivo.filter(
+    (it) => estadoLinea(it) !== "completo"
+  );
 
   return (
-    <div className="space-y-4">
-      {/* Resumen (sirve también como filtro) + búsqueda */}
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
+    <div className="space-y-3">
+      {/* Barra superior: estado (filtro rápido) + búsqueda + filtros + KPI */}
+      <div className={`${cardClass} flex flex-wrap items-center gap-x-3 gap-y-2 p-2`}>
         <div
           role="group"
           aria-label="Filtrar por estado"
-          className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5"
+          className="flex flex-wrap items-center gap-1"
         >
           {filtros.map((f) => {
             const activo = filtro === f.key;
-            // «Urgentes» se marca en rojo cuando hay alguno pendiente.
-            const alerta = f.key === "urgentes" && conteo.urgentes > 0;
+            // «Urgentes» y «Atrasados» se marcan en rojo cuando hay alguno.
+            const alerta =
+              (f.key === "urgentes" || f.key === "atrasados") &&
+              conteo[f.key] > 0;
             return (
               <button
                 key={f.key}
                 type="button"
                 aria-pressed={activo}
                 onClick={() => setFiltro(f.key)}
-                className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left shadow-sm transition-colors ${
+                className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors ${
                   activo
                     ? alerta
-                      ? "border-destructive bg-destructive/5 ring-1 ring-destructive"
-                      : "border-accent bg-accent/5 ring-1 ring-accent"
+                      ? "bg-destructive text-destructive-foreground"
+                      : "bg-primary text-primary-foreground"
                     : alerta
-                      ? "border-destructive/40 bg-destructive/5 hover:bg-destructive/10"
-                      : "border-border bg-card hover:bg-muted/60"
+                      ? "text-destructive hover:bg-destructive/10"
+                      : "text-secondary hover:bg-muted"
                 }`}
               >
-                <span className="flex items-center gap-2 text-sm font-semibold text-secondary">
-                  <span
-                    aria-hidden
-                    className={`h-2.5 w-2.5 rounded-full ${f.tono}`}
-                  />
-                  {f.label}
-                </span>
                 <span
-                  className={`text-2xl font-extrabold tabular-nums ${
-                    alerta ? "text-destructive" : "text-primary"
+                  aria-hidden
+                  className={`h-2 w-2 rounded-full ${activo ? "bg-current" : f.tono}`}
+                />
+                {f.label}
+                <span
+                  className={`rounded-md px-1.5 text-xs font-bold tabular-nums ${
+                    activo ? "bg-white/20" : "bg-muted text-primary"
                   }`}
                 >
                   {conteo[f.key]}
@@ -712,8 +1083,25 @@ export default function GestionPedidosPanel() {
           })}
         </div>
 
-        <div className="flex items-center gap-2 xl:w-[440px]">
-          <div className="relative min-w-0 flex-1">
+        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
+          {kpiATiempo.conDatos > 0 && (
+            <span
+              title={`${kpiATiempo.aTiempo}/${kpiATiempo.conDatos} pedidos completos entregados a tiempo`}
+              className="hidden items-center gap-1.5 whitespace-nowrap rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground xl:inline-flex"
+            >
+              A tiempo
+              <b
+                className={`text-sm tabular-nums ${
+                  kpiATiempo.porcentaje !== null && kpiATiempo.porcentaje < 80
+                    ? "text-warning"
+                    : "text-success"
+                }`}
+              >
+                {kpiATiempo.porcentaje}%
+              </b>
+            </span>
+          )}
+          <div className="relative min-w-0 flex-1 sm:w-72 sm:flex-none">
             <span
               aria-hidden
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -723,123 +1111,121 @@ export default function GestionPedidosPanel() {
             <input
               type="search"
               aria-label="Buscar pedidos"
-              className={`${fieldClass} h-11 pl-9`}
-              placeholder="Buscar folio, solicitante, centro, artículo…"
+              className={`${fieldClass} pl-9`}
+              placeholder="Buscar folio, solicitante, artículo…"
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
             />
           </div>
           <button
             type="button"
+            aria-expanded={filtrosAbiertos}
+            onClick={() => setFiltrosAbiertos((v) => !v)}
+            className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm font-semibold shadow-sm transition-colors hover:bg-muted ${
+              filtrosAbiertos || nFiltrosExtra > 0
+                ? "border-accent bg-accent/5 text-accent"
+                : "border-border bg-card text-primary"
+            }`}
+          >
+            <IconFilter />
+            Filtros
+            {nFiltrosExtra > 0 && (
+              <span className="rounded-full bg-accent px-1.5 text-[11px] font-bold text-accent-foreground">
+                {nFiltrosExtra}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => cargarPedidos()}
             disabled={refrescando}
-            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3.5 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-60"
+            aria-label="Actualizar pedidos"
+            title="Actualizar"
+            className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-60"
           >
             <span className={refrescando ? "animate-spin" : ""}>
               <IconRefresh />
             </span>
-            {refrescando ? "Actualizando" : "Actualizar"}
+            <span className="hidden 2xl:inline">
+              {refrescando ? "Actualizando" : "Actualizar"}
+            </span>
           </button>
         </div>
       </div>
 
-      {/* KPI: cumplimiento de plazo de entrega */}
-      {kpiATiempo.conDatos > 0 && (
+      {/* Filtros adicionales (plegables) */}
+      {(filtrosAbiertos || nFiltrosExtra > 0) && (
         <div
-          className={`${cardClass} flex flex-wrap items-center justify-between gap-2 px-4 py-2.5`}
+          role="group"
+          aria-label="Filtros adicionales"
+          className={`${cardClass} grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_150px_150px_auto] xl:items-end`}
         >
-          <span className="text-sm font-semibold text-secondary">
-            Entregas a tiempo
-          </span>
-          <span className="flex items-center gap-2">
-            <span
-              className={`text-lg font-extrabold tabular-nums ${
-                kpiATiempo.porcentaje !== null && kpiATiempo.porcentaje < 80
-                  ? "text-warning"
-                  : "text-success"
-              }`}
-            >
-              {kpiATiempo.porcentaje}%
-            </span>
-            <span className="text-xs text-muted-foreground">
-              ({kpiATiempo.aTiempo}/{kpiATiempo.conDatos} pedidos completos con
-              fecha registrada)
-            </span>
-          </span>
+          {(
+            [
+              ["Solicitante", fSolicitante, setFSolicitante, opciones.solicitante],
+              ["Área", fArea, setFArea, opciones.area],
+              ["Centro de negocio", fCentro, setFCentro, opciones.centro],
+              ["Despacho", fDespacho, setFDespacho, opciones.despacho],
+            ] as const
+          ).map(([label, valor, setValor, lista]) => (
+            <label key={label} className="block min-w-0">
+              <span className={labelClass}>{label}</span>
+              {label === "Solicitante" || label === "Centro de negocio" ? (
+                <SearchCombobox
+                  ariaLabel={label}
+                  size="sm"
+                  clearable
+                  placeholder="Todos"
+                  options={lista.map((o) => ({ value: o, label: o }))}
+                  value={valor}
+                  onChange={setValor}
+                />
+              ) : (
+                <select
+                  className={fieldClass}
+                  value={valor}
+                  onChange={(e) => setValor(e.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {lista.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+          ))}
+          <label className="block min-w-0">
+            <span className={labelClass}>Pedido desde</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={fDesde}
+              max={fHasta || undefined}
+              onChange={(e) => setFDesde(e.target.value)}
+            />
+          </label>
+          <label className="block min-w-0">
+            <span className={labelClass}>Pedido hasta</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={fHasta}
+              min={fDesde || undefined}
+              onChange={(e) => setFHasta(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={limpiarFiltros}
+            disabled={nFiltrosExtra === 0 && filtro === "todos" && !busqueda}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
+          >
+            Limpiar filtros
+          </button>
         </div>
       )}
-
-      {/* Filtros adicionales */}
-      <div
-        role="group"
-        aria-label="Filtros adicionales"
-        className={`${cardClass} grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_150px_150px_auto] xl:items-end`}
-      >
-        {(
-          [
-            ["Solicitante", fSolicitante, setFSolicitante, opciones.solicitante],
-            ["Área", fArea, setFArea, opciones.area],
-            ["Centro de negocio", fCentro, setFCentro, opciones.centro],
-            ["Despacho", fDespacho, setFDespacho, opciones.despacho],
-          ] as const
-        ).map(([label, valor, setValor, lista]) => (
-          <label key={label} className="block min-w-0">
-            <span className={labelClass}>{label}</span>
-            {label === "Solicitante" || label === "Centro de negocio" ? (
-              <SearchCombobox
-                ariaLabel={label}
-                size="sm"
-                clearable
-                placeholder="Todos"
-                options={lista.map((o) => ({ value: o, label: o }))}
-                value={valor}
-                onChange={setValor}
-              />
-            ) : (
-              <select
-                className={fieldClass}
-                value={valor}
-                onChange={(e) => setValor(e.target.value)}
-              >
-                <option value="">Todos</option>
-                {lista.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            )}
-          </label>
-        ))}
-        <label className="block min-w-0">
-          <span className={labelClass}>Pedido desde</span>
-          <input
-            type="date"
-            className={fieldClass}
-            value={fDesde}
-            max={fHasta || undefined}
-            onChange={(e) => setFDesde(e.target.value)}
-          />
-        </label>
-        <label className="block min-w-0">
-          <span className={labelClass}>Pedido hasta</span>
-          <input
-            type="date"
-            className={fieldClass}
-            value={fHasta}
-            min={fDesde || undefined}
-            onChange={(e) => setFHasta(e.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          onClick={limpiarFiltros}
-          disabled={!hayFiltrosExtra && filtro === "todos" && !busqueda}
-          className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
-        >
-          Limpiar filtros
-        </button>
-      </div>
 
       {loadError && (
         <p role="alert" className="text-sm font-medium text-destructive">
@@ -847,17 +1233,35 @@ export default function GestionPedidosPanel() {
         </p>
       )}
 
-      <div className="grid items-start gap-4 lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)]">
+      <div className="grid items-start gap-3 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[390px_minmax(0,1fr)]">
         {/* Lista de pedidos */}
         <section
           aria-label="Pedidos registrados"
-          className={`${cardClass} flex flex-col overflow-hidden lg:sticky lg:top-20 lg:max-h-[calc(100vh-7rem)]`}
+          className={`${cardClass} flex flex-col overflow-hidden lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100vh-5.5rem)]`}
         >
-          <div className="flex items-baseline justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-3 border-b border-border px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="h-4 w-4 cursor-pointer accent-accent"
+              aria-label="Marcar todos los pedidos de la lista"
+              checked={todosMarcados}
+              disabled={pedidosFiltrados.length === 0}
+              onChange={alternarTodosLosPedidos}
+            />
             <h2 className="text-sm font-bold text-primary">Pedidos</h2>
             <span className="text-xs text-muted-foreground">
               {pedidosFiltrados.length} de {pedidos.length}
             </span>
+            {pedidosMarcados.length > 0 && (
+              <button
+                type="button"
+                onClick={limpiarSeleccion}
+                className="ml-auto text-xs font-semibold text-accent hover:underline"
+              >
+                {pedidosMarcados.length} marcado
+                {pedidosMarcados.length === 1 ? "" : "s"} · quitar
+              </button>
+            )}
           </div>
 
           {pedidosFiltrados.length === 0 ? (
@@ -869,8 +1273,9 @@ export default function GestionPedidosPanel() {
           ) : (
             <ul className="divide-y divide-border/70 overflow-y-auto">
               {pedidosFiltrados.map((p) => {
-                const estado = ESTADOS[estadoPedido(p.items)];
+                const estado = ESTADOS[estadoDe(p)];
                 const activo = p.pedidoId === seleccionado;
+                const marcado = selPedidos.has(p.pedidoId);
                 const totalPedido = p.items.reduce(
                   (sum, it) => sum + it.cantidad,
                   0
@@ -884,30 +1289,59 @@ export default function GestionPedidosPanel() {
                   : 0;
                 const sinGuardar = cambiosPorPedido.get(p.pedidoId) ?? 0;
                 const urgentePend = esUrgentePendiente(p);
+                const atrasado = esAtrasado(p);
                 return (
-                  <li key={p.pedidoId}>
+                  <li
+                    key={p.pedidoId}
+                    id={`pedido-${p.pedidoId}`}
+                    className={`flex items-stretch border-l-4 transition-colors ${
+                      urgentePend
+                        ? activo
+                          ? "border-l-destructive bg-destructive/10"
+                          : "border-l-destructive bg-destructive/5 hover:bg-destructive/10"
+                        : activo
+                          ? "border-l-accent bg-accent/5"
+                          : "border-l-transparent hover:bg-muted/60"
+                    } ${marcado ? "ring-1 ring-inset ring-accent/50" : ""}`}
+                  >
+                    <label className="flex shrink-0 cursor-pointer items-start px-3 pt-3.5">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 cursor-pointer accent-accent"
+                        aria-label={`Marcar pedido ${p.pedidoId}`}
+                        checked={marcado}
+                        onClick={(e) => {
+                          // Shift+clic marca un rango de pedidos.
+                          e.stopPropagation();
+                        }}
+                        onChange={(e) =>
+                          alternarPedido(
+                            p.pedidoId,
+                            (e.nativeEvent as MouseEvent).shiftKey === true
+                          )
+                        }
+                      />
+                    </label>
                     <button
                       type="button"
                       onClick={() => abrirPedido(p)}
                       aria-current={activo ? "true" : undefined}
-                      className={`block w-full border-l-4 px-4 py-3 text-left transition-colors ${
-                        urgentePend
-                          ? activo
-                            ? "border-l-destructive bg-destructive/10"
-                            : "border-l-destructive bg-destructive/5 hover:bg-destructive/10"
-                          : activo
-                            ? "border-l-accent bg-accent/5"
-                            : "border-l-transparent hover:bg-muted/60"
-                      }`}
+                      className="block min-w-0 flex-1 py-2.5 pr-3 text-left"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="text-sm font-bold text-primary">
+                          <span
+                            className={`text-sm font-bold text-primary ${
+                              p.estadoManual === "anulado"
+                                ? "line-through opacity-60"
+                                : ""
+                            }`}
+                          >
                             {p.pedidoId}
                           </span>
                           {p.urgente && (
                             <span
-                              className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide ${
+                              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
                                 urgentePend
                                   ? "bg-destructive text-destructive-foreground"
                                   : "bg-muted text-muted-foreground"
@@ -916,14 +1350,19 @@ export default function GestionPedidosPanel() {
                               Urgente
                             </span>
                           )}
+                          {atrasado && (
+                            <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-destructive">
+                              Atrasado
+                            </span>
+                          )}
                         </span>
                         <span
-                          className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${estado.chip}`}
+                          className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${estado.chip}`}
                         >
                           {estado.label}
                         </span>
                       </div>
-                      <div className="mt-1 truncate text-sm text-card-foreground">
+                      <div className="mt-0.5 truncate text-sm text-card-foreground">
                         {p.solicitante || "—"}
                         <span className="text-muted-foreground">
                           {" · "}
@@ -933,27 +1372,25 @@ export default function GestionPedidosPanel() {
                       <div className="truncate text-xs text-muted-foreground">
                         {p.centroNegocio || "—"}
                       </div>
-                      <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>{formatFecha(p.fecha)}</span>
-                        <span className="flex flex-1 items-center gap-2">
+                      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="tabular-nums">
+                          {formatFecha(p.fecha)}
+                        </span>
+                        <span
+                          aria-hidden
+                          className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+                        >
                           <span
-                            aria-hidden
-                            className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
-                          >
-                            <span
-                              className="block h-full rounded-full bg-success transition-[width]"
-                              style={{
-                                width: `${porcentaje}%`,
-                              }}
-                            />
-                          </span>
-                          <span className="tabular-nums">
-                            {totalRecibido}/{totalPedido} unid.
-                          </span>
+                            className="block h-full rounded-full bg-success transition-[width]"
+                            style={{ width: `${porcentaje}%` }}
+                          />
+                        </span>
+                        <span className="tabular-nums">
+                          {totalRecibido}/{totalPedido} unid.
                         </span>
                       </div>
                       {sinGuardar > 0 && (
-                        <div className="mt-1.5 text-xs font-semibold text-warning">
+                        <div className="mt-1 text-xs font-semibold text-warning">
                           ● {sinGuardar}{" "}
                           {sinGuardar === 1 ? "cambio" : "cambios"} sin guardar
                         </div>
@@ -964,6 +1401,11 @@ export default function GestionPedidosPanel() {
               })}
             </ul>
           )}
+
+          <div className="hidden border-t border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground lg:block">
+            <Kbd>J</Kbd>/<Kbd>K</Kbd> cambiar pedido · <Kbd>X</Kbd> marcar ·{" "}
+            <Kbd>Shift</Kbd>+clic rango · <Kbd>Ctrl</Kbd>+<Kbd>S</Kbd> guardar
+          </div>
         </section>
 
         {/* Detalle */}
@@ -984,6 +1426,7 @@ export default function GestionPedidosPanel() {
             </div>
           ) : (
             <Detalle
+              key={pedidoActual.pedidoId}
               pedido={pedidoActual}
               ediciones={ediciones}
               guardando={guardando}
@@ -993,19 +1436,324 @@ export default function GestionPedidosPanel() {
               empleados={empleados}
               cambios={cambiosPorPedido.get(pedidoActual.pedidoId) ?? 0}
               seleccionFilas={seleccionFilas}
+              posicion={indiceActual}
+              total={pedidosFiltrados.length}
+              onAnterior={() => irAPedido(-1)}
+              onSiguiente={() => irAPedido(1)}
               onCambiar={cambiarCampo}
               onMarcarRecibido={marcarRecibido}
-              onGuardarLinea={guardarLinea}
-              onGuardarTodo={() => guardarTodo(pedidoActual)}
+              onGuardarLinea={(it) => guardarFilas([it])}
+              onGuardarPedido={() =>
+                void (async () => {
+                  setGuardandoTodo(true);
+                  try {
+                    await guardarFilas(pedidoActual.items);
+                  } finally {
+                    setGuardandoTodo(false);
+                  }
+                })()
+              }
               onAlternarFila={alternarFila}
               onAlternarTodasLasFilas={alternarTodasLasFilas}
-              onLimpiarSeleccion={limpiarSeleccion}
-              onAplicarCamposEnBloque={aplicarCamposEnBloque}
+              onAccion={abrirAccion}
             />
           )}
         </section>
       </div>
+
+      {accion && (
+        <DialogoEstado
+          tipo={accion.tipo}
+          pedidoId={accion.pedidoId}
+          motivo={motivoAccion}
+          onMotivo={setMotivoAccion}
+          error={errorEstado}
+          enviando={enviandoEstado}
+          onCancelar={() => setAccion(null)}
+          onConfirmar={() => void confirmarAccion()}
+        />
+      )}
+
+      {/* Espacio para que la barra fija no tape las últimas filas */}
+      {hayBarra && <div aria-hidden className="h-44" />}
+
+      {/* Barra fija inferior: edición en bloque + guardado global */}
+      {hayBarra && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-6">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-[1800px] flex-col gap-2">
+            {objetivo.length > 0 && (
+              <div className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-xl border border-accent/40 bg-card p-3 shadow-lg ring-1 ring-accent/10">
+                <div className="mr-1 min-w-[150px]">
+                  <p className="text-sm font-extrabold text-accent">
+                    {objetivo.length}{" "}
+                    {objetivo.length === 1 ? "artículo" : "artículos"}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {pedidosMarcados.length > 0
+                      ? `${pedidosMarcados.length} pedido${pedidosMarcados.length === 1 ? "" : "s"} marcado${pedidosMarcados.length === 1 ? "" : "s"}`
+                      : "marcados en el pedido abierto"}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => marcarRecibido(objetivoPendientes)}
+                    disabled={objetivoPendientes.length === 0}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-bold text-white shadow-sm transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <IconCheck />
+                    Todo recibido
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      aplicarCamposEnBloque(objetivo, {
+                        fechaRecepcionBodega: hoyYMD(),
+                      })
+                    }
+                    className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+                  >
+                    Llegó hoy a bodega
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      aplicarCamposEnBloque(objetivo, {
+                        fechaEntregaSolicitante: hoyYMD(),
+                      })
+                    }
+                    className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+                  >
+                    Entregado hoy
+                  </button>
+                </div>
+
+                <span aria-hidden className="hidden h-9 w-px bg-border lg:block" />
+
+                <label className="block w-48">
+                  <span className={labelClass}>Recepcionado por</span>
+                  <SearchCombobox
+                    size="sm"
+                    allowCustom
+                    clearable
+                    ariaLabel="Recepcionado por (en bloque)"
+                    placeholder="Buscar persona…"
+                    options={empleados}
+                    value={bulkRecepcionadoPor}
+                    onChange={setBulkRecepcionadoPor}
+                  />
+                </label>
+                <label className="block w-36">
+                  <span className={labelClass}>Llegó a bodega</span>
+                  <input
+                    type="date"
+                    className={fieldClass}
+                    value={bulkFechaBodega}
+                    onChange={(e) => setBulkFechaBodega(e.target.value)}
+                  />
+                </label>
+                <label className="block w-36">
+                  <span className={labelClass}>Entregado</span>
+                  <input
+                    type="date"
+                    className={fieldClass}
+                    value={bulkFechaEntrega}
+                    onChange={(e) => setBulkFechaEntrega(e.target.value)}
+                  />
+                </label>
+                <label className="block w-36">
+                  <span className={labelClass}>Consumo interno</span>
+                  <input
+                    className={fieldClass}
+                    value={bulkConsumo}
+                    onChange={(e) => setBulkConsumo(e.target.value)}
+                    placeholder="Opcional"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={aplicarBulk}
+                  disabled={!hayDatosBulk}
+                  className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-3.5 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Aplicar
+                </button>
+                <button
+                  type="button"
+                  onClick={limpiarSeleccion}
+                  className="ml-auto inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-semibold text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  Quitar selección
+                </button>
+              </div>
+            )}
+
+            {totalCambios > 0 && (
+              <div className="flex flex-wrap items-center gap-3 rounded-xl bg-primary px-4 py-2.5 text-primary-foreground shadow-lg">
+                <span
+                  aria-hidden
+                  className="h-2.5 w-2.5 animate-pulse rounded-full bg-brand"
+                />
+                <p className="text-sm font-semibold">
+                  {totalCambios}{" "}
+                  {totalCambios === 1 ? "cambio" : "cambios"} sin guardar
+                  {cambiosPorPedido.size > 1 && (
+                    <span className="font-normal opacity-70">
+                      {" "}
+                      en {cambiosPorPedido.size} pedidos
+                    </span>
+                  )}
+                </p>
+                {errorGuardado && (
+                  <p role="alert" className="text-sm font-semibold text-brand">
+                    {errorGuardado}
+                  </p>
+                )}
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={descartarTodo}
+                    disabled={guardandoTodo}
+                    className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold opacity-80 transition-opacity hover:opacity-100 disabled:opacity-40"
+                  >
+                    Descartar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void guardarTodo()}
+                    disabled={guardandoTodo}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-extrabold text-brand-foreground shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-60"
+                  >
+                    {guardandoTodo ? "Guardando…" : "Guardar todo"}
+                    {!guardandoTodo && (
+                      <span className="hidden rounded bg-black/10 px-1.5 text-[11px] font-bold sm:inline">
+                        Ctrl+S
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function DialogoEstado({
+  tipo,
+  pedidoId,
+  motivo,
+  onMotivo,
+  error,
+  enviando,
+  onCancelar,
+  onConfirmar,
+}: {
+  tipo: "cerrado" | "anulado" | "";
+  pedidoId: string;
+  motivo: string;
+  onMotivo: (v: string) => void;
+  error: string | null;
+  enviando: boolean;
+  onCancelar: () => void;
+  onConfirmar: () => void;
+}) {
+  const textos = {
+    cerrado: {
+      titulo: `Cerrar el pedido ${pedidoId}`,
+      detalle:
+        "Se da por terminado aunque falten artículos: no llegará nada más. Deja de contarse como pendiente o parcial. Puedes reabrirlo después.",
+      boton: "Cerrar pedido",
+      campo: "Motivo (opcional)",
+      placeholder: "Ej.: el proveedor no despachará el resto",
+    },
+    anulado: {
+      titulo: `Anular el pedido ${pedidoId}`,
+      detalle:
+        "Úsalo solo para pedidos enviados por error o mal hechos, con la confirmación interna del solicitante. No se borra de la planilla: queda marcado como anulado y puedes reabrirlo si fue un error.",
+      boton: "Anular pedido",
+      campo: "Motivo (obligatorio)",
+      placeholder: "Ej.: el solicitante avisó que lo envió sin querer",
+    },
+    "": {
+      titulo: `Reabrir el pedido ${pedidoId}`,
+      detalle:
+        "Vuelve a su estado según lo recibido y se podrá editar de nuevo.",
+      boton: "Reabrir pedido",
+      campo: "",
+      placeholder: "",
+    },
+  }[tipo];
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCancelar();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={textos.titulo}
+        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl"
+      >
+        <h3 className="text-base font-extrabold text-primary">
+          {textos.titulo}
+        </h3>
+        <p className="mt-1.5 text-sm text-muted-foreground">{textos.detalle}</p>
+        {tipo !== "" && (
+          <label className="mt-4 block">
+            <span className={labelClass}>{textos.campo}</span>
+            <textarea
+              autoFocus
+              rows={3}
+              value={motivo}
+              onChange={(e) => onMotivo(e.target.value)}
+              placeholder={textos.placeholder}
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+            />
+          </label>
+        )}
+        {error && (
+          <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancelar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirmar}
+            disabled={enviando}
+            className={`inline-flex h-9 items-center rounded-lg px-4 text-sm font-bold shadow-sm disabled:opacity-60 ${
+              tipo === "anulado"
+                ? "bg-destructive text-destructive-foreground hover:opacity-90"
+                : "bg-accent text-accent-foreground hover:bg-accent-hover"
+            }`}
+          >
+            {enviando ? "Guardando…" : textos.boton}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border border-border bg-card px-1 font-sans text-[10px] font-semibold text-secondary">
+      {children}
+    </kbd>
   );
 }
 
@@ -1019,14 +1767,17 @@ function Detalle({
   empleados,
   cambios,
   seleccionFilas,
+  posicion,
+  total,
+  onAnterior,
+  onSiguiente,
   onCambiar,
   onMarcarRecibido,
   onGuardarLinea,
-  onGuardarTodo,
+  onGuardarPedido,
   onAlternarFila,
   onAlternarTodasLasFilas,
-  onLimpiarSeleccion,
-  onAplicarCamposEnBloque,
+  onAccion,
 }: {
   pedido: PedidoResumen;
   ediciones: Record<number, LineaEdit>;
@@ -1037,50 +1788,27 @@ function Detalle({
   empleados: ComboOption[];
   cambios: number;
   seleccionFilas: Set<number>;
+  posicion: number;
+  total: number;
+  onAnterior: () => void;
+  onSiguiente: () => void;
   onCambiar: (it: PedidoItem, campo: keyof LineaEdit, valor: string) => void;
   onMarcarRecibido: (items: PedidoItem[]) => void;
   onGuardarLinea: (it: PedidoItem) => Promise<boolean>;
-  onGuardarTodo: () => void;
+  onGuardarPedido: () => void;
   onAlternarFila: (fila: number) => void;
   onAlternarTodasLasFilas: (items: PedidoItem[]) => void;
-  onLimpiarSeleccion: () => void;
-  onAplicarCamposEnBloque: (
-    items: PedidoItem[],
-    campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
-  ) => void;
+  onAccion: (tipo: "cerrado" | "anulado" | "") => void;
 }) {
-  const itemsSeleccionados = pedido.items.filter((it) =>
-    seleccionFilas.has(it.fila)
-  );
+  const bloqueado = pedido.estadoManual !== "";
+  const sinCambios = cambios === 0;
+  const abierto = ["pendiente", "parcial"].includes(estadoDe(pedido));
+  const [datosAbiertos, setDatosAbiertos] = useState(false);
   const todasSeleccionadas =
     pedido.items.length > 0 &&
     pedido.items.every((it) => seleccionFilas.has(it.fila));
 
-  const [bulkRecepcionadoPor, setBulkRecepcionadoPor] = useState("");
-  const [bulkFechaBodega, setBulkFechaBodega] = useState("");
-  const [bulkFechaEntrega, setBulkFechaEntrega] = useState("");
-  const [bulkConsumo, setBulkConsumo] = useState("");
-
-  function aplicarBulk() {
-    onAplicarCamposEnBloque(itemsSeleccionados, {
-      recepcionadoPor: bulkRecepcionadoPor.trim(),
-      fechaRecepcionBodega: bulkFechaBodega,
-      fechaEntregaSolicitante: bulkFechaEntrega,
-      consumoInterno: bulkConsumo.trim(),
-    });
-    setBulkRecepcionadoPor("");
-    setBulkFechaBodega("");
-    setBulkFechaEntrega("");
-    setBulkConsumo("");
-  }
-
-  const hayDatosBulk = Boolean(
-    bulkRecepcionadoPor.trim() ||
-      bulkFechaBodega ||
-      bulkFechaEntrega ||
-      bulkConsumo.trim()
-  );
-  const estado = ESTADOS[estadoPedido(pedido.items)];
+  const estado = ESTADOS[estadoDe(pedido)];
   const faltantes = pedido.items.filter((it) => {
     const ed = ediciones[it.fila];
     const rec =
@@ -1090,59 +1818,20 @@ function Detalle({
     return rec === null || rec < it.cantidad;
   });
 
-  const datos: { label: string; valor: React.ReactNode; ancho?: boolean }[] = [
+  const bodega = fechaBodegaPedido(pedido);
+  const real = fechaRecepcionPedido(pedido);
+  const aTiempo = entregadoATiempo(pedido);
+  const atrasado = esAtrasado(pedido);
+
+  const urgenteTag = (
+    <span className="ml-1.5 rounded bg-destructive px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-destructive-foreground">
+      Urgente
+    </span>
+  );
+
+  // Datos clave siempre visibles; el resto, plegado.
+  const clave: { label: string; valor: React.ReactNode }[] = [
     { label: "Solicitante", valor: pedido.solicitante || "—" },
-    { label: "Fecha del pedido", valor: formatFecha(pedido.fecha) },
-    {
-      label: "Fecha de entrega",
-      valor: (
-        <>
-          {pedido.fechaEntrega || "—"}
-          {pedido.urgente && (
-            <span className="ml-2 rounded bg-destructive px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-destructive-foreground">
-              Urgente
-            </span>
-          )}
-        </>
-      ),
-    },
-    {
-      label: "Llegó a bodega",
-      valor: (() => {
-        const bodega = fechaBodegaPedido(pedido);
-        return bodega ? formatFecha(bodega.toISOString()) : "Sin registro";
-      })(),
-    },
-    {
-      label: "Fecha de entrega real",
-      valor: (() => {
-        const real = fechaRecepcionPedido(pedido);
-        const aTiempo = entregadoATiempo(pedido);
-        if (!real) {
-          return estadoPedido(pedido.items) === "completo"
-            ? "Sin registro"
-            : "Pendiente";
-        }
-        return (
-          <>
-            {formatFecha(real.toISOString())}
-            {aTiempo !== null && (
-              <span
-                className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide ${
-                  aTiempo
-                    ? "bg-success-surface text-success"
-                    : "bg-destructive/10 text-destructive"
-                }`}
-              >
-                {aTiempo ? "A tiempo" : "Atrasado"}
-              </span>
-            )}
-          </>
-        );
-      })(),
-    },
-    { label: "Despacho", valor: pedido.despacho || "—" },
-    { label: "Área", valor: pedido.area || "—" },
     {
       label: "Centro de negocio",
       valor: (
@@ -1156,15 +1845,62 @@ function Detalle({
         </>
       ),
     },
+    { label: "Despacho", valor: pedido.despacho || "—" },
+    {
+      label: "Entrega comprometida",
+      valor: (
+        <>
+          {pedido.fechaEntrega || "—"}
+          {pedido.urgente && urgenteTag}
+          {atrasado && (
+            <span className="ml-1.5 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-destructive">
+              Atrasado
+            </span>
+          )}
+        </>
+      ),
+    },
+  ];
+
+  const extra: { label: string; valor: React.ReactNode }[] = [
+    { label: "Área", valor: pedido.area || "—" },
+    { label: "Fecha del pedido", valor: formatFecha(pedido.fecha) },
+    {
+      label: "Llegó a bodega",
+      valor: bodega ? formatFecha(bodega.toISOString()) : "Sin registro",
+    },
+    {
+      label: "Fecha de entrega real",
+      valor: real ? (
+        <>
+          {formatFecha(real.toISOString())}
+          {aTiempo !== null && (
+            <span
+              className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
+                aTiempo
+                  ? "bg-success-surface text-success"
+                  : "bg-destructive/10 text-destructive"
+              }`}
+            >
+              {aTiempo ? "A tiempo" : "Atrasado"}
+            </span>
+          )}
+        </>
+      ) : estadoDe(pedido) === "completo" ? (
+        "Sin registro"
+      ) : (
+        "Pendiente"
+      ),
+    },
     { label: "Clasificador 1", valor: pedido.clasificador1 || "—" },
     { label: "Clasificador 2", valor: pedido.clasificador2 || "—" },
   ];
 
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-extrabold tracking-tight text-primary">
               {pedido.pedidoId}
             </h2>
@@ -1178,156 +1914,187 @@ function Detalle({
             >
               {estado.label}
             </span>
+            <span className="text-sm text-muted-foreground">
+              {pedido.items.length}{" "}
+              {pedido.items.length === 1 ? "artículo" : "artículos"} · pedido el{" "}
+              {formatFecha(pedido.fecha)}
+            </span>
           </div>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {pedido.items.length}{" "}
-            {pedido.items.length === 1 ? "artículo" : "artículos"} · pedido el{" "}
-            {formatFecha(pedido.fecha)}
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center rounded-lg border border-border bg-card shadow-sm">
+            <button
+              type="button"
+              onClick={onAnterior}
+              disabled={posicion <= 0}
+              aria-label="Pedido anterior"
+              title="Pedido anterior (K)"
+              className="grid h-9 w-9 place-items-center rounded-l-lg text-secondary transition-colors hover:bg-muted disabled:opacity-30"
+            >
+              <IconChevron dir="left" />
+            </button>
+            <span className="px-1 text-xs tabular-nums text-muted-foreground">
+              {posicion + 1}/{total}
+            </span>
+            <button
+              type="button"
+              onClick={onSiguiente}
+              disabled={posicion === -1 || posicion >= total - 1}
+              aria-label="Pedido siguiente"
+              title="Pedido siguiente (J)"
+              className="grid h-9 w-9 place-items-center rounded-r-lg text-secondary transition-colors hover:bg-muted disabled:opacity-30"
+            >
+              <IconChevron dir="right" />
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => onMarcarRecibido(faltantes)}
-            disabled={faltantes.length === 0}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3.5 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={faltantes.length === 0 || bloqueado}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
           >
             <IconCheck />
-            Marcar todo recibido
+            Todo recibido
           </button>
+          {bloqueado ? (
+            <button
+              type="button"
+              onClick={() => onAccion("")}
+              disabled={!sinCambios}
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-40"
+            >
+              Reabrir
+            </button>
+          ) : (
+            <>
+              {abierto && (
+                <button
+                  type="button"
+                  onClick={() => onAccion("cerrado")}
+                  disabled={!sinCambios}
+                  title={
+                    sinCambios
+                      ? "Dar por terminado aunque falten artículos"
+                      : "Guarda o descarta los cambios primero"
+                  }
+                  className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-secondary shadow-sm transition-colors hover:bg-muted disabled:opacity-40"
+                >
+                  Cerrar pedido
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onAccion("anulado")}
+                disabled={!sinCambios}
+                title={
+                  sinCambios
+                    ? "Anular un pedido enviado por error"
+                    : "Guarda o descarta los cambios primero"
+                }
+                className="inline-flex h-9 items-center rounded-lg border border-destructive/40 bg-card px-3 text-sm font-semibold text-destructive shadow-sm transition-colors hover:bg-destructive/5 disabled:opacity-40"
+              >
+                Anular
+              </button>
+            </>
+          )}
           <button
             type="button"
-            onClick={onGuardarTodo}
-            disabled={cambios === 0 || guardandoTodo}
-            className="inline-flex h-10 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onGuardarPedido}
+            disabled={cambios === 0 || guardandoTodo || bloqueado}
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             {guardandoTodo
               ? "Guardando…"
               : cambios > 0
-                ? `Guardar cambios (${cambios})`
+                ? `Guardar pedido (${cambios})`
                 : "Sin cambios"}
           </button>
         </div>
       </div>
 
-      <dl className="grid gap-x-6 gap-y-3 border-b border-border bg-muted/30 px-5 py-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
-        {datos.map((d) => (
-          <div key={d.label} className="min-w-0">
-            <dt className={labelClass}>{d.label}</dt>
-            <dd className="break-words text-card-foreground">{d.valor}</dd>
-          </div>
-        ))}
-        {pedido.comentario && (
-          <div className="min-w-0 sm:col-span-2 xl:col-span-4">
-            <dt className={labelClass}>Comentario</dt>
-            <dd className="break-words text-card-foreground">
-              {pedido.comentario}
-            </dd>
-          </div>
-        )}
-      </dl>
-
-      {/* Edición en bloque: útil en pedidos grandes, para no rellenar fila
-          por fila. Solo aparece cuando hay artículos seleccionados. */}
-      {itemsSeleccionados.length > 0 && (
-        <div className="flex flex-wrap items-end gap-3 border-b border-border bg-accent/5 px-5 py-3">
-          <p className="mr-1 w-full text-xs font-bold uppercase tracking-wide text-accent sm:w-auto">
-            {itemsSeleccionados.length}{" "}
-            {itemsSeleccionados.length === 1
-              ? "artículo seleccionado"
-              : "artículos seleccionados"}
-          </p>
-          <label className="block w-44">
-            <span className={labelClass}>Recepcionado por</span>
-            <SearchCombobox
-              size="sm"
-              allowCustom
-              clearable
-              ariaLabel="Recepcionado por (en bloque)"
-              placeholder="Buscar persona…"
-              options={empleados}
-              value={bulkRecepcionadoPor}
-              onChange={setBulkRecepcionadoPor}
-            />
-          </label>
-          <label className="block w-40">
-            <span className={labelClass}>Llegó a bodega</span>
-            <input
-              type="date"
-              className={fieldClass}
-              value={bulkFechaBodega}
-              onChange={(e) => setBulkFechaBodega(e.target.value)}
-            />
-          </label>
-          <label className="block w-40">
-            <span className={labelClass}>Entregado al solicitante</span>
-            <input
-              type="date"
-              className={fieldClass}
-              value={bulkFechaEntrega}
-              onChange={(e) => setBulkFechaEntrega(e.target.value)}
-            />
-          </label>
-          <label className="block w-40">
-            <span className={labelClass}>Consumo interno</span>
-            <input
-              className={fieldClass}
-              value={bulkConsumo}
-              onChange={(e) => setBulkConsumo(e.target.value)}
-              placeholder="Opcional"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={aplicarBulk}
-            disabled={!hayDatosBulk}
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-3.5 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Aplicar a los seleccionados
-          </button>
-          <button
-            type="button"
-            onClick={() => onMarcarRecibido(itemsSeleccionados)}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3.5 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
-          >
-            Marcar recibido completo
-          </button>
-          <button
-            type="button"
-            onClick={onLimpiarSeleccion}
-            className="ml-auto inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted"
-          >
-            Quitar selección
-          </button>
-          <p className="w-full text-[11px] text-muted-foreground">
-            Rellena solo los campos que quieras cambiar; se guardan al
-            presionar «Guardar cambios» como cualquier otra edición.
-          </p>
+      {bloqueado && (
+        <div
+          role="status"
+          className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-4 py-2.5 text-sm ${
+            pedido.estadoManual === "anulado"
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-border bg-muted text-secondary"
+          }`}
+        >
+          <b>
+            Pedido {pedido.estadoManual === "anulado" ? "anulado" : "cerrado"}
+          </b>
+          <span className="min-w-0 flex-1 break-words">
+            {pedido.motivoEstado || "Sin motivo registrado."}
+          </span>
+          <span className="text-xs opacity-80">
+            Reábrelo para volver a editarlo.
+          </span>
         </div>
       )}
 
+      <div className="border-y border-border bg-muted/30 px-4 py-2.5">
+        <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
+          {clave.map((d) => (
+            <div key={d.label} className="min-w-0">
+              <dt className={labelClass}>{d.label}</dt>
+              <dd className="break-words text-card-foreground">{d.valor}</dd>
+            </div>
+          ))}
+        </dl>
+        {pedido.comentario && (
+          <p className="mt-2 break-words rounded-md bg-card px-2.5 py-1.5 text-sm text-card-foreground ring-1 ring-border">
+            <span className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Comentario
+            </span>
+            {pedido.comentario}
+          </p>
+        )}
+        {datosAbiertos && (
+          <dl className="mt-3 grid gap-x-6 gap-y-2 border-t border-border/70 pt-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+            {extra.map((d) => (
+              <div key={d.label} className="min-w-0">
+                <dt className={labelClass}>{d.label}</dt>
+                <dd className="break-words text-card-foreground">{d.valor}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <button
+          type="button"
+          onClick={() => setDatosAbiertos((v) => !v)}
+          aria-expanded={datosAbiertos}
+          className="mt-1.5 text-xs font-semibold text-accent hover:underline"
+        >
+          {datosAbiertos
+            ? "Ocultar datos del pedido"
+            : "Ver más datos (área, clasificadores, fechas)"}
+        </button>
+      </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1240px] border-collapse text-sm">
+        <table className="w-full min-w-[1180px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-              <th className="py-2.5 pl-5 pr-1.5 font-semibold">
+              <th className="py-2 pl-4 pr-1.5 font-semibold">
                 <input
                   type="checkbox"
                   className="h-4 w-4 cursor-pointer accent-accent"
                   aria-label="Seleccionar todos los artículos"
+                  disabled={bloqueado}
                   checked={todasSeleccionadas}
                   onChange={() => onAlternarTodasLasFilas(pedido.items)}
                 />
               </th>
-              <th className="py-2.5 pr-3 font-semibold">Artículo</th>
-              <th className="px-3 py-2.5 font-semibold">Pedido</th>
-              <th className="px-3 py-2.5 font-semibold">Recibido</th>
-              <th className="px-3 py-2.5 font-semibold">Llegó a bodega</th>
-              <th className="px-3 py-2.5 font-semibold">Consumo interno</th>
-              <th className="px-3 py-2.5 font-semibold">Recepcionado por</th>
-              <th className="px-3 py-2.5 font-semibold">Entregado al solicitante</th>
-              <th className="py-2.5 pl-3 pr-5 text-right font-semibold">
+              <th className="py-2 pr-3 font-semibold">Artículo</th>
+              <th className="px-2 py-2 font-semibold">Pedido</th>
+              <th className="px-2 py-2 font-semibold">Recibido</th>
+              <th className="px-2 py-2 font-semibold">Llegó a bodega</th>
+              <th className="px-2 py-2 font-semibold">Recepcionado por</th>
+              <th className="px-2 py-2 font-semibold">Entregado el</th>
+              <th className="px-2 py-2 font-semibold">Consumo interno</th>
+              <th className="py-2 pl-2 pr-4 text-right font-semibold">
                 <span className="sr-only">Guardar</span>
               </th>
             </tr>
@@ -1341,6 +2108,7 @@ function Detalle({
                   ? null
                   : Number(edicion.cantidadRecibida);
               const bajoLoPedido = recNum !== null && recNum < it.cantidad;
+              const completaEdit = recNum !== null && recNum >= it.cantidad;
               const estadoIt = ESTADOS[estadoLinea(it)];
               const enter = (e: React.KeyboardEvent) => {
                 if (e.key === "Enter" && sucia && !guardando[it.fila]) {
@@ -1349,6 +2117,8 @@ function Detalle({
                 }
               };
               const seleccionada = seleccionFilas.has(it.fila);
+              const hoy = hoyYMD();
+              const lock = bloqueado;
               return (
                 <tr
                   key={it.fila}
@@ -1357,24 +2127,29 @@ function Detalle({
                       ? "bg-accent/10"
                       : sucia
                         ? "bg-accent/5"
-                        : ""
+                        : "hover:bg-muted/30"
                   }`}
                 >
-                  <td className="py-3 pl-5 pr-1.5">
+                  <td className="py-2 pl-4 pr-1.5 pt-3">
                     <input
                       type="checkbox"
                       className="h-4 w-4 cursor-pointer accent-accent"
                       aria-label={`Seleccionar ${it.nombre}`}
+                      disabled={lock}
                       checked={seleccionada}
                       onChange={() => onAlternarFila(it.fila)}
                     />
                   </td>
                   <td
-                    className={`border-l-4 py-3 pr-3 ${
-                      sucia ? "border-l-accent" : "border-l-transparent"
+                    className={`border-l-4 py-2 pl-2 pr-3 ${
+                      sucia
+                        ? "border-l-accent"
+                        : estadoLinea(it) === "completo"
+                          ? "border-l-success/60"
+                          : "border-l-transparent"
                     }`}
                   >
-                    <div className="font-medium text-card-foreground">
+                    <div className="font-medium leading-snug text-card-foreground">
                       {it.nombre}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -1387,29 +2162,30 @@ function Detalle({
                       </span>
                     </div>
                     {it.comentarioArticulo && (
-                      <p className="mt-1 max-w-[220px] text-xs italic text-muted-foreground">
+                      <p className="mt-1 max-w-[260px] text-xs italic text-muted-foreground">
                         {it.comentarioArticulo}
                       </p>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 tabular-nums">
+                  <td className="whitespace-nowrap px-2 py-2 pt-2.5 tabular-nums">
                     <span className="text-base font-bold text-primary">
                       {it.cantidad.toLocaleString("es-CL")}
                     </span>{" "}
                     <span className="text-muted-foreground">{it.unidad}</span>
                   </td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-1.5">
+                  <td className="px-2 py-2">
+                    <div className="flex items-center gap-1">
                       <input
                         type="number"
                         min="0"
                         max={it.cantidad}
                         step="any"
                         inputMode="decimal"
+                        disabled={lock}
                         aria-label={`Cantidad recibida de ${it.nombre}`}
-                        className={`${fieldClass} w-24 tabular-nums ${
+                        className={`${fieldClass} w-[72px] tabular-nums ${
                           bajoLoPedido ? "border-warning" : ""
-                        }`}
+                        } ${completaEdit ? "border-success/60 bg-success-surface" : ""}`}
                         placeholder="—"
                         value={edicion.cantidadRecibida}
                         onChange={(e) => {
@@ -1434,33 +2210,90 @@ function Detalle({
                         onClick={() =>
                           onCambiar(it, "cantidadRecibida", String(it.cantidad))
                         }
-                        className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-secondary transition-colors hover:bg-muted"
+                        disabled={lock || (completaEdit && recNum === it.cantidad)}
+                        className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border bg-card px-2 text-xs font-semibold text-secondary transition-colors hover:bg-muted disabled:opacity-40"
                       >
                         Todo
                       </button>
                     </div>
                     {bajoLoPedido && (
-                      <p className="mt-1 text-xs font-medium text-warning">
+                      <p className="mt-0.5 text-[11px] font-medium text-warning">
                         Menor a lo pedido
                       </p>
                     )}
                   </td>
-                  <td className="px-3 py-3">
-                    <input
-                      type="date"
-                      aria-label={`Fecha en que llegó a bodega ${it.nombre}`}
-                      className={`${fieldClass} w-[150px]`}
-                      value={edicion.fechaRecepcionBodega}
-                      onChange={(e) =>
-                        onCambiar(it, "fechaRecepcionBodega", e.target.value)
-                      }
-                      onKeyDown={enter}
-                    />
+                  <td className="px-2 py-2">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="date"
+                        disabled={lock}
+                        aria-label={`Fecha en que llegó a bodega ${it.nombre}`}
+                        className={`${fieldClass} w-[136px]`}
+                        value={edicion.fechaRecepcionBodega}
+                        onChange={(e) =>
+                          onCambiar(it, "fechaRecepcionBodega", e.target.value)
+                        }
+                        onKeyDown={enter}
+                      />
+                      <button
+                        type="button"
+                        title="Poner la fecha de hoy"
+                        aria-label={`Llegó hoy a bodega ${it.nombre}`}
+                        onClick={() => onCambiar(it, "fechaRecepcionBodega", hoy)}
+                        disabled={lock || edicion.fechaRecepcionBodega === hoy}
+                        className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border bg-card px-2 text-xs font-semibold text-secondary transition-colors hover:bg-muted disabled:opacity-40"
+                      >
+                        Hoy
+                      </button>
+                    </div>
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-2 py-2">
+                    <div className="w-[190px]">
+                      <SearchCombobox
+                        size="sm"
+                        allowCustom
+                        clearable
+                        disabled={lock}
+                        ariaLabel={`Quién recepcionó ${it.nombre}`}
+                        placeholder="Buscar persona…"
+                        options={empleados}
+                        value={edicion.recepcionadoPor}
+                        onChange={(v) => onCambiar(it, "recepcionadoPor", v)}
+                      />
+                    </div>
+                  </td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="date"
+                        disabled={lock}
+                        aria-label={`Fecha en que se entregó al solicitante ${it.nombre}`}
+                        className={`${fieldClass} w-[136px]`}
+                        value={edicion.fechaEntregaSolicitante}
+                        onChange={(e) =>
+                          onCambiar(it, "fechaEntregaSolicitante", e.target.value)
+                        }
+                        onKeyDown={enter}
+                      />
+                      <button
+                        type="button"
+                        title="Poner la fecha de hoy"
+                        aria-label={`Entregado hoy ${it.nombre}`}
+                        onClick={() =>
+                          onCambiar(it, "fechaEntregaSolicitante", hoy)
+                        }
+                        disabled={lock || edicion.fechaEntregaSolicitante === hoy}
+                        className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border bg-card px-2 text-xs font-semibold text-secondary transition-colors hover:bg-muted disabled:opacity-40"
+                      >
+                        Hoy
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-2 py-2">
                     <input
+                      disabled={lock}
                       aria-label={`Consumo interno de ${it.nombre}`}
-                      className={fieldClass}
+                      className={`${fieldClass} w-[130px]`}
                       value={edicion.consumoInterno}
                       onChange={(e) =>
                         onCambiar(it, "consumoInterno", e.target.value)
@@ -1469,43 +2302,22 @@ function Detalle({
                       placeholder="Opcional"
                     />
                   </td>
-                  <td className="px-3 py-3">
-                    <SearchCombobox
-                      size="sm"
-                      allowCustom
-                      clearable
-                      ariaLabel={`Quién recepcionó ${it.nombre}`}
-                      placeholder="Buscar persona…"
-                      options={empleados}
-                      value={edicion.recepcionadoPor}
-                      onChange={(v) => onCambiar(it, "recepcionadoPor", v)}
-                    />
-                  </td>
-                  <td className="px-3 py-3">
-                    <input
-                      type="date"
-                      aria-label={`Fecha en que se entregó al solicitante ${it.nombre}`}
-                      className={`${fieldClass} w-[150px]`}
-                      value={edicion.fechaEntregaSolicitante}
-                      onChange={(e) =>
-                        onCambiar(it, "fechaEntregaSolicitante", e.target.value)
-                      }
-                      onKeyDown={enter}
-                    />
-                  </td>
-                  <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right">
-                    <button
-                      type="button"
-                      onClick={() => void onGuardarLinea(it)}
-                      disabled={!sucia || guardando[it.fila]}
-                      className="inline-flex h-9 min-w-[92px] items-center justify-center rounded-lg bg-accent px-3 text-xs font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
-                    >
-                      {guardando[it.fila]
-                        ? "Guardando…"
-                        : guardado[it.fila]
-                          ? "Guardado ✓"
-                          : "Guardar"}
-                    </button>
+                  <td className="whitespace-nowrap py-2 pl-2 pr-4 text-right">
+                    {sucia || guardando[it.fila] || guardado[it.fila] ? (
+                      <button
+                        type="button"
+                        onClick={() => void onGuardarLinea(it)}
+                        disabled={!sucia || guardando[it.fila]}
+                        title="Guardar esta fila (Enter)"
+                        className="inline-flex h-9 min-w-[84px] items-center justify-center rounded-lg bg-accent px-3 text-xs font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-default disabled:bg-transparent disabled:text-success disabled:shadow-none"
+                      >
+                        {guardando[it.fila]
+                          ? "Guardando…"
+                          : guardado[it.fila] && !sucia
+                            ? "Guardado ✓"
+                            : "Guardar"}
+                      </button>
+                    ) : null}
                     {errores[it.fila] && (
                       <p
                         role="alert"
@@ -1559,6 +2371,42 @@ function IconRefresh() {
     >
       <path d="M21 12a9 9 0 1 1-2.6-6.4" />
       <path d="M21 4v5h-5" />
+    </svg>
+  );
+}
+
+function IconFilter() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 5h18l-7 8v6l-4-2v-4L3 5z" />
+    </svg>
+  );
+}
+
+function IconChevron({ dir }: { dir: "left" | "right" }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={dir === "left" ? "m15 18-6-6 6-6" : "m9 18 6-6-6-6"} />
     </svg>
   );
 }

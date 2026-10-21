@@ -24,15 +24,19 @@ type Pedido = {
   despacho: string;
   comentario: string;
   urgente: boolean;
+  estadoManual?: "" | "cerrado" | "anulado";
+  motivoEstado?: string;
   items: PedidoItem[];
 };
 
-type Estado = "pendiente" | "parcial" | "completo";
+type Estado = "pendiente" | "parcial" | "completo" | "cerrado" | "anulado";
 
 const ESTADOS: Record<Estado, { label: string; chip: string }> = {
   pendiente: { label: "Pendiente", chip: "bg-warning-surface text-warning" },
   parcial: { label: "Parcial", chip: "bg-accent/10 text-accent" },
   completo: { label: "Completo", chip: "bg-success-surface text-success" },
+  cerrado: { label: "Cerrado", chip: "bg-muted text-secondary" },
+  anulado: { label: "Anulado", chip: "bg-destructive/10 text-destructive" },
 };
 
 const STORAGE_KEY = "mis-pedidos:solicitante";
@@ -48,6 +52,10 @@ function estadoPedido(items: PedidoItem[]): Estado {
   return items.every((it) => estadoLinea(it) === "completo")
     ? "completo"
     : "parcial";
+}
+
+function estadoDe(p: Pedido): Estado {
+  return p.estadoManual || estadoPedido(p.items);
 }
 
 function formatFecha(s: string): string {
@@ -148,8 +156,14 @@ export default function MisPedidosPanel() {
   );
 
   const conteo = useMemo(() => {
-    const c: Record<Estado, number> = { pendiente: 0, parcial: 0, completo: 0 };
-    for (const p of lista) c[estadoPedido(p.items)] += 1;
+    const c: Record<Estado, number> = {
+      pendiente: 0,
+      parcial: 0,
+      completo: 0,
+      cerrado: 0,
+      anulado: 0,
+    };
+    for (const p of lista) c[estadoDe(p)] += 1;
     return c;
   }, [lista]);
 
@@ -174,7 +188,9 @@ export default function MisPedidosPanel() {
             <span className="text-muted-foreground">
               {lista.length} pedido{lista.length === 1 ? "" : "s"}
             </span>
-            {(Object.keys(ESTADOS) as Estado[]).map((e) => (
+            {(Object.keys(ESTADOS) as Estado[])
+              .filter((e) => conteo[e] > 0 || e === "pendiente" || e === "parcial" || e === "completo")
+              .map((e) => (
               <span
                 key={e}
                 className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${ESTADOS[e].chip}`}
@@ -215,7 +231,7 @@ export default function MisPedidosPanel() {
 
       <ul className="space-y-3">
         {lista.map((p) => {
-          const estado = ESTADOS[estadoPedido(p.items)];
+          const estado = ESTADOS[estadoDe(p)];
           return (
             <li
               key={p.pedidoId}

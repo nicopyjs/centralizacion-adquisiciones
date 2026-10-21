@@ -138,6 +138,25 @@ export async function writeRange(
   }
 }
 
+/** Escribe varios rangos distintos en una sola llamada (values:batchUpdate). */
+export async function batchWriteRanges(
+  spreadsheetId: string,
+  data: { range: string; values: (string | number)[][] }[]
+): Promise<void> {
+  if (data.length === 0) return;
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/${spreadsheetId}/values:batchUpdate`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Error al escribir en lote (${res.status}): ${await res.text()}`
+    );
+  }
+}
+
 /** Agrega filas al final de una pestaña. */
 export async function appendRows(
   spreadsheetId: string,

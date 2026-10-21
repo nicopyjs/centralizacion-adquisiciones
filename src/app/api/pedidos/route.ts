@@ -3,6 +3,7 @@ import { getPerfil, haySesion, rolDe } from "@/lib/auth";
 import {
   appendRows,
   articulosSheetId,
+  batchWriteRanges,
   ensureSheet,
   getSpreadsheetMeta,
   readRange,
@@ -34,11 +35,13 @@ const HEADERS = [
   "Fecha recepción bodega",
   "Fecha entrega solicitante",
   "Comentario artículo",
+  "Estado pedido",
+  "Motivo estado",
 ];
-// Última columna de encabezados (23 columnas -> A..W).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:W1`;
+// Última columna de encabezados (25 columnas -> A..Y).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:Y1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:W`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:Y`;
 
 // Prefijos de centro de negocio -> prefijo del folio del pedido (igual al
 // prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
@@ -230,6 +233,8 @@ export async function POST(request: Request) {
       "", // Fecha recepción bodega
       "", // Fecha entrega solicitante
       it.comentario, // Comentario artículo
+      "", // Estado pedido (Cerrado / Anulado)
+      "", // Motivo estado
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -259,6 +264,8 @@ export type PedidoItem = {
   comentarioArticulo: string;
 };
 
+export type EstadoManual = "" | "cerrado" | "anulado";
+
 export type PedidoResumen = {
   pedidoId: string;
   fecha: string;
@@ -272,6 +279,9 @@ export type PedidoResumen = {
   despacho: string;
   comentario: string;
   urgente: boolean;
+  /** Cierre/anulación decidido por Adquisiciones; vacío = estado según lo recibido. */
+  estadoManual: EstadoManual;
+  motivoEstado: string;
   items: PedidoItem[];
 };
 
@@ -320,6 +330,10 @@ export async function GET(request: Request) {
           urgente: ["si", "sí", "s", "1", "true", "urgente"].includes(
             str(row[19]).toLowerCase()
           ),
+          estadoManual: (
+            { cerrado: "cerrado", anulado: "anulado" } as Record<string, EstadoManual>
+          )[str(row[23]).toLowerCase()] ?? "",
+          motivoEstado: str(row[24]),
           items: [],
         };
         porPedido.set(pedidoId, pedido);
@@ -484,6 +498,115 @@ export async function PATCH(request: Request) {
       fechaRecepcionBodega,
       fechaEntregaSolicitante,
     });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+type LineaLote = PatchInput;
+
+/**
+ * Guardado en lote desde el panel de gestión: recibe `{ lineas: [...] }` con
+ * los mismos campos que PATCH, lee Q:V una sola vez y escribe todas las filas
+ * en una sola llamada. Mucho más rápido (y menos expuesto a límites de cuota
+ * de Google) que un PATCH por artículo.
+ */
+export async function PUT(request: Request) {
+  if (!(await haySesion())) return noAutorizado();
+  let body: { lineas?: unknown };
+  try {
+    body = (await request.json()) as { lineas?: unknown };
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+  const lineas = Array.isArray(body.lineas) ? (body.lineas as LineaLote[]) : [];
+  if (lineas.length === 0) {
+    return NextResponse.json({ error: "No hay líneas para guardar." }, { status: 400 });
+  }
+  if (lineas.length > 500) {
+    return NextResponse.json({ error: "Demasiadas líneas en un solo guardado." }, { status: 400 });
+  }
+
+  const sheetId = articulosSheetId();
+  try {
+    if (!encabezadosVerificados) {
+      await asegurarPedidosSheet(sheetId);
+      encabezadosVerificados = true;
+    }
+
+    // Una sola lectura de Q:V para todas las filas (T, Urgente, se conserva).
+    const bloque = await readRange(sheetId, `${PEDIDOS_SHEET}!Q2:V`);
+    const data: { range: string; values: (string | number)[][] }[] = [];
+    const resultados: {
+      fila: number;
+      fechaRecepcionBodega: string;
+      fechaEntregaSolicitante: string;
+    }[] = [];
+
+    for (const l of lineas) {
+      const fila = Number(l.fila);
+      if (!Number.isInteger(fila) || fila < 2) {
+        return NextResponse.json({ error: "El campo 'fila' es inválido." }, { status: 400 });
+      }
+      const [
+        curRecibida = "",
+        curConsumo = "",
+        curRecepcion = "",
+        curUrgente = "",
+        curFechaBodega = "",
+        curFechaSolicitante = "",
+      ] = bloque[fila - 2] ?? [];
+
+      const cantidadRecibida =
+        l.cantidadRecibida === undefined
+          ? curRecibida
+          : l.cantidadRecibida === null || l.cantidadRecibida === ""
+            ? ""
+            : Number(l.cantidadRecibida);
+      if (typeof cantidadRecibida === "number" && !Number.isFinite(cantidadRecibida)) {
+        return NextResponse.json(
+          { error: "La cantidad recibida debe ser un número." },
+          { status: 400 }
+        );
+      }
+      const consumoInterno =
+        l.consumoInterno === undefined ? curConsumo : str(l.consumoInterno);
+      const recepcionadoPor =
+        l.recepcionadoPor === undefined ? curRecepcion : str(l.recepcionadoPor);
+      const fechaRecepcionBodega =
+        l.fechaRecepcionBodega === undefined
+          ? str(curFechaBodega)
+          : str(l.fechaRecepcionBodega);
+      const fechaEntregaSolicitante =
+        l.fechaEntregaSolicitante === undefined
+          ? str(curFechaSolicitante)
+          : str(l.fechaEntregaSolicitante);
+      if (!fechaValida(fechaRecepcionBodega) || !fechaValida(fechaEntregaSolicitante)) {
+        return NextResponse.json(
+          { error: "Fecha inválida (debe ser AAAA-MM-DD)." },
+          { status: 400 }
+        );
+      }
+
+      data.push({
+        range: `${PEDIDOS_SHEET}!Q${fila}:V${fila}`,
+        values: [
+          [
+            cantidadRecibida,
+            consumoInterno,
+            recepcionadoPor,
+            curUrgente,
+            fechaRecepcionBodega,
+            fechaEntregaSolicitante,
+          ],
+        ],
+      });
+      resultados.push({ fila, fechaRecepcionBodega, fechaEntregaSolicitante });
+    }
+
+    await batchWriteRanges(sheetId, data);
+    return NextResponse.json({ ok: true, resultados });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });
