@@ -7,6 +7,7 @@ type PedidoItem = {
   unidad: string;
   cantidad: number;
   cantidadRecibida: number | null;
+  recepcionadoPor: string;
   fechaRecepcionBodega: string;
   fechaEntregaSolicitante: string;
   comentarioArticulo: string;
@@ -555,13 +556,14 @@ export default function MisPedidosPanel() {
                   </dl>
 
                   <div className="mt-4 overflow-x-auto">
-                    <table className="w-full min-w-[620px] text-left text-sm">
+                    <table className="w-full min-w-[760px] text-left text-sm">
                       <thead>
                         <tr className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                           <th className="py-1.5 pr-3">Artículo</th>
                           <th className="px-3 py-1.5">Pedido</th>
                           <th className="px-3 py-1.5">Recibido</th>
                           <th className="px-3 py-1.5">Estado</th>
+                          <th className="px-3 py-1.5">Recibido por</th>
                           <th className="px-3 py-1.5">Recepción bodega</th>
                           <th className="py-1.5 pl-3">Entrega</th>
                         </tr>
@@ -597,6 +599,9 @@ export default function MisPedidosPanel() {
                                 >
                                   {e.label}
                                 </span>
+                              </td>
+                              <td className="px-3 py-2">
+                                {it.recepcionadoPor || "—"}
                               </td>
                               <td className="whitespace-nowrap px-3 py-2">
                                 {formatFecha(it.fechaRecepcionBodega)}
