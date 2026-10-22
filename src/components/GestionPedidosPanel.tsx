@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 
 type PedidoItem = {
@@ -41,7 +41,7 @@ type PedidoResumen = {
 };
 
 type Estado = "pendiente" | "parcial" | "completo" | "cerrado" | "anulado";
-type Filtro = "todos" | "urgentes" | "atrasados" | Estado;
+type Filtro = "porAtender" | "todos" | "urgentes" | "atrasados" | Estado;
 
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
   pendiente: {
@@ -87,6 +87,12 @@ function formatFecha(iso: string): string {
   });
 }
 
+/** Folios largos autogenerados (PED-1792003781685) se acortan a sus últimos 6 dígitos. */
+function folioCorto(id: string): string {
+  const m = /^PED-(\d{9,})$/.exec(id.trim());
+  return m ? `PED-…${m[1].slice(-6)}` : id;
+}
+
 /** "YYYY-MM-DD" -> Date a medianoche local (sin desfase de huso horario). */
 function parseFechaYMD(s: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
@@ -129,6 +135,17 @@ function parseFechaEntrega(s: string): Date | null {
   }
   const fecha = new Date(s);
   return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
+/** Fecha de entrega comprometida con el mismo formato (DD-MM-AAAA) que el resto de las fechas. */
+function formatFechaEntrega(s: string): string {
+  const d = parseFechaEntrega(s);
+  if (!d) return s.trim() || "—";
+  return d.toLocaleDateString("es-CL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 /** Trunca a medianoche local para comparar solo el día, no la hora. */
@@ -242,7 +259,7 @@ export default function GestionPedidosPanel() {
   const [refrescando, setRefrescando] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState("");
-  const [filtro, setFiltro] = useState<Filtro>("todos");
+  const [filtro, setFiltro] = useState<Filtro>("porAtender");
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
   const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [fSolicitante, setFSolicitante] = useState("");
@@ -259,6 +276,8 @@ export default function GestionPedidosPanel() {
   const [errores, setErrores] = useState<Record<number, string>>({});
   const [guardandoTodo, setGuardandoTodo] = useState(false);
   const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
+  const [confirmandoDescarte, setConfirmandoDescarte] = useState(false);
+  const [horaCarga, setHoraCarga] = useState("");
 
   // Selección de pedidos completos (casillas de la lista) y de artículos
   // sueltos dentro del pedido abierto. La barra inferior actúa sobre ambos.
@@ -299,6 +318,12 @@ export default function GestionPedidosPanel() {
       const lista: PedidoResumen[] = data.pedidos ?? [];
       setPedidos(lista);
       ultimaCarga.current = Date.now();
+      setHoraCarga(
+        new Date().toLocaleTimeString("es-CL", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      );
       // Deja abierto un pedido para no partir con la pantalla vacía: el primer
       // urgente pendiente si hay, si no el más reciente.
       setSeleccionado((prev) =>
@@ -391,6 +416,7 @@ export default function GestionPedidosPanel() {
 
   const conteo = useMemo(() => {
     const c: Record<Filtro, number> = {
+      porAtender: 0,
       todos: 0,
       urgentes: 0,
       atrasados: 0,
@@ -402,6 +428,7 @@ export default function GestionPedidosPanel() {
     };
     for (const p of pedidos) {
       c[estadoDe(p)] += 1;
+      if (["pendiente", "parcial"].includes(estadoDe(p))) c.porAtender += 1;
       if (p.estadoManual !== "anulado") c.todos += 1;
       if (esUrgentePendiente(p)) c.urgentes += 1;
       if (esAtrasado(p)) c.atrasados += 1;
@@ -450,8 +477,15 @@ export default function GestionPedidosPanel() {
     fHasta,
   ].filter(Boolean).length;
 
+  /** Cambia de pestaña y deja abierto el primer pedido de la nueva lista. */
+  function cambiarFiltro(f: Filtro) {
+    setFiltro(f);
+    setSeleccionado(null);
+    setSeleccionFilas(new Set());
+  }
+
   function limpiarFiltros() {
-    setFiltro("todos");
+    cambiarFiltro("porAtender");
     setBusqueda("");
     setFSolicitante("");
     setFArea("");
@@ -477,7 +511,15 @@ export default function GestionPedidosPanel() {
           if (fDesde && dia < fDesde) return false;
           if (fHasta && dia > fHasta) return false;
         }
-        if (filtro === "urgentes") {
+        // El pedido abierto se queda en la lista aunque, al guardarlo, deje de
+        // cumplir el filtro (p. ej. un pendiente que pasa a completo): así no
+        // desaparece de golpe mientras se trabaja en él.
+        const fijado = p.pedidoId === seleccionado;
+        if (fijado) {
+          // se mantiene sin importar la pestaña
+        } else if (filtro === "porAtender") {
+          if (!["pendiente", "parcial"].includes(estadoDe(p))) return false;
+        } else if (filtro === "urgentes") {
           if (!esUrgentePendiente(p)) return false;
         } else if (filtro === "atrasados") {
           if (!esAtrasado(p)) return false;
@@ -506,6 +548,7 @@ export default function GestionPedidosPanel() {
     pedidos,
     busqueda,
     filtro,
+    seleccionado,
     fSolicitante,
     fArea,
     fCentro,
@@ -514,9 +557,14 @@ export default function GestionPedidosPanel() {
     fHasta,
   ]);
 
+  // Pedido abierto: el elegido si sigue en la lista; si no, el primero de ella.
+  const idActual = pedidosFiltrados.some((p) => p.pedidoId === seleccionado)
+    ? seleccionado
+    : (pedidosFiltrados[0]?.pedidoId ?? null);
+
   const pedidoActual = useMemo(
-    () => pedidos.find((p) => p.pedidoId === seleccionado) ?? null,
-    [pedidos, seleccionado]
+    () => pedidos.find((p) => p.pedidoId === idActual) ?? null,
+    [pedidos, idActual]
   );
 
   const indiceActual = pedidoActual
@@ -565,7 +613,7 @@ export default function GestionPedidosPanel() {
       Math.max(0, base + delta)
     );
     const p = pedidosFiltrados[destino];
-    if (p && p.pedidoId !== seleccionado) {
+    if (p && p.pedidoId !== idActual) {
       setSeleccionado(p.pedidoId);
       setSeleccionFilas(new Set());
       document
@@ -756,7 +804,7 @@ export default function GestionPedidosPanel() {
         setErrorGuardado(`Revisa la cantidad de «${it.nombre}».`);
         setSeleccionado(
           pedidos.find((p) => p.items.some((x) => x.fila === it.fila))
-            ?.pedidoId ?? seleccionado
+            ?.pedidoId ?? idActual
         );
         return false;
       }
@@ -937,8 +985,7 @@ export default function GestionPedidosPanel() {
   }
 
   function descartarTodo() {
-    if (!window.confirm(`¿Descartar ${totalCambios} cambio(s) sin guardar?`))
-      return;
+    setConfirmandoDescarte(false);
     setEdiciones({});
     setErrores({});
     setErrorGuardado(null);
@@ -1014,21 +1061,23 @@ export default function GestionPedidosPanel() {
     );
   }
 
+  // Tres grupos: vistas generales, alertas (se cruzan con los estados) y estados.
   const filtros = [
-    { key: "todos", label: "Todos", tono: "bg-primary" },
-    { key: "urgentes", label: "Urgentes", tono: "bg-destructive" },
-    { key: "atrasados", label: "Atrasados", tono: "bg-destructive/60" },
-    { key: "pendiente", label: "Pendientes", tono: ESTADOS.pendiente.dot },
-    { key: "parcial", label: "Parciales", tono: ESTADOS.parcial.dot },
-    { key: "completo", label: "Completos", tono: ESTADOS.completo.dot },
-    { key: "cerrado", label: "Cerrados", tono: ESTADOS.cerrado.dot },
-    { key: "anulado", label: "Anulados", tono: ESTADOS.anulado.dot },
+    { key: "porAtender", grupo: 0, label: "Por atender", tono: "bg-accent", ayuda: "Pendientes y parciales: lo que falta recibir o entregar" },
+    { key: "todos", grupo: 0, label: "Todos", tono: "bg-primary", ayuda: "Todos los pedidos, salvo los anulados" },
+    { key: "urgentes", grupo: 1, label: "Urgentes", tono: "bg-destructive", ayuda: "Urgentes que aún no se reciben por completo" },
+    { key: "atrasados", grupo: 1, label: "Atrasados", tono: "bg-destructive/60", ayuda: "Con fecha de entrega vencida y sin completar" },
+    { key: "pendiente", grupo: 2, label: "Pendientes", tono: ESTADOS.pendiente.dot, ayuda: "Nada recibido todavía" },
+    { key: "parcial", grupo: 2, label: "Parciales", tono: ESTADOS.parcial.dot, ayuda: "Recibidos solo en parte" },
+    { key: "completo", grupo: 2, label: "Completos", tono: ESTADOS.completo.dot, ayuda: "Recibidos por completo" },
+    { key: "cerrado", grupo: 2, label: "Cerrados", tono: ESTADOS.cerrado.dot, ayuda: "Dados por terminados" },
+    { key: "anulado", grupo: 2, label: "Anulados", tono: ESTADOS.anulado.dot, ayuda: "Enviados por error" },
   ].filter(
     (f) =>
       (f.key !== "cerrado" && f.key !== "anulado") ||
       conteo[f.key] > 0 ||
       filtro === f.key
-  ) as { key: Filtro; label: string; tono: string }[];
+  ) as { key: Filtro; grupo: number; label: string; tono: string; ayuda: string }[];
 
   const hayBarra = objetivo.length > 0 || totalCambios > 0;
   const objetivoPendientes = objetivo.filter(
@@ -1044,18 +1093,23 @@ export default function GestionPedidosPanel() {
           aria-label="Filtrar por estado"
           className="flex flex-wrap items-center gap-1"
         >
-          {filtros.map((f) => {
+          {filtros.map((f, i) => {
             const activo = filtro === f.key;
+            const nuevoGrupo = i > 0 && filtros[i - 1].grupo !== f.grupo;
             // «Urgentes» y «Atrasados» se marcan en rojo cuando hay alguno.
             const alerta =
               (f.key === "urgentes" || f.key === "atrasados") &&
               conteo[f.key] > 0;
             return (
+              <Fragment key={f.key}>
+                {nuevoGrupo && (
+                  <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
+                )}
               <button
-                key={f.key}
                 type="button"
                 aria-pressed={activo}
-                onClick={() => setFiltro(f.key)}
+                title={f.ayuda}
+                onClick={() => cambiarFiltro(f.key)}
                 className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors ${
                   activo
                     ? alerta
@@ -1079,6 +1133,7 @@ export default function GestionPedidosPanel() {
                   {conteo[f.key]}
                 </span>
               </button>
+              </Fragment>
             );
           })}
         </div>
@@ -1147,7 +1202,11 @@ export default function GestionPedidosPanel() {
               <IconRefresh />
             </span>
             <span className="hidden 2xl:inline">
-              {refrescando ? "Actualizando" : "Actualizar"}
+              {refrescando
+                ? "Actualizando"
+                : horaCarga
+                  ? `Actualizado ${horaCarga}`
+                  : "Actualizar"}
             </span>
           </button>
         </div>
@@ -1219,7 +1278,7 @@ export default function GestionPedidosPanel() {
           <button
             type="button"
             onClick={limpiarFiltros}
-            disabled={nFiltrosExtra === 0 && filtro === "todos" && !busqueda}
+            disabled={nFiltrosExtra === 0 && filtro === "porAtender" && !busqueda}
             className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
           >
             Limpiar filtros
@@ -1250,7 +1309,8 @@ export default function GestionPedidosPanel() {
             />
             <h2 className="text-sm font-bold text-primary">Pedidos</h2>
             <span className="text-xs text-muted-foreground">
-              {pedidosFiltrados.length} de {pedidos.length}
+              {pedidosFiltrados.length} de{" "}
+              {filtro === "anulado" ? conteo.anulado : conteo.todos}
             </span>
             {pedidosMarcados.length > 0 && (
               <button
@@ -1265,16 +1325,47 @@ export default function GestionPedidosPanel() {
           </div>
 
           {pedidosFiltrados.length === 0 ? (
-            <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-              {pedidos.length === 0
-                ? "Aún no hay pedidos registrados."
-                : "Ningún pedido coincide con el filtro."}
+            <div className="px-4 py-12 text-center">
+              {pedidos.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Aún no hay pedidos registrados.
+                </p>
+              ) : filtro === "porAtender" && !busqueda && nFiltrosExtra === 0 ? (
+                <>
+                  <p className="text-sm font-bold text-success">
+                    ✓ Todo al día
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    No hay pedidos pendientes ni parciales.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => cambiarFiltro("todos")}
+                    className="mt-3 text-sm font-semibold text-accent hover:underline"
+                  >
+                    Ver todos los pedidos
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Ningún pedido coincide con el filtro.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={limpiarFiltros}
+                    className="mt-3 text-sm font-semibold text-accent hover:underline"
+                  >
+                    Limpiar filtros
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <ul className="divide-y divide-border/70 overflow-y-auto">
               {pedidosFiltrados.map((p) => {
                 const estado = ESTADOS[estadoDe(p)];
-                const activo = p.pedidoId === seleccionado;
+                const activo = p.pedidoId === idActual;
                 const marcado = selPedidos.has(p.pedidoId);
                 const totalPedido = p.items.reduce(
                   (sum, it) => sum + it.cantidad,
@@ -1337,7 +1428,7 @@ export default function GestionPedidosPanel() {
                                 : ""
                             }`}
                           >
-                            {p.pedidoId}
+                            <span title={p.pedidoId}>{folioCorto(p.pedidoId)}</span>
                           </span>
                           {p.urgente && (
                             <span
@@ -1369,8 +1460,19 @@ export default function GestionPedidosPanel() {
                           {p.area || "—"}
                         </span>
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {p.centroNegocio || "—"}
+                      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+                        <span className="min-w-0 truncate">
+                          {p.centroNegocio || "—"}
+                        </span>
+                        {p.fechaEntrega && (
+                          <span
+                            className={`shrink-0 tabular-nums ${
+                              atrasado ? "font-semibold text-destructive" : ""
+                            }`}
+                          >
+                            Entrega {formatFechaEntrega(p.fechaEntrega)}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                         <span className="tabular-nums">
@@ -1412,7 +1514,7 @@ export default function GestionPedidosPanel() {
         <section
           ref={detalleRef}
           aria-label="Detalle del pedido"
-          className={`${cardClass} min-w-0 scroll-mt-24`}
+          className={`${cardClass} min-w-0 scroll-mt-24 lg:min-h-[60vh]`}
         >
           {!pedidoActual ? (
             <div className="px-6 py-20 text-center">
@@ -1456,6 +1558,7 @@ export default function GestionPedidosPanel() {
               onAlternarFila={alternarFila}
               onAlternarTodasLasFilas={alternarTodasLasFilas}
               onAccion={abrirAccion}
+              onAplicarATodos={aplicarCamposEnBloque}
             />
           )}
         </section>
@@ -1464,6 +1567,11 @@ export default function GestionPedidosPanel() {
       {accion && (
         <DialogoEstado
           tipo={accion.tipo}
+          completo={pedidos.some(
+            (p) =>
+              p.pedidoId === accion.pedidoId &&
+              estadoPedido(p.items) === "completo"
+          )}
           pedidoId={accion.pedidoId}
           motivo={motivoAccion}
           onMotivo={setMotivoAccion}
@@ -1611,14 +1719,36 @@ export default function GestionPedidosPanel() {
                   </p>
                 )}
                 <div className="ml-auto flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={descartarTodo}
-                    disabled={guardandoTodo}
-                    className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold opacity-80 transition-opacity hover:opacity-100 disabled:opacity-40"
-                  >
-                    Descartar
-                  </button>
+                  {confirmandoDescarte ? (
+                    <>
+                      <span className="text-sm font-semibold">
+                        ¿Descartar {totalCambios}?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={descartarTodo}
+                        className="inline-flex h-9 items-center rounded-lg bg-destructive px-3 text-sm font-bold text-destructive-foreground"
+                      >
+                        Sí, descartar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmandoDescarte(false)}
+                        className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold opacity-80 hover:opacity-100"
+                      >
+                        No
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmandoDescarte(true)}
+                      disabled={guardandoTodo}
+                      className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold opacity-80 transition-opacity hover:opacity-100 disabled:opacity-40"
+                    >
+                      Descartar
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void guardarTodo()}
@@ -1644,6 +1774,7 @@ export default function GestionPedidosPanel() {
 
 function DialogoEstado({
   tipo,
+  completo,
   pedidoId,
   motivo,
   onMotivo,
@@ -1653,6 +1784,7 @@ function DialogoEstado({
   onConfirmar,
 }: {
   tipo: "cerrado" | "anulado" | "";
+  completo: boolean;
   pedidoId: string;
   motivo: string;
   onMotivo: (v: string) => void;
@@ -1663,15 +1795,16 @@ function DialogoEstado({
 }) {
   const textos = {
     cerrado: {
-      titulo: `Cerrar el pedido ${pedidoId}`,
-      detalle:
-        "Se da por terminado aunque falten artículos: no llegará nada más. Deja de contarse como pendiente o parcial. Puedes reabrirlo después.",
+      titulo: `Cerrar el pedido ${folioCorto(pedidoId)}`,
+      detalle: completo
+        ? "El pedido ya se recibió completo. Al cerrarlo queda finalizado y archivado en «Cerrados», y no se podrá editar hasta reabrirlo."
+        : "Se da por terminado aunque falten artículos: no llegará nada más. Deja de contarse como pendiente o parcial. Puedes reabrirlo después.",
       boton: "Cerrar pedido",
       campo: "Motivo (opcional)",
       placeholder: "Ej.: el proveedor no despachará el resto",
     },
     anulado: {
-      titulo: `Anular el pedido ${pedidoId}`,
+      titulo: `Anular el pedido ${folioCorto(pedidoId)}`,
       detalle:
         "Úsalo solo para pedidos enviados por error o mal hechos, con la confirmación interna del solicitante. No se borra de la planilla: queda marcado como anulado y puedes reabrirlo si fue un error.",
       boton: "Anular pedido",
@@ -1679,7 +1812,7 @@ function DialogoEstado({
       placeholder: "Ej.: el solicitante avisó que lo envió sin querer",
     },
     "": {
-      titulo: `Reabrir el pedido ${pedidoId}`,
+      titulo: `Reabrir el pedido ${folioCorto(pedidoId)}`,
       detalle:
         "Vuelve a su estado según lo recibido y se podrá editar de nuevo.",
       boton: "Reabrir pedido",
@@ -1687,18 +1820,28 @@ function DialogoEstado({
       placeholder: "",
     },
   }[tipo];
+  const caja = useRef<HTMLDivElement>(null);
+  // Sin campo de texto (reabrir) el foco queda en el diálogo, para que Esc funcione.
+  useEffect(() => {
+    if (tipo === "") caja.current?.focus();
+  }, [tipo]);
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4"
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCancelar();
+      }}
       onKeyDown={(e) => {
         if (e.key === "Escape") onCancelar();
       }}
     >
       <div
+        ref={caja}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={textos.titulo}
-        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl"
+        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
           {textos.titulo}
@@ -1778,6 +1921,7 @@ function Detalle({
   onAlternarFila,
   onAlternarTodasLasFilas,
   onAccion,
+  onAplicarATodos,
 }: {
   pedido: PedidoResumen;
   ediciones: Record<number, LineaEdit>;
@@ -1799,11 +1943,33 @@ function Detalle({
   onAlternarFila: (fila: number) => void;
   onAlternarTodasLasFilas: (items: PedidoItem[]) => void;
   onAccion: (tipo: "cerrado" | "anulado" | "") => void;
+  onAplicarATodos: (
+    items: PedidoItem[],
+    campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
+  ) => void;
 }) {
   const bloqueado = pedido.estadoManual !== "";
   const sinCambios = cambios === 0;
   const abierto = ["pendiente", "parcial"].includes(estadoDe(pedido));
   const [datosAbiertos, setDatosAbiertos] = useState(false);
+  // Datos comunes a todo el pedido: se escriben una vez y se copian a cada artículo.
+  const [todosPersona, setTodosPersona] = useState("");
+  const [todosBodega, setTodosBodega] = useState("");
+  const [todosEntrega, setTodosEntrega] = useState("");
+  const hayDatosTodos = Boolean(todosPersona.trim() || todosBodega || todosEntrega);
+  const totalUnid = pedido.items.reduce((a, it) => a + it.cantidad, 0);
+  const recibUnid = pedido.items.reduce((a, it) => {
+    const ed = ediciones[it.fila];
+    const v =
+      ed && ed.cantidadRecibida.trim() !== ""
+        ? Number(ed.cantidadRecibida)
+        : it.cantidadRecibida;
+    return a + (Number.isFinite(v) && v ? Math.min(v as number, it.cantidad) : 0);
+  }, 0);
+  const pctUnid = totalUnid ? Math.min(100, (recibUnid / totalUnid) * 100) : 0;
+  const puedeCerrar = ["pendiente", "parcial", "completo"].includes(
+    estadoDe(pedido)
+  );
   const todasSeleccionadas =
     pedido.items.length > 0 &&
     pedido.items.every((it) => seleccionFilas.has(it.fila));
@@ -1850,7 +2016,7 @@ function Detalle({
       label: "Entrega comprometida",
       valor: (
         <>
-          {pedido.fechaEntrega || "—"}
+          {pedido.fechaEntrega ? formatFechaEntrega(pedido.fechaEntrega) : "—"}
           {pedido.urgente && urgenteTag}
           {atrasado && (
             <span className="ml-1.5 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-destructive">
@@ -1863,6 +2029,7 @@ function Detalle({
   ];
 
   const extra: { label: string; valor: React.ReactNode }[] = [
+    { label: "Folio completo", valor: pedido.pedidoId },
     { label: "Área", valor: pedido.area || "—" },
     { label: "Fecha del pedido", valor: formatFecha(pedido.fecha) },
     {
@@ -1898,11 +2065,14 @@ function Detalle({
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="z-20 flex flex-wrap items-center justify-between gap-3 rounded-t-xl bg-card px-4 py-3 lg:sticky lg:top-[3.6rem]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-extrabold tracking-tight text-primary">
-              {pedido.pedidoId}
+            <h2
+              title={pedido.pedidoId}
+              className="text-lg font-extrabold tracking-tight text-primary"
+            >
+              {folioCorto(pedido.pedidoId)}
             </h2>
             {pedido.urgente && (
               <span className="rounded bg-destructive px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide text-destructive-foreground">
@@ -1968,17 +2138,23 @@ function Detalle({
             </button>
           ) : (
             <>
-              {abierto && (
+              {puedeCerrar && (
                 <button
                   type="button"
                   onClick={() => onAccion("cerrado")}
                   disabled={!sinCambios}
                   title={
-                    sinCambios
-                      ? "Dar por terminado aunque falten artículos"
-                      : "Guarda o descarta los cambios primero"
+                    !sinCambios
+                      ? "Guarda o descarta los cambios primero"
+                      : abierto
+                        ? "Dar por terminado aunque falten artículos"
+                        : "Finalizar y archivar el pedido"
                   }
-                  className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-secondary shadow-sm transition-colors hover:bg-muted disabled:opacity-40"
+                  className={`inline-flex h-9 items-center rounded-lg border px-3 text-sm font-semibold shadow-sm transition-colors disabled:opacity-40 ${
+                    abierto
+                      ? "border-border bg-card text-secondary hover:bg-muted"
+                      : "border-success/40 bg-success-surface text-success hover:bg-success-surface/60"
+                  }`}
                 >
                   Cerrar pedido
                 </button>
@@ -1998,19 +2174,47 @@ function Detalle({
               </button>
             </>
           )}
-          <button
-            type="button"
-            onClick={onGuardarPedido}
-            disabled={cambios === 0 || guardandoTodo || bloqueado}
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {guardandoTodo
-              ? "Guardando…"
-              : cambios > 0
-                ? `Guardar pedido (${cambios})`
-                : "Sin cambios"}
-          </button>
+          {cambios > 0 || guardandoTodo ? (
+            <button
+              type="button"
+              onClick={onGuardarPedido}
+              disabled={guardandoTodo || bloqueado}
+              className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:opacity-60"
+            >
+              {guardandoTodo ? "Guardando…" : `Guardar pedido (${cambios})`}
+            </button>
+          ) : (
+            !bloqueado && (
+              <span
+                aria-live="polite"
+                className="inline-flex h-9 items-center gap-1.5 px-2 text-sm font-medium text-muted-foreground"
+              >
+                <IconCheck />
+                Todo guardado
+              </span>
+            )
+          )}
         </div>
+      </div>
+
+      <div className="flex items-center gap-3 px-4 pb-3">
+        <span
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={totalUnid}
+          aria-valuenow={recibUnid}
+          aria-label="Unidades recibidas"
+          className="h-2 flex-1 overflow-hidden rounded-full bg-muted"
+        >
+          <span
+            className="block h-full rounded-full bg-success transition-[width]"
+            style={{ width: `${pctUnid}%` }}
+          />
+        </span>
+        <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+          {recibUnid.toLocaleString("es-CL")} de{" "}
+          {totalUnid.toLocaleString("es-CL")} unid. recibidas
+        </span>
       </div>
 
       {bloqueado && (
@@ -2073,6 +2277,62 @@ function Detalle({
         </button>
       </div>
 
+      {!bloqueado && pedido.items.length > 1 && (
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-border bg-accent/[0.03] px-4 py-2.5">
+          <p className="mr-1 w-full text-xs font-bold text-accent sm:w-auto sm:pb-2.5">
+            Aplicar a los {pedido.items.length} artículos
+          </p>
+          <label className="block w-52">
+            <span className={labelClass}>Recepcionado por</span>
+            <SearchCombobox
+              size="sm"
+              allowCustom
+              clearable
+              ariaLabel="Recepcionado por (todo el pedido)"
+              placeholder="Buscar persona…"
+              options={empleados}
+              value={todosPersona}
+              onChange={setTodosPersona}
+            />
+          </label>
+          <label className="block w-36">
+            <span className={labelClass}>Llegó a bodega</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={todosBodega}
+              onChange={(e) => setTodosBodega(e.target.value)}
+            />
+          </label>
+          <label className="block w-36">
+            <span className={labelClass}>Entregado el</span>
+            <input
+              type="date"
+              className={fieldClass}
+              value={todosEntrega}
+              onChange={(e) => setTodosEntrega(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={!hayDatosTodos}
+            onClick={() => {
+              onAplicarATodos(pedido.items, {
+                recepcionadoPor: todosPersona.trim(),
+                fechaRecepcionBodega: todosBodega,
+                fechaEntregaSolicitante: todosEntrega,
+              });
+              setTodosPersona("");
+              setTodosBodega("");
+              setTodosEntrega("");
+            }}
+            className="inline-flex h-9 items-center rounded-lg bg-accent px-3.5 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Aplicar a todos
+          </button>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1180px] border-collapse text-sm">
           <thead>
@@ -2087,13 +2347,13 @@ function Detalle({
                   onChange={() => onAlternarTodasLasFilas(pedido.items)}
                 />
               </th>
-              <th className="py-2 pr-3 font-semibold">Artículo</th>
-              <th className="px-2 py-2 font-semibold">Pedido</th>
-              <th className="px-2 py-2 font-semibold">Recibido</th>
-              <th className="px-2 py-2 font-semibold">Llegó a bodega</th>
-              <th className="px-2 py-2 font-semibold">Recepcionado por</th>
-              <th className="px-2 py-2 font-semibold">Entregado el</th>
-              <th className="px-2 py-2 font-semibold">Consumo interno</th>
+              <th scope="col" className="py-2 pr-3 font-semibold">Artículo</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Pedido</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Recibido</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Llegó a bodega</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Recepcionado por</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Entregado el</th>
+              <th scope="col" className="px-2 py-2 font-semibold">Consumo interno</th>
               <th className="py-2 pl-2 pr-4 text-right font-semibold">
                 <span className="sr-only">Guardar</span>
               </th>
@@ -2248,7 +2508,7 @@ function Detalle({
                     </div>
                   </td>
                   <td className="px-2 py-2">
-                    <div className="w-[190px]">
+                    <div className="w-[230px]" title={edicion.recepcionadoPor || undefined}>
                       <SearchCombobox
                         size="sm"
                         allowCustom
@@ -2293,7 +2553,7 @@ function Detalle({
                     <input
                       disabled={lock}
                       aria-label={`Consumo interno de ${it.nombre}`}
-                      className={`${fieldClass} w-[130px]`}
+                      className={`${fieldClass} w-[120px]`}
                       value={edicion.consumoInterno}
                       onChange={(e) =>
                         onCambiar(it, "consumoInterno", e.target.value)
@@ -2333,6 +2593,14 @@ function Detalle({
           </tbody>
         </table>
       </div>
+
+      {!bloqueado && (
+        <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+          Tip: escribe la cantidad y presiona <Kbd>Enter</Kbd> para guardar la
+          fila, o usa <Kbd>Ctrl</Kbd>+<Kbd>S</Kbd> para guardar todos los
+          cambios de una vez.
+        </p>
+      )}
     </>
   );
 }
