@@ -293,7 +293,7 @@ export default function GestionPedidosPanel() {
 
   // Cierre / anulación / reapertura de un pedido (con diálogo de confirmación).
   const [accion, setAccion] = useState<{
-    pedidoId: string;
+    pedidoIds: string[];
     tipo: "cerrado" | "anulado" | "";
   } | null>(null);
   const [motivoAccion, setMotivoAccion] = useState("");
@@ -575,6 +575,19 @@ export default function GestionPedidosPanel() {
   const pedidosMarcados = useMemo(
     () => pedidosFiltrados.filter((p) => selPedidos.has(p.pedidoId)),
     [pedidosFiltrados, selPedidos]
+  );
+
+  // Marcados que se pueden cerrar en bloque: completos, sin cierre manual y
+  // sin cambios sin guardar.
+  const pedidosCerrables = useMemo(
+    () =>
+      pedidosMarcados.filter(
+        (p) =>
+          !p.estadoManual &&
+          estadoPedido(p.items) === "completo" &&
+          !cambiosPorPedido.has(p.pedidoId)
+      ),
+    [pedidosMarcados, cambiosPorPedido]
   );
 
   // Artículos sobre los que actúa la barra de edición en bloque: todos los de
@@ -919,7 +932,18 @@ export default function GestionPedidosPanel() {
 
   function abrirAccion(tipo: "cerrado" | "anulado" | "") {
     if (!pedidoActual) return;
-    setAccion({ pedidoId: pedidoActual.pedidoId, tipo });
+    setAccion({ pedidoIds: [pedidoActual.pedidoId], tipo });
+    setMotivoAccion("");
+    setErrorEstado(null);
+  }
+
+  /** Cierre en bloque de los pedidos marcados que ya están completos. */
+  function abrirCierreMasivo() {
+    if (pedidosCerrables.length === 0) return;
+    setAccion({
+      pedidoIds: pedidosCerrables.map((p) => p.pedidoId),
+      tipo: "cerrado",
+    });
     setMotivoAccion("");
     setErrorEstado(null);
   }
@@ -938,7 +962,7 @@ export default function GestionPedidosPanel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pedidoId: accion.pedidoId,
+          pedidoIds: accion.pedidoIds,
           estado: accion.tipo,
           motivo,
         }),
@@ -949,9 +973,10 @@ export default function GestionPedidosPanel() {
       }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "No se pudo actualizar.");
+      const afectados = new Set(accion.pedidoIds);
       setPedidos((prev) =>
         prev.map((p) =>
-          p.pedidoId === accion.pedidoId
+          afectados.has(p.pedidoId)
             ? {
                 ...p,
                 estadoManual: accion.tipo,
@@ -962,7 +987,7 @@ export default function GestionPedidosPanel() {
       );
       setSelPedidos((prev) => {
         const next = new Set(prev);
-        next.delete(accion.pedidoId);
+        for (const id of afectados) next.delete(id);
         return next;
       });
       setSeleccionFilas(new Set());
@@ -1569,10 +1594,11 @@ export default function GestionPedidosPanel() {
           tipo={accion.tipo}
           completo={pedidos.some(
             (p) =>
-              p.pedidoId === accion.pedidoId &&
+              accion.pedidoIds.includes(p.pedidoId) &&
               estadoPedido(p.items) === "completo"
           )}
-          pedidoId={accion.pedidoId}
+          pedidoId={accion.pedidoIds[0]}
+          cantidad={accion.pedidoIds.length}
           motivo={motivoAccion}
           onMotivo={setMotivoAccion}
           error={errorEstado}
@@ -1636,6 +1662,19 @@ export default function GestionPedidosPanel() {
                     Entregado hoy
                   </button>
                 </div>
+
+                {pedidosCerrables.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={abrirCierreMasivo}
+                    title="Finalizar y archivar los pedidos completos marcados"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-success/40 bg-success-surface px-3 text-sm font-bold text-success shadow-sm transition-colors hover:bg-success-surface/60"
+                  >
+                    <IconCheck />
+                    Cerrar {pedidosCerrables.length} completo
+                    {pedidosCerrables.length === 1 ? "" : "s"}
+                  </button>
+                )}
 
                 <span aria-hidden className="hidden h-9 w-px bg-border lg:block" />
 
@@ -1776,6 +1815,7 @@ function DialogoEstado({
   tipo,
   completo,
   pedidoId,
+  cantidad,
   motivo,
   onMotivo,
   error,
@@ -1786,6 +1826,7 @@ function DialogoEstado({
   tipo: "cerrado" | "anulado" | "";
   completo: boolean;
   pedidoId: string;
+  cantidad: number;
   motivo: string;
   onMotivo: (v: string) => void;
   error: string | null;
@@ -1795,11 +1836,16 @@ function DialogoEstado({
 }) {
   const textos = {
     cerrado: {
-      titulo: `Cerrar el pedido ${folioCorto(pedidoId)}`,
+      titulo:
+        cantidad > 1
+          ? `Cerrar ${cantidad} pedidos`
+          : `Cerrar el pedido ${folioCorto(pedidoId)}`,
       detalle: completo
-        ? "El pedido ya se recibió completo. Al cerrarlo queda finalizado y archivado en «Cerrados», y no se podrá editar hasta reabrirlo."
+        ? cantidad > 1
+          ? `Los ${cantidad} pedidos ya se recibieron completos. Al cerrarlos quedan finalizados y archivados en «Cerrados», y no se podrán editar hasta reabrirlos.`
+          : "El pedido ya se recibió completo. Al cerrarlo queda finalizado y archivado en «Cerrados», y no se podrá editar hasta reabrirlo."
         : "Se da por terminado aunque falten artículos: no llegará nada más. Deja de contarse como pendiente o parcial. Puedes reabrirlo después.",
-      boton: "Cerrar pedido",
+      boton: cantidad > 1 ? `Cerrar ${cantidad} pedidos` : "Cerrar pedido",
       campo: "Motivo (opcional)",
       placeholder: "Ej.: el proveedor no despachará el resto",
     },
