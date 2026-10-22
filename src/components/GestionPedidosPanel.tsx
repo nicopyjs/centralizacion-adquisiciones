@@ -2489,7 +2489,7 @@ function Detalle({
                         inputMode="decimal"
                         disabled={lock}
                         aria-label={`Cantidad recibida de ${it.nombre}`}
-                        className={`${fieldClass} w-[76px] min-w-[76px] shrink-0 tabular-nums ${
+                        className={`${fieldClass} w-[76px]! shrink-0 tabular-nums ${
                           bajoLoPedido ? "border-warning" : ""
                         } ${completaEdit ? "border-success/60 bg-success-surface" : ""}`}
                         placeholder="—"
@@ -2534,7 +2534,7 @@ function Detalle({
                         type="date"
                         disabled={lock}
                         aria-label={`Fecha en que llegó a bodega ${it.nombre}`}
-                        className={`${fieldClass} w-[136px] min-w-[136px]`}
+                        className={`${fieldClass} w-[136px]! shrink-0`}
                         value={edicion.fechaRecepcionBodega}
                         onChange={(e) =>
                           onCambiar(it, "fechaRecepcionBodega", e.target.value)
@@ -2574,7 +2574,7 @@ function Detalle({
                         type="date"
                         disabled={lock}
                         aria-label={`Fecha en que se entregó al solicitante ${it.nombre}`}
-                        className={`${fieldClass} w-[136px] min-w-[136px]`}
+                        className={`${fieldClass} w-[136px]! shrink-0`}
                         value={edicion.fechaEntregaSolicitante}
                         onChange={(e) =>
                           onCambiar(it, "fechaEntregaSolicitante", e.target.value)
@@ -2599,7 +2599,7 @@ function Detalle({
                     <input
                       disabled={lock}
                       aria-label={`Consumo interno de ${it.nombre}`}
-                      className={`${fieldClass} w-[120px] min-w-[120px]`}
+                      className={`${fieldClass} w-[120px]!`}
                       value={edicion.consumoInterno}
                       onChange={(e) =>
                         onCambiar(it, "consumoInterno", e.target.value)
