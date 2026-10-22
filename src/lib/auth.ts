@@ -7,8 +7,12 @@ import { cookies } from "next/headers";
  *
  * Perfiles:
  *  - adquisiciones : gestiona los pedidos (Gestión de Pedidos, con edición)
- *  - supervisor    : consulta sus pedidos (Mis Pedidos, solo lectura)
+ *  - supervisor    : consulta los pedidos de su área (solo lectura)
  *  - maestro       : igual que supervisor
+ *
+ * Supervisor y maestro inician sesión eligiendo además un área (Refacciones,
+ * Servicio Técnico, Instalaciones, Transición y Postventa) y solo ven los
+ * pedidos de esa área; el filtro se aplica en el servidor.
  *
  * Variables de entorno (opcionales):
  *  - GESTION_PASSWORD        : contraseña de Adquisiciones (por defecto "adq2026")
@@ -28,6 +32,31 @@ export const PERFILES: { id: Perfil; label: string }[] = [
   { id: "supervisor", label: "Supervisor" },
   { id: "maestro", label: "Maestro" },
 ];
+
+export type Area =
+  | "refacciones"
+  | "servicio-tecnico"
+  | "instalaciones"
+  | "transicion-postventa";
+
+/** `label` es el valor guardado en la columna "Área" de la hoja Pedidos. */
+export const AREAS: { id: Area; label: string }[] = [
+  { id: "refacciones", label: "Refacciones" },
+  { id: "servicio-tecnico", label: "Servicio Técnico" },
+  { id: "instalaciones", label: "Instalaciones" },
+  { id: "transicion-postventa", label: "Transición y Postventa" },
+];
+
+export function esArea(v: unknown): v is Area {
+  return AREAS.some((a) => a.id === v);
+}
+
+export function areaLabel(area: Area): string {
+  return AREAS.find((a) => a.id === area)?.label ?? area;
+}
+
+/** Sesión: perfil + área (solo supervisor/maestro; Adquisiciones ve todo). */
+export type Sesion = { perfil: Perfil; area: Area | null };
 
 export const SESSION_COOKIE = "gestion_session";
 export const SESSION_SECONDS = 60 * 60 * 12; // 12 horas
@@ -76,24 +105,31 @@ export function passwordCorrecta(perfil: Perfil, intento: unknown): boolean {
   return typeof intento === "string" && iguales(intento, passwordDe(perfil));
 }
 
-/** Token con vencimiento: `<perfil>.<expira en ms>.<firma>`. */
-export function crearToken(perfil: Perfil): string {
-  const payload = `${perfil}.${Date.now() + SESSION_SECONDS * 1000}`;
+/** Token con vencimiento: `<perfil>.<área o "-">.<expira en ms>.<firma>`. */
+export function crearToken(perfil: Perfil, area: Area | null): string {
+  const payload = `${perfil}.${area ?? "-"}.${Date.now() + SESSION_SECONDS * 1000}`;
   return `${payload}.${firmar(payload)}`;
 }
 
-function perfilDeToken(token: string | undefined): Perfil | null {
+function sesionDeToken(token: string | undefined): Sesion | null {
   if (!token) return null;
-  const [perfil, exp, firma] = token.split(".");
-  if (!esPerfil(perfil) || !exp || !firma) return null;
-  if (!iguales(firma, firmar(`${perfil}.${exp}`))) return null;
-  return Number(exp) > Date.now() ? perfil : null;
+  const [perfil, area, exp, firma] = token.split(".");
+  if (!esPerfil(perfil) || !area || !exp || !firma) return null;
+  if (!iguales(firma, firmar(`${perfil}.${area}.${exp}`))) return null;
+  if (Number(exp) <= Date.now()) return null;
+  if (perfil === "adquisiciones") return { perfil, area: null };
+  return esArea(area) ? { perfil, area } : null;
+}
+
+/** Sesión actual, o null si no hay sesión válida. */
+export async function getSesion(): Promise<Sesion | null> {
+  const store = await cookies();
+  return sesionDeToken(store.get(SESSION_COOKIE)?.value);
 }
 
 /** Perfil de la sesión actual, o null si no hay sesión válida. */
 export async function getPerfil(): Promise<Perfil | null> {
-  const store = await cookies();
-  return perfilDeToken(store.get(SESSION_COOKIE)?.value);
+  return (await getSesion())?.perfil ?? null;
 }
 
 /** ¿La petición actual trae una sesión válida de Adquisiciones? */

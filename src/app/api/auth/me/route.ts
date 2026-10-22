@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import { getPerfil } from "@/lib/auth";
+import { getSesion } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ perfil: await getPerfil() });
+  const sesion = await getSesion();
+  return NextResponse.json({
+    perfil: sesion?.perfil ?? null,
+    area: sesion?.area ?? null,
+  });
 }

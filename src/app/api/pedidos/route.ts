@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPerfil, haySesion, rolDe } from "@/lib/auth";
+import { areaLabel, getSesion, haySesion } from "@/lib/auth";
 import {
   appendRows,
   articulosSheetId,
@@ -285,16 +285,16 @@ export type PedidoResumen = {
   items: PedidoItem[];
 };
 
-export async function GET(request: Request) {
-  // Adquisiciones ve todo; supervisor/maestro solo los pedidos del solicitante
-  // indicado en ?solicitante= (solo lectura: PATCH exige Adquisiciones).
-  const perfil = await getPerfil();
-  if (!perfil) return noAutorizado();
-  const soloSolicitante =
-    rolDe(perfil) === "solicitante"
-      ? new URL(request.url).searchParams.get("solicitante")?.trim() ?? ""
+export async function GET() {
+  // Adquisiciones ve todo; supervisor/maestro solo los pedidos de su área
+  // (solo lectura: PATCH exige Adquisiciones).
+  const sesion = await getSesion();
+  if (!sesion) return noAutorizado();
+  const soloArea =
+    sesion.perfil !== "adquisiciones" && sesion.area
+      ? areaLabel(sesion.area).toLowerCase()
       : null;
-  if (soloSolicitante === "") return NextResponse.json({ pedidos: [] });
+  if (sesion.perfil !== "adquisiciones" && !soloArea) return noAutorizado();
 
   const sheetId = articulosSheetId();
   try {
@@ -360,8 +360,7 @@ export async function GET(request: Request) {
     const pedidos = Array.from(porPedido.values())
       .filter(
         (p) =>
-          soloSolicitante === null ||
-          p.solicitante.trim().toLowerCase() === soloSolicitante.toLowerCase()
+          soloArea === null || p.area.trim().toLowerCase() === soloArea
       )
       .sort((a, b) => b.fecha.localeCompare(a.fecha));
 

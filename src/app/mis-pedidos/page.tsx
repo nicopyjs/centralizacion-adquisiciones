@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import CerrarSesionButton from "@/components/CerrarSesionButton";
 import LoginGestion from "@/components/LoginGestion";
 import MisPedidosPanel from "@/components/MisPedidosPanel";
-import { getPerfil, perfilLabel } from "@/lib/auth";
+import { areaLabel, getSesion, perfilLabel } from "@/lib/auth";
 
 export const metadata = {
   title: "Mis Pedidos | Centralización Adquisiciones",
@@ -12,32 +12,33 @@ export const metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function MisPedidosPage() {
-  const perfil = await getPerfil();
-  if (!perfil) {
+  const sesion = await getSesion();
+  if (!sesion) {
     return (
       <div className="py-8">
-        <LoginGestion usuarioInicial="supervisor" />
+        <LoginGestion areaInicial="refacciones" />
       </div>
     );
   }
   // Adquisiciones trabaja en Gestión de Pedidos.
-  if (perfil === "adquisiciones") redirect("/gestion-pedidos");
+  if (sesion.perfil === "adquisiciones" || !sesion.area) redirect("/gestion-pedidos");
+
+  const area = areaLabel(sesion.area);
 
   return (
-    <div className="mx-auto w-full max-w-[1100px]">
+    <div className="mx-auto w-full max-w-[1400px]">
       <header className="mb-5 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-primary">
-            Mis Pedidos
+            Pedidos de {area}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Busca tu nombre para ver en qué estado está cada uno de tus
-            pedidos.
+            Revisa el estado de los pedidos de tu área, de solo lectura.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            Sesión: {perfilLabel(perfil)}
+            Sesión: {perfilLabel(sesion.perfil)} · {area}
           </span>
           <CerrarSesionButton />
         </div>

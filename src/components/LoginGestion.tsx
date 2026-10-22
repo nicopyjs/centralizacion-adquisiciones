@@ -8,18 +8,27 @@ const fieldClass =
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
-const PERFILES = [
-  { id: "adquisiciones", label: "Adquisiciones" },
+// Adquisiciones ve todas las áreas; supervisor y maestro entran a una sola.
+const AREAS = [
+  { id: "refacciones", label: "Refacciones" },
+  { id: "servicio-tecnico", label: "Servicio Técnico" },
+  { id: "instalaciones", label: "Instalaciones" },
+  { id: "transicion-postventa", label: "Transición y Postventa" },
+];
+const TODAS = "adquisiciones";
+const ROLES = [
   { id: "supervisor", label: "Supervisor" },
   { id: "maestro", label: "Maestro" },
 ];
 
 export default function LoginGestion({
-  usuarioInicial = "adquisiciones",
+  areaInicial = TODAS,
 }: {
-  usuarioInicial?: string;
+  areaInicial?: string;
 }) {
-  const [usuario, setUsuario] = useState(usuarioInicial);
+  const [area, setArea] = useState(areaInicial);
+  const [rol, setRol] = useState("supervisor");
+  const esAdq = area === TODAS;
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -34,7 +43,9 @@ export default function LoginGestion({
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ usuario, password }),
+        body: JSON.stringify(
+          esAdq ? { usuario: TODAS, password } : { usuario: rol, area, password }
+        ),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "No se pudo iniciar sesión.");
@@ -54,28 +65,49 @@ export default function LoginGestion({
         Acceso restringido
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Elige tu perfil e ingresa la contraseña para continuar.
+        Elige tu área y usuario e ingresa la contraseña para continuar.
       </p>
 
       <div className="mt-5">
-        <label htmlFor="usuario" className={labelClass}>
-          Usuario
+        <label htmlFor="area" className={labelClass}>
+          Área
         </label>
         <select
-          id="usuario"
-          name="username"
-          autoComplete="username"
+          id="area"
           className={fieldClass}
-          value={usuario}
-          onChange={(e) => setUsuario(e.target.value)}
+          value={area}
+          onChange={(e) => setArea(e.target.value)}
         >
-          {PERFILES.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
+          {AREAS.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
             </option>
           ))}
+          <option value={TODAS}>Adquisiciones (todas las áreas)</option>
         </select>
       </div>
+
+      {!esAdq && (
+        <div className="mt-4">
+          <label htmlFor="usuario" className={labelClass}>
+            Usuario
+          </label>
+          <select
+            id="usuario"
+            name="username"
+            autoComplete="username"
+            className={fieldClass}
+            value={rol}
+            onChange={(e) => setRol(e.target.value)}
+          >
+            {ROLES.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="mt-4">
         <label htmlFor="password" className={labelClass}>

@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const TAB_GESTION = { href: "/gestion-pedidos", label: "Gestión de Pedidos" };
-const TAB_MIS_PEDIDOS = { href: "/mis-pedidos", label: "Mis Pedidos" };
+const TAB_MIS_PEDIDOS = { href: "/mis-pedidos", label: "Pedidos del Área" };
 const TABS_BASE = [
   { href: "/enviar-pedido", label: "Enviar Pedido" },
   { href: "/materiales-menores", label: "Materiales Menores" },
