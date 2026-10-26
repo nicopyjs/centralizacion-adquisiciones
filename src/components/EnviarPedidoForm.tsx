@@ -42,6 +42,28 @@ type LineaPedido = {
 // como señal de que hay que revisar el nombre escrito a mano.
 const CODIGO_MANUAL = "MANUAL";
 
+// Pedido copiado desde «Pedidos del Área» (ver MisPedidosPanel).
+const CLAVE_REPETIR = "repetirPedido";
+
+type PedidoACopiar = {
+  pedidoId: string;
+  solicitante: string;
+  area: string;
+  centroCodigo: string;
+  clasificador1: string;
+  clasificador2: string;
+  despacho: string;
+  comentario: string;
+  items: {
+    categoria: string;
+    codigo: string;
+    nombre: string;
+    unidad: string;
+    cantidad: number;
+    comentarioArticulo: string;
+  }[];
+};
+
 let lineaSeq = 0;
 function nuevaLineaId() {
   lineaSeq += 1;
@@ -642,6 +664,8 @@ export default function EnviarPedidoForm({
   // Fila recién agregada: su buscador de artículo recibe el foco al montarse.
   const [lineaNuevaId, setLineaNuevaId] = useState<string | null>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
+  // Folio del pedido del que se copiaron los datos (aviso informativo).
+  const [copiadoDe, setCopiadoDe] = useState<string | null>(null);
 
   const areaActual = useMemo(
     () => AREAS.find((a) => a.email === areaDestino) ?? AREAS[0],
@@ -701,6 +725,47 @@ export default function EnviarPedidoForm({
     return () => {
       cancelado = true;
     };
+  }, []);
+
+  // «Repetir pedido»: si viene un pedido guardado desde Pedidos del Área, se
+  // precarga el formulario (la fecha de entrega y la urgencia quedan por
+  // defecto). Se lee una sola vez y se borra para no repetirlo al recargar.
+  useEffect(() => {
+    let pedido: PedidoACopiar | null = null;
+    try {
+      const raw = sessionStorage.getItem(CLAVE_REPETIR);
+      if (!raw) return;
+      sessionStorage.removeItem(CLAVE_REPETIR);
+      pedido = JSON.parse(raw) as PedidoACopiar;
+    } catch {
+      return;
+    }
+    if (!pedido || !Array.isArray(pedido.items)) return;
+    const area = AREAS.find(
+      (a) => a.label.toLowerCase() === (pedido.area ?? "").trim().toLowerCase()
+    );
+    /* eslint-disable react-hooks/set-state-in-effect -- sessionStorage solo existe en el cliente */
+    if (area) setAreaDestino(area.email);
+    setSolicitante(pedido.solicitante ?? "");
+    setCentroSel(pedido.centroCodigo ?? "");
+    setClasificador1(pedido.clasificador1 ?? "");
+    setClasificador2(pedido.clasificador2 ?? "");
+    setDespacho(pedido.despacho ?? "");
+    setComentario(pedido.comentario ?? "");
+    setLineas(
+      pedido.items.map((it) => ({
+        id: nuevaLineaId(),
+        categoria: it.categoria ?? "",
+        codigo: it.codigo,
+        nombre: it.nombre,
+        unidad: it.unidad,
+        cantidad: it.cantidad,
+        manual: it.codigo === CODIGO_MANUAL,
+        comentario: it.comentarioArticulo ?? "",
+      }))
+    );
+    setCopiadoDe(pedido.pedidoId);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const opcionesSolicitante = useMemo(
@@ -1011,14 +1076,33 @@ export default function EnviarPedidoForm({
 
   // /a/nebchile.cl/ fuerza la cuenta Workspace de NEB aunque el navegador
   // tenga una cuenta personal como principal (/u/0/).
-  const gmailUrl =
-    "https://mail.google.com/a/nebchile.cl/mail/?view=cm&fs=1" +
-    `&to=${encodeURIComponent(para)}` +
-    `&cc=${encodeURIComponent(cc)}` +
-    `&su=${encodeURIComponent(asunto)}` +
-    `&body=${encodeURIComponent(cuerpoCorreo)}`;
+  function construirCorreo(folio?: string): CorreoGmail {
+    // El folio distingue en la bandeja pedidos con asuntos idénticos.
+    const asuntoFinal = folio
+      ? asunto.replace("Adquisiciones //", `Adquisiciones // Pedido ${folio} //`)
+      : asunto;
+    const cuerpoFinal = folio
+      ? cuerpoCorreo.replace(
+          "solicito gestión del siguiente pedido:",
+          `solicito gestión del siguiente pedido (folio ${folio}):`
+        )
+      : cuerpoCorreo;
+    const url =
+      "https://mail.google.com/a/nebchile.cl/mail/?view=cm&fs=1" +
+      `&to=${encodeURIComponent(para)}` +
+      `&cc=${encodeURIComponent(cc)}` +
+      `&su=${encodeURIComponent(asuntoFinal)}` +
+      `&body=${encodeURIComponent(cuerpoFinal)}`;
+    return {
+      para,
+      cc,
+      asunto: asuntoFinal,
+      cuerpoCorreo: cuerpoFinal,
+      gmailUrl: url,
+    };
+  }
 
-  const correoActual: CorreoGmail = { para, cc, asunto, cuerpoCorreo, gmailUrl };
+  const correoActual: CorreoGmail = construirCorreo();
 
   /**
    * En PC abre Gmail web en otra pestaña. En celular abre la APP de Gmail con
@@ -1115,17 +1199,20 @@ export default function EnviarPedidoForm({
     setRegistro(resultado);
     setRegistrando(false);
     setConfirmando(false);
+    const correoFinal = resultado.ok
+      ? construirCorreo(resultado.folio)
+      : correoActual;
     if (resultado.ok) {
       // Copia del correo para «Abrir Gmail» y limpieza de los campos, así el
       // pedido no se puede volver a registrar por error.
-      setCorreoRegistrado(correoActual);
+      setCorreoRegistrado(correoFinal);
       limpiarCampos();
     }
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
     // bloquea la apertura automática) y abre el correo.
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     // Se abre Gmail igual: el registro en planilla es complementario al correo.
-    abrirGmail(correoActual);
+    abrirGmail(correoFinal);
   }
 
   /** Vacía el pedido; conserva solicitante y área. */
@@ -1223,6 +1310,25 @@ export default function EnviarPedidoForm({
   return (
     <div className="grid items-start gap-6 pb-44 xl:grid-cols-[minmax(0,1fr)_400px] xl:pb-0 2xl:grid-cols-[minmax(0,1fr)_440px]">
       <div className="min-w-0 space-y-6">
+        {copiadoDe && !registro && (
+          <div
+            role="status"
+            className="flex items-start justify-between gap-3 rounded-xl border border-accent/30 bg-accent/10 p-4 text-sm text-card-foreground"
+          >
+            <p>
+              <span className="font-bold">Copiado del pedido {copiadoDe}.</span>{" "}
+              Revisa los datos y artículos, cambia lo que necesites y registra el
+              pedido. La fecha de entrega quedó con el valor por defecto.
+            </p>
+            <button
+              type="button"
+              onClick={() => setCopiadoDe(null)}
+              className="shrink-0 text-xs font-semibold text-accent hover:underline"
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
         {registro && (
           <div
             ref={bannerRef}

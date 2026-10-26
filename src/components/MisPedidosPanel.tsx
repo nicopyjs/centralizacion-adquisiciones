@@ -1,8 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 type PedidoItem = {
+  categoria: string;
+  codigo: string;
   nombre: string;
   unidad: string;
   cantidad: number;
@@ -21,6 +24,8 @@ type Pedido = {
   centroNegocio: string;
   centroCodigo: string;
   fechaEntrega: string;
+  clasificador1: string;
+  clasificador2: string;
   despacho: string;
   comentario: string;
   urgente: boolean;
@@ -100,6 +105,9 @@ function estaAtrasado(p: Pedido, hoy: string): boolean {
   );
 }
 
+/** Clave de sessionStorage con la que se pasa un pedido a Enviar Pedido. */
+const CLAVE_REPETIR = "repetirPedido";
+
 function Dato({
   label,
   children,
@@ -118,6 +126,7 @@ function Dato({
 }
 
 export default function MisPedidosPanel() {
+  const router = useRouter();
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +273,17 @@ export default function MisPedidosPanel() {
     setDesde("");
     setHasta("");
     setVisibles(POR_PAGINA);
+  }
+
+  // Deja una copia del pedido en sessionStorage y abre Enviar Pedido, que la
+  // consume para precargar el formulario.
+  function repetir(p: Pedido) {
+    try {
+      sessionStorage.setItem(CLAVE_REPETIR, JSON.stringify(p));
+    } catch {
+      // Sin sessionStorage el formulario simplemente se abre vacío.
+    }
+    router.push("/enviar-pedido");
   }
 
   function alternar(id: string) {
@@ -554,6 +574,19 @@ export default function MisPedidosPanel() {
                       <Dato label="Motivo del estado">{p.motivoEstado}</Dato>
                     )}
                   </dl>
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => repetir(p)}
+                      className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+                    >
+                      Repetir pedido
+                    </button>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      Copia este pedido en Enviar Pedido para ajustarlo y enviarlo.
+                    </span>
+                  </div>
 
                   <div className="mt-4 overflow-x-auto">
                     <table className="w-full min-w-[760px] text-left text-sm">
