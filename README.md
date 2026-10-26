@@ -41,6 +41,9 @@ Solo se muestran los que tienen `Activo = S`.
 **Centros de negocio** (spreadsheet `CENTROS_SHEET_ID`, primera pestaña) — columnas:
 `C Code`, `D Description`, `E Imputable`, `F Activo`.
 Solo se ofrecen los que tienen `Imputable = S` **y** `Activo = S` (~205).
+Además se lee la pestaña **`Centros manuales`** (mismas columnas, códigos rellenados con
+ceros a 15 caracteres) para centros que la API de Defontana no trae (p. ej. TYP); la
+primera pestaña se sobrescribe a diario, esta no.
 
 > **Nota sobre los datos:** ~3.800 artículos activos en 69 categorías. 11 artículos
 > tienen en la columna `Categoría` el texto literal `(categoría desconocida)`; se
