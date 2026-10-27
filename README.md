@@ -45,6 +45,13 @@ Además se lee la pestaña **`Centros manuales`** (mismas columnas, códigos rel
 ceros a 15 caracteres) para centros que la API de Defontana no trae (p. ej. TYP); la
 primera pestaña se sobrescribe a diario, esta no.
 
+**Etiquetas de pedidos** (pestaña `Etiquetas` del spreadsheet `SHEET_ID`, se crea sola al
+etiquetar el primer pedido) — columnas `Pedido ID`, `Área`, `Etiquetas` (separadas por `|`).
+Las ponen supervisores/maestros desde «Pedidos del Área» para organizar sus pedidos.
+
+**Borradores** — «Guardar como borrador» en Enviar Pedido guarda el pedido a medias en el
+`localStorage` del navegador (máx. 20); no pasa por la planilla ni se comparte entre equipos.
+
 > **Nota sobre los datos:** ~3.800 artículos activos en 69 categorías. 11 artículos
 > tienen en la columna `Categoría` el texto literal `(categoría desconocida)`; se
 > agrupan bajo ese nombre tal cual. Si se corrigen en el Sheet, la app los reagrupa

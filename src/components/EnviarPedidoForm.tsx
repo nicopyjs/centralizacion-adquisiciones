@@ -64,6 +64,51 @@ type PedidoACopiar = {
   }[];
 };
 
+// Borradores guardados en este navegador (no pasan por la planilla).
+const CLAVE_BORRADORES = "borradoresPedido";
+const MAX_BORRADORES = 20;
+
+type DatosBorrador = {
+  solicitante: string;
+  areaDestino: string;
+  centroSel: string;
+  clasificador1: string;
+  clasificador2: string;
+  despacho: string;
+  fechaEntrega: string;
+  urgente: boolean;
+  comentario: string;
+  lineas: LineaPedido[];
+};
+
+type Borrador = {
+  id: string;
+  titulo: string;
+  guardadoEn: string;
+  datos: DatosBorrador;
+};
+
+function leerBorradores(): Borrador[] {
+  try {
+    const raw = localStorage.getItem(CLAVE_BORRADORES);
+    const lista = raw ? (JSON.parse(raw) as Borrador[]) : [];
+    return Array.isArray(lista)
+      ? lista.filter((b) => b && b.id && b.datos && Array.isArray(b.datos.lineas))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function escribirBorradores(lista: Borrador[]): boolean {
+  try {
+    localStorage.setItem(CLAVE_BORRADORES, JSON.stringify(lista));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let lineaSeq = 0;
 function nuevaLineaId() {
   lineaSeq += 1;
@@ -666,6 +711,10 @@ export default function EnviarPedidoForm({
   const bannerRef = useRef<HTMLDivElement>(null);
   // Folio del pedido del que se copiaron los datos (aviso informativo).
   const [copiadoDe, setCopiadoDe] = useState<string | null>(null);
+  // Borradores del navegador y el que se está editando (si viene de uno).
+  const [borradores, setBorradores] = useState<Borrador[]>([]);
+  const [borradorId, setBorradorId] = useState<string | null>(null);
+  const [avisoBorrador, setAvisoBorrador] = useState<string | null>(null);
 
   const areaActual = useMemo(
     () => AREAS.find((a) => a.email === areaDestino) ?? AREAS[0],
@@ -765,6 +814,12 @@ export default function EnviarPedidoForm({
       }))
     );
     setCopiadoDe(pedido.pedidoId);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- localStorage solo existe en el cliente */
+    setBorradores(leerBorradores());
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
@@ -1206,6 +1261,10 @@ export default function EnviarPedidoForm({
       // Copia del correo para «Abrir Gmail» y limpieza de los campos, así el
       // pedido no se puede volver a registrar por error.
       setCorreoRegistrado(correoFinal);
+      // El borrador de origen ya se envió: deja de ofrecerse.
+      if (borradorId) eliminarBorrador(borradorId);
+      setBorradorId(null);
+      setAvisoBorrador(null);
       limpiarCampos();
     }
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
@@ -1213,6 +1272,83 @@ export default function EnviarPedidoForm({
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     // Se abre Gmail igual: el registro en planilla es complementario al correo.
     abrirGmail(correoFinal);
+  }
+
+  const hayAlgoQueGuardar =
+    lineas.length > 0 ||
+    centroSel !== "" ||
+    comentario.trim() !== "" ||
+    clasificador1 !== "" ||
+    clasificador2 !== "";
+
+  /** Guarda (o actualiza) el pedido a medias como borrador de este navegador. */
+  function guardarBorrador() {
+    if (!hayAlgoQueGuardar) return;
+    const id = borradorId ?? `borrador-${Date.now()}`;
+    const completas = lineas.filter((l) => l.codigo).length;
+    const titulo = `${centroDesc || areaActual.label} · ${completas} ${
+      completas === 1 ? "artículo" : "artículos"
+    }`;
+    const nuevo: Borrador = {
+      id,
+      titulo,
+      guardadoEn: new Date().toISOString(),
+      datos: {
+        solicitante,
+        areaDestino,
+        centroSel,
+        clasificador1,
+        clasificador2,
+        despacho,
+        fechaEntrega,
+        urgente,
+        comentario,
+        lineas,
+      },
+    };
+    const resto = leerBorradores().filter((b) => b.id !== id);
+    const lista = [nuevo, ...resto].slice(0, MAX_BORRADORES);
+    if (escribirBorradores(lista)) {
+      setBorradores(lista);
+      setBorradorId(id);
+      setAvisoBorrador("Borrador guardado en este navegador.");
+    } else {
+      setAvisoBorrador(
+        "No se pudo guardar el borrador (el navegador bloqueó el almacenamiento)."
+      );
+    }
+  }
+
+  function continuarBorrador(b: Borrador) {
+    const d = b.datos;
+    setAreaDestino(d.areaDestino || AREAS[0].email);
+    setSolicitante(d.solicitante ?? "");
+    setCentroSel(d.centroSel ?? "");
+    setClasificador1(d.clasificador1 ?? "");
+    setClasificador2(d.clasificador2 ?? "");
+    setDespacho(d.despacho ?? "");
+    setComentario(d.comentario ?? "");
+    setUrgente(d.urgente === true);
+    // Una fecha ya vencida (o anterior al mínimo de un pedido normal) vuelve
+    // al valor por defecto.
+    const minimo = d.urgente ? toInputDate(new Date()) : fechaEntregaPorDefecto();
+    setFechaEntrega(
+      d.fechaEntrega && d.fechaEntrega >= minimo ? d.fechaEntrega : fechaEntregaPorDefecto()
+    );
+    setLineas(d.lineas.map((l) => ({ ...l, id: nuevaLineaId() })));
+    setBorradorId(b.id);
+    setCopiadoDe(null);
+    setRegistro(null);
+    setMostrarErrores(false);
+    setAvisoBorrador(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function eliminarBorrador(id: string) {
+    const lista = leerBorradores().filter((b) => b.id !== id);
+    escribirBorradores(lista);
+    setBorradores(lista);
+    if (borradorId === id) setBorradorId(null);
   }
 
   /** Vacía el pedido; conserva solicitante y área. */
@@ -1328,6 +1464,59 @@ export default function EnviarPedidoForm({
               Cerrar
             </button>
           </div>
+        )}
+        {borradores.length > 0 && !registro && (
+          <section
+            aria-label="Borradores guardados"
+            className="rounded-xl border border-border bg-card p-4 shadow-sm"
+          >
+            <h2 className="text-sm font-bold text-primary">
+              Borradores guardados ({borradores.length})
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Quedan en este navegador. Continúa uno para completarlo y enviarlo.
+            </p>
+            <ul className="mt-3 divide-y divide-border">
+              {borradores.map((b) => (
+                <li
+                  key={b.id}
+                  className={`flex flex-wrap items-center justify-between gap-2 py-2 ${
+                    b.id === borradorId ? "font-semibold" : ""
+                  }`}
+                >
+                  <span className="min-w-0 text-sm text-card-foreground">
+                    <span className="block truncate">{b.titulo}</span>
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      {b.datos.solicitante || "Sin solicitante"} ·{" "}
+                      {new Date(b.guardadoEn).toLocaleString("es-CL", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                      {b.id === borradorId ? " · en edición" : ""}
+                    </span>
+                  </span>
+                  <span className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => continuarBorrador(b)}
+                      className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+                    >
+                      Continuar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => eliminarBorrador(b.id)}
+                      className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-destructive hover:underline"
+                    >
+                      Eliminar
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
         {registro && (
           <div
@@ -1913,6 +2102,23 @@ export default function EnviarPedidoForm({
             {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
           </button>
 
+          <button
+            type="button"
+            onClick={guardarBorrador}
+            disabled={!hayAlgoQueGuardar || registrando}
+            className={`${botonSecundario} mt-2 hidden w-full xl:inline-flex`}
+          >
+            {borradorId ? "Actualizar borrador" : "Guardar como borrador"}
+          </button>
+          {avisoBorrador && (
+            <p
+              role="status"
+              className="mt-2 hidden text-center text-xs text-muted-foreground xl:block"
+            >
+              {avisoBorrador}
+            </p>
+          )}
+
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
             <span className="font-bold text-warning">Importante:</span> al
             confirmar no podrás editar el pedido y tendrás que enviar el correo
@@ -1965,12 +2171,24 @@ export default function EnviarPedidoForm({
           <IconMail />
           {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
         </button>
-        <a
-          href="#vista-previa"
-          className="mt-1 block text-center text-xs font-semibold text-accent hover:underline"
-        >
-          Ver vista previa del correo
-        </a>
+        <div className="mt-1 flex items-center justify-center gap-4 text-xs font-semibold">
+          <button
+            type="button"
+            onClick={guardarBorrador}
+            disabled={!hayAlgoQueGuardar || registrando}
+            className="text-accent hover:underline disabled:opacity-40"
+          >
+            {borradorId ? "Actualizar borrador" : "Guardar borrador"}
+          </button>
+          <a href="#vista-previa" className="text-accent hover:underline">
+            Ver vista previa del correo
+          </a>
+        </div>
+        {avisoBorrador && (
+          <p role="status" className="mt-1 text-center text-xs text-muted-foreground">
+            {avisoBorrador}
+          </p>
+        )}
       </div>
 
       {confirmando && (

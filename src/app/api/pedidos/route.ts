@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { areaLabel, getSesion, haySesion } from "@/lib/auth";
+import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
 import {
   appendRows,
   articulosSheetId,
@@ -282,6 +283,8 @@ export type PedidoResumen = {
   /** Cierre/anulación decidido por Adquisiciones; vacío = estado según lo recibido. */
   estadoManual: EstadoManual;
   motivoEstado: string;
+  /** Etiquetas que el área le puso para organizarse (pestaña Etiquetas). */
+  etiquetas: string[];
   items: PedidoItem[];
 };
 
@@ -305,6 +308,11 @@ export async function GET() {
     }
 
     const rows = await readRange(sheetId, DATA_RANGE);
+    const etiquetasPorPedido = meta.sheets.some(
+      (s) => s.properties.title === ETIQUETAS_SHEET
+    )
+      ? await leerEtiquetas(sheetId)
+      : new Map<string, string[]>();
     const porPedido = new Map<string, PedidoResumen>();
 
     rows.forEach((row, i) => {
@@ -334,6 +342,7 @@ export async function GET() {
             { cerrado: "cerrado", anulado: "anulado" } as Record<string, EstadoManual>
           )[str(row[23]).toLowerCase()] ?? "",
           motivoEstado: str(row[24]),
+          etiquetas: etiquetasPorPedido.get(pedidoId) ?? [],
           items: [],
         };
         porPedido.set(pedidoId, pedido);

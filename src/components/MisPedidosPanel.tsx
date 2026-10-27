@@ -31,6 +31,7 @@ type Pedido = {
   urgente: boolean;
   estadoManual?: "" | "cerrado" | "anulado";
   motivoEstado?: string;
+  etiquetas: string[];
   items: PedidoItem[];
 };
 
@@ -108,6 +109,116 @@ function estaAtrasado(p: Pedido, hoy: string): boolean {
 /** Clave de sessionStorage con la que se pasa un pedido a Enviar Pedido. */
 const CLAVE_REPETIR = "repetirPedido";
 
+const MAX_ETIQUETA = 30;
+
+function Chip({
+  texto,
+  onClick,
+  onQuitar,
+  activo,
+}: {
+  texto: string;
+  onClick?: () => void;
+  onQuitar?: () => void;
+  activo?: boolean;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center overflow-hidden rounded-full border text-[11px] font-semibold ${
+        activo
+          ? "border-brand bg-brand/20 text-primary"
+          : "border-border bg-muted text-secondary"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!onClick}
+        title={onClick ? "Filtrar por esta etiqueta" : undefined}
+        className="px-2 py-0.5 enabled:hover:underline"
+      >
+        {texto}
+      </button>
+      {onQuitar && (
+        <button
+          type="button"
+          onClick={onQuitar}
+          aria-label={`Quitar etiqueta ${texto}`}
+          className="px-1.5 py-0.5 text-muted-foreground hover:text-destructive"
+        >
+          ×
+        </button>
+      )}
+    </span>
+  );
+}
+
+function EditorEtiquetas({
+  pedido,
+  sugerencias,
+  guardando,
+  onAplicar,
+}: {
+  pedido: Pedido;
+  sugerencias: string[];
+  guardando: boolean;
+  onAplicar: (agregar: string[], quitar: string[]) => Promise<boolean>;
+}) {
+  const [texto, setTexto] = useState("");
+  const listaId = `etiquetas-${pedido.pedidoId}`;
+
+  async function agregar() {
+    const t = texto.trim().replace(/\s+/g, " ").slice(0, MAX_ETIQUETA);
+    if (!t) return;
+    if (await onAplicar([t], [])) setTexto("");
+  }
+
+  return (
+    <div className="mt-3">
+      <span className={labelClass}>Etiquetas</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {pedido.etiquetas.map((t) => (
+          <Chip
+            key={t}
+            texto={t}
+            onQuitar={guardando ? undefined : () => void onAplicar([], [t])}
+          />
+        ))}
+        <input
+          type="text"
+          list={listaId}
+          value={texto}
+          maxLength={MAX_ETIQUETA}
+          onChange={(e) => setTexto(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void agregar();
+            }
+          }}
+          placeholder="Nueva etiqueta…"
+          className="h-8 w-40 rounded-lg border border-border bg-card px-2 text-xs text-card-foreground outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+        />
+        <datalist id={listaId}>
+          {sugerencias
+            .filter((t) => !pedido.etiquetas.includes(t))
+            .map((t) => (
+              <option key={t} value={t} />
+            ))}
+        </datalist>
+        <button
+          type="button"
+          onClick={() => void agregar()}
+          disabled={guardando || !texto.trim()}
+          className="inline-flex h-8 items-center rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-primary shadow-sm hover:bg-muted disabled:opacity-40"
+        >
+          Agregar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Dato({
   label,
   children,
@@ -138,6 +249,11 @@ export default function MisPedidosPanel() {
   const [fCentro, setFCentro] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
+  const [fEtiqueta, setFEtiqueta] = useState("");
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
+  const [textoEtiqueta, setTextoEtiqueta] = useState("");
+  const [guardandoEt, setGuardandoEt] = useState(false);
+  const [errorEt, setErrorEt] = useState<string | null>(null);
   const [orden, setOrden] = useState<Orden>("recientes");
   const [visibles, setVisibles] = useState(POR_PAGINA);
   const [abiertos, setAbiertos] = useState<Set<string>>(new Set());
@@ -185,6 +301,9 @@ export default function MisPedidosPanel() {
     return {
       solicitantes: unicos((p) => p.solicitante),
       centros: unicos((p) => p.centroNegocio || p.centroCodigo),
+      etiquetas: Array.from(
+        new Set(pedidos.flatMap((p) => p.etiquetas ?? []))
+      ).sort((a, b) => a.localeCompare(b, "es")),
     };
   }, [pedidos]);
 
@@ -196,6 +315,7 @@ export default function MisPedidosPanel() {
       if (fSolicitante && p.solicitante !== fSolicitante) return false;
       if (fCentro && (p.centroNegocio || p.centroCodigo) !== fCentro)
         return false;
+      if (fEtiqueta && !(p.etiquetas ?? []).includes(fEtiqueta)) return false;
       const f = p.fecha.slice(0, 10);
       if (desde && f < desde) return false;
       if (hasta && f > hasta) return false;
@@ -207,6 +327,7 @@ export default function MisPedidosPanel() {
             p.centroNegocio,
             p.centroCodigo,
             p.comentario,
+            ...(p.etiquetas ?? []),
             ...p.items.map((it) => it.nombre),
           ].join(" ")
         );
@@ -214,7 +335,7 @@ export default function MisPedidosPanel() {
       }
       return true;
     });
-  }, [pedidos, busqueda, fSolicitante, fCentro, desde, hasta]);
+  }, [pedidos, busqueda, fSolicitante, fCentro, fEtiqueta, desde, hasta]);
 
   const conteo = useMemo(() => {
     const c: Record<Vista, number> = {
@@ -262,6 +383,7 @@ export default function MisPedidosPanel() {
     busqueda !== "" ||
     fSolicitante !== "" ||
     fCentro !== "" ||
+    fEtiqueta !== "" ||
     desde !== "" ||
     hasta !== "";
 
@@ -270,6 +392,7 @@ export default function MisPedidosPanel() {
     setBusqueda("");
     setFSolicitante("");
     setFCentro("");
+    setFEtiqueta("");
     setDesde("");
     setHasta("");
     setVisibles(POR_PAGINA);
@@ -284,6 +407,61 @@ export default function MisPedidosPanel() {
       // Sin sessionStorage el formulario simplemente se abre vacío.
     }
     router.push("/enviar-pedido");
+  }
+
+  function alternarSeleccion(id: string) {
+    setSeleccion((prev) => {
+      const sig = new Set(prev);
+      if (sig.has(id)) sig.delete(id);
+      else sig.add(id);
+      return sig;
+    });
+  }
+
+  // Agrega y/o quita etiquetas a uno o varios pedidos y refleja el resultado
+  // devuelto por el servidor en la lista.
+  async function aplicarEtiquetas(
+    ids: string[],
+    agregar: string[],
+    quitar: string[]
+  ): Promise<boolean> {
+    setGuardandoEt(true);
+    setErrorEt(null);
+    try {
+      const res = await fetch("/api/pedidos/etiquetas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pedidoIds: ids, agregar, quitar }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo guardar la etiqueta.");
+      const nuevas = data.etiquetas as Record<string, string[]>;
+      setPedidos((prev) =>
+        prev.map((p) =>
+          nuevas[p.pedidoId] ? { ...p, etiquetas: nuevas[p.pedidoId] } : p
+        )
+      );
+      return true;
+    } catch (err) {
+      setErrorEt(err instanceof Error ? err.message : "Error desconocido");
+      return false;
+    } finally {
+      setGuardandoEt(false);
+    }
+  }
+
+  async function etiquetarSeleccion(modo: "agregar" | "quitar") {
+    const t = textoEtiqueta.trim().replace(/\s+/g, " ").slice(0, MAX_ETIQUETA);
+    if (!t || seleccion.size === 0) return;
+    const ok = await aplicarEtiquetas(
+      Array.from(seleccion),
+      modo === "agregar" ? [t] : [],
+      modo === "quitar" ? [t] : []
+    );
+    if (ok) {
+      setTextoEtiqueta("");
+      setSeleccion(new Set());
+    }
   }
 
   function alternar(id: string) {
@@ -431,7 +609,22 @@ export default function MisPedidosPanel() {
               onChange={(e) => setHasta(e.target.value)}
             />
           </label>
-          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-8 lg:justify-end">
+          <label className="lg:col-span-3">
+            <span className={labelClass}>Etiqueta</span>
+            <select
+              className={fieldClass}
+              value={fEtiqueta}
+              onChange={(e) => setFEtiqueta(e.target.value)}
+            >
+              <option value="">Todas</option>
+              {opciones.etiquetas.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5 lg:justify-end">
             {hayFiltros && (
               <button
                 type="button"
@@ -476,10 +669,29 @@ export default function MisPedidosPanel() {
         <p className="text-sm text-muted-foreground">Cargando pedidos…</p>
       )}
       {!cargando && !error && (
-        <p className="text-sm text-muted-foreground">
-          {lista.length === pedidos.length
-            ? `${lista.length} pedido${lista.length === 1 ? "" : "s"}`
-            : `${lista.length} de ${pedidos.length} pedidos`}
+        <p className="flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground">
+          <span>
+            {lista.length === pedidos.length
+              ? `${lista.length} pedido${lista.length === 1 ? "" : "s"}`
+              : `${lista.length} de ${pedidos.length} pedidos`}
+          </span>
+          {mostrados.length > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setSeleccion(
+                  mostrados.every((p) => seleccion.has(p.pedidoId))
+                    ? new Set()
+                    : new Set(mostrados.map((p) => p.pedidoId))
+                )
+              }
+              className="font-semibold text-accent hover:underline"
+            >
+              {mostrados.every((p) => seleccion.has(p.pedidoId))
+                ? "Deseleccionar visibles"
+                : "Seleccionar visibles"}
+            </button>
+          )}
         </p>
       )}
       {!cargando && !error && lista.length === 0 && (
@@ -508,12 +720,22 @@ export default function MisPedidosPanel() {
                 tarde ? "border-destructive/40" : "border-border"
               }`}
             >
-              <button
-                type="button"
-                aria-expanded={abierto}
-                onClick={() => alternar(p.pedidoId)}
-                className="grid w-full grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1 px-4 py-3 text-left lg:grid-cols-[120px_150px_minmax(0,1.4fr)_minmax(0,1fr)_130px_150px]"
-              >
+              <div className="flex items-center">
+                <label className="flex shrink-0 cursor-pointer items-center self-stretch pl-4 pr-1">
+                  <input
+                    type="checkbox"
+                    checked={seleccion.has(p.pedidoId)}
+                    onChange={() => alternarSeleccion(p.pedidoId)}
+                    aria-label={`Seleccionar pedido ${p.pedidoId}`}
+                    className="h-4 w-4 accent-[#0369a1]"
+                  />
+                </label>
+                <button
+                  type="button"
+                  aria-expanded={abierto}
+                  onClick={() => alternar(p.pedidoId)}
+                  className="grid min-w-0 flex-1 grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1 px-3 py-3 text-left lg:grid-cols-[120px_150px_minmax(0,1.4fr)_minmax(0,1fr)_130px_150px]"
+                >
                 <span className="text-sm font-extrabold text-primary">
                   {p.pedidoId}
                 </span>
@@ -559,7 +781,21 @@ export default function MisPedidosPanel() {
                     {recibidos}/{p.items.length} art.
                   </span>
                 </span>
-              </button>
+                </button>
+              </div>
+
+              {p.etiquetas.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-4 pb-3 pl-10">
+                  {p.etiquetas.map((t) => (
+                    <Chip
+                      key={t}
+                      texto={t}
+                      activo={fEtiqueta === t}
+                      onClick={() => setFEtiqueta(fEtiqueta === t ? "" : t)}
+                    />
+                  ))}
+                </div>
+              )}
 
               {abierto && (
                 <div className="border-t border-border px-4 py-3">
@@ -574,6 +810,15 @@ export default function MisPedidosPanel() {
                       <Dato label="Motivo del estado">{p.motivoEstado}</Dato>
                     )}
                   </dl>
+
+                  <EditorEtiquetas
+                    pedido={p}
+                    sugerencias={opciones.etiquetas}
+                    guardando={guardandoEt}
+                    onAplicar={(agregar, quitar) =>
+                      aplicarEtiquetas([p.pedidoId], agregar, quitar)
+                    }
+                  />
 
                   <div className="mt-3">
                     <button
@@ -654,6 +899,61 @@ export default function MisPedidosPanel() {
           );
         })}
       </ul>
+
+      {seleccion.size > 0 && (
+        <div className="sticky bottom-3 z-30 rounded-xl border border-border bg-card p-3 shadow-lg">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-primary">
+              {seleccion.size} seleccionado{seleccion.size === 1 ? "" : "s"}
+            </span>
+            <input
+              type="text"
+              list="etiquetas-existentes"
+              value={textoEtiqueta}
+              maxLength={MAX_ETIQUETA}
+              onChange={(e) => setTextoEtiqueta(e.target.value)}
+              placeholder="Etiqueta (p. ej. Calderas)"
+              className={`${fieldClass} !w-56`}
+            />
+            <datalist id="etiquetas-existentes">
+              {opciones.etiquetas.map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+            <button
+              type="button"
+              onClick={() => etiquetarSeleccion("agregar")}
+              disabled={guardandoEt || !textoEtiqueta.trim()}
+              className="inline-flex h-10 items-center rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:opacity-40"
+            >
+              {guardandoEt ? "Guardando…" : "Etiquetar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => etiquetarSeleccion("quitar")}
+              disabled={guardandoEt || !textoEtiqueta.trim()}
+              className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-40"
+            >
+              Quitar etiqueta
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSeleccion(new Set());
+                setErrorEt(null);
+              }}
+              className="ml-auto text-sm font-semibold text-muted-foreground hover:underline"
+            >
+              Cancelar
+            </button>
+          </div>
+          {errorEt && (
+            <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+              {errorEt}
+            </p>
+          )}
+        </div>
+      )}
 
       {lista.length > visibles && (
         <div className="text-center">
