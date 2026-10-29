@@ -19,25 +19,15 @@ function norm(v: string | undefined): string {
   return (v ?? "").trim();
 }
 
-// Pestaña con centros cargados a mano (la primera pestaña se sobrescribe a
-// diario con la exportación de Defontana, cuya API no trae todos los centros,
-// p. ej. TYP). Mismas columnas que la primera pestaña.
-const HOJA_MANUAL = "Centros manuales";
-
 /**
  * Centros de negocio válidos para imputar un pedido:
  * solo los que tienen `Imputable = S` y `Activo = S`, tomados de la primera
- * pestaña y de la pestaña "Centros manuales" (si existe).
+ * pestaña (que ya incluye los TYP).
  */
 export async function getCentrosNegocio(): Promise<CentroNegocio[]> {
   const id = centrosSheetId();
   const sheetTitle = await getFirstSheetTitle(id);
   const rows = await readRange(id, `${sheetTitle}!A2:F`);
-  try {
-    rows.push(...(await readRange(id, `'${HOJA_MANUAL}'!A2:F`)));
-  } catch {
-    // La pestaña manual es opcional.
-  }
 
   const centros: CentroNegocio[] = [];
   const vistos = new Set<string>();

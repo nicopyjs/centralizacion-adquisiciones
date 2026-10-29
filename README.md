@@ -41,9 +41,7 @@ Solo se muestran los que tienen `Activo = S`.
 **Centros de negocio** (spreadsheet `CENTROS_SHEET_ID`, primera pestaña) — columnas:
 `C Code`, `D Description`, `E Imputable`, `F Activo`.
 Solo se ofrecen los que tienen `Imputable = S` **y** `Activo = S` (~205).
-Además se lee la pestaña **`Centros manuales`** (mismas columnas, códigos rellenados con
-ceros a 15 caracteres) para centros que la API de Defontana no trae (p. ej. TYP); la
-primera pestaña se sobrescribe a diario, esta no.
+La primera pestaña ya incluye los TYP; la pestaña `Centros manuales` ya no se lee.
 
 **Etiquetas de pedidos** (pestaña `Etiquetas` del spreadsheet `SHEET_ID`, se crea sola al
 etiquetar el primer pedido) — columnas `Pedido ID`, `Área`, `Etiquetas` (separadas por `|`).
