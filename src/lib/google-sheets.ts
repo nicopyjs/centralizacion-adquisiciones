@@ -181,6 +181,45 @@ export async function appendRows(
   }
 }
 
+/**
+ * Elimina una fila completa de una pestaña. `fila` es el número de fila de la
+ * planilla (base 1); las filas de abajo suben un lugar.
+ */
+export async function deleteRow(
+  spreadsheetId: string,
+  sheetTitle: string,
+  fila: number
+): Promise<void> {
+  const meta = await getSpreadsheetMeta(spreadsheetId);
+  const sheet = meta.sheets.find((s) => s.properties.title === sheetTitle);
+  if (!sheet) throw new Error(`No existe la pestaña "${sheetTitle}".`);
+
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId: sheet.properties.sheetId,
+              dimension: "ROWS",
+              startIndex: fila - 1,
+              endIndex: fila,
+            },
+          },
+        },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Error al eliminar la fila ${fila} de "${sheetTitle}" (${res.status}): ${await res.text()}`
+    );
+  }
+}
+
 /** Crea una pestaña si no existe. */
 export async function ensureSheet(
   spreadsheetId: string,

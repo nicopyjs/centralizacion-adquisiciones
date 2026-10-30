@@ -5,6 +5,7 @@ import {
   appendRows,
   articulosSheetId,
   batchWriteRanges,
+  deleteRow,
   ensureSheet,
   getSpreadsheetMeta,
   readRange,
@@ -506,6 +507,56 @@ export async function PATCH(request: Request) {
       fechaRecepcionBodega,
       fechaEntregaSolicitante,
     });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/**
+ * Elimina un artículo (una fila) de un pedido. Solo Adquisiciones.
+ * Body: `{ pedidoId, fila, codigo }`. Como las filas se desplazan al borrar,
+ * se verifica que la fila indicada siga siendo ese pedido y ese artículo
+ * (por si el panel tenía datos desactualizados). No se puede quitar el último
+ * artículo de un pedido: para eso está «Anular».
+ */
+export async function DELETE(request: Request) {
+  if (!(await haySesion())) return noAutorizado();
+  let body: { pedidoId?: unknown; fila?: unknown; codigo?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+  const pedidoId = str(body.pedidoId);
+  const codigo = str(body.codigo);
+  const fila = Number(body.fila);
+  if (!pedidoId || !Number.isInteger(fila) || fila < 2) {
+    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+  }
+
+  const sheetId = articulosSheetId();
+  try {
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:L`);
+    const delPedido = rows.filter((r) => str(r[0]) === pedidoId);
+    const objetivo = rows[fila - 2];
+    if (!objetivo || str(objetivo[0]) !== pedidoId || str(objetivo[11]) !== codigo) {
+      return NextResponse.json(
+        { error: "El pedido cambió. Recarga la lista e inténtalo de nuevo." },
+        { status: 409 }
+      );
+    }
+    if (delPedido.length <= 1) {
+      return NextResponse.json(
+        {
+          error:
+            "No se puede quitar el único artículo del pedido. Usa «Anular» para el pedido completo.",
+        },
+        { status: 400 }
+      );
+    }
+    await deleteRow(sheetId, PEDIDOS_SHEET, fila);
+    return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });

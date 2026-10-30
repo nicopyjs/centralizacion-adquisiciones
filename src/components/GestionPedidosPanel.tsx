@@ -300,6 +300,16 @@ export default function GestionPedidosPanel() {
   const [enviandoEstado, setEnviandoEstado] = useState(false);
   const [errorEstado, setErrorEstado] = useState<string | null>(null);
 
+  // Eliminar un artículo de un pedido (con diálogo de confirmación).
+  const [eliminando, setEliminando] = useState<{
+    pedidoId: string;
+    fila: number;
+    codigo: string;
+    nombre: string;
+  } | null>(null);
+  const [enviandoEliminar, setEnviandoEliminar] = useState(false);
+  const [errorEliminar, setErrorEliminar] = useState<string | null>(null);
+
   const detalleRef = useRef<HTMLElement>(null);
   const ultimaCarga = useRef(0);
 
@@ -999,6 +1009,43 @@ export default function GestionPedidosPanel() {
     }
   }
 
+  async function confirmarEliminar() {
+    if (!eliminando) return;
+    setEnviandoEliminar(true);
+    setErrorEliminar(null);
+    try {
+      const res = await fetch("/api/pedidos", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pedidoId: eliminando.pedidoId,
+          fila: eliminando.fila,
+          codigo: eliminando.codigo,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo eliminar.");
+      // Las filas de abajo suben un lugar: todo lo indexado por fila queda
+      // desfasado. Solo se llega aquí sin cambios pendientes, así que se
+      // limpia y se recarga la lista desde la planilla.
+      setEdiciones({});
+      setGuardando({});
+      setGuardado({});
+      setErrores({});
+      setSeleccionFilas(new Set());
+      setEliminando(null);
+      await cargarPedidos();
+    } catch (err) {
+      setErrorEliminar(err instanceof Error ? err.message : "Error de red.");
+    } finally {
+      setEnviandoEliminar(false);
+    }
+  }
+
   async function guardarTodo() {
     if (guardandoTodo) return;
     setGuardandoTodo(true);
@@ -1584,10 +1631,31 @@ export default function GestionPedidosPanel() {
               onAlternarTodasLasFilas={alternarTodasLasFilas}
               onAccion={abrirAccion}
               onAplicarATodos={aplicarCamposEnBloque}
+              hayCambiosPendientes={totalCambios > 0}
+              onEliminar={(it) => {
+                setErrorEliminar(null);
+                setEliminando({
+                  pedidoId: pedidoActual.pedidoId,
+                  fila: it.fila,
+                  codigo: it.codigo,
+                  nombre: it.nombre,
+                });
+              }}
             />
           )}
         </section>
       </div>
+
+      {eliminando && (
+        <DialogoEliminar
+          nombre={eliminando.nombre}
+          pedidoId={eliminando.pedidoId}
+          error={errorEliminar}
+          enviando={enviandoEliminar}
+          onCancelar={() => setEliminando(null)}
+          onConfirmar={() => void confirmarEliminar()}
+        />
+      )}
 
       {accion && (
         <DialogoEstado
@@ -1938,6 +2006,79 @@ function DialogoEstado({
   );
 }
 
+function DialogoEliminar({
+  nombre,
+  pedidoId,
+  error,
+  enviando,
+  onCancelar,
+  onConfirmar,
+}: {
+  nombre: string;
+  pedidoId: string;
+  error: string | null;
+  enviando: boolean;
+  onCancelar: () => void;
+  onConfirmar: () => void;
+}) {
+  const caja = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    caja.current?.focus();
+  }, []);
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCancelar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) onCancelar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Eliminar artículo del pedido"
+        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold text-primary">
+          Eliminar artículo del pedido {folioCorto(pedidoId)}
+        </h3>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Se quitará <strong className="text-card-foreground">{nombre}</strong>{" "}
+          de la planilla. Esta acción no se puede deshacer. Si lo que quieres es
+          descartar el pedido completo, usa «Anular».
+        </p>
+        {error && (
+          <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancelar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirmar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg bg-destructive px-4 text-sm font-bold text-destructive-foreground shadow-sm hover:opacity-90 disabled:opacity-60"
+          >
+            {enviando ? "Eliminando…" : "Eliminar artículo"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <kbd className="rounded border border-border bg-card px-1 font-sans text-[10px] font-semibold text-secondary">
@@ -1968,6 +2109,8 @@ function Detalle({
   onAlternarTodasLasFilas,
   onAccion,
   onAplicarATodos,
+  hayCambiosPendientes,
+  onEliminar,
 }: {
   pedido: PedidoResumen;
   ediciones: Record<number, LineaEdit>;
@@ -1993,6 +2136,9 @@ function Detalle({
     items: PedidoItem[],
     campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
   ) => void;
+  /** Hay filas editadas sin guardar en algún pedido: no se puede eliminar. */
+  hayCambiosPendientes: boolean;
+  onEliminar: (it: PedidoItem) => void;
 }) {
   const bloqueado = pedido.estadoManual !== "";
   const sinCambios = cambios === 0;
@@ -2624,6 +2770,33 @@ function Detalle({
                             : "Guardar"}
                       </button>
                     ) : null}
+                    {pedido.items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => onEliminar(it)}
+                        disabled={lock || hayCambiosPendientes}
+                        title={
+                          hayCambiosPendientes
+                            ? "Guarda o descarta los cambios pendientes para poder eliminar"
+                            : "Eliminar este artículo del pedido"
+                        }
+                        aria-label={`Eliminar ${it.nombre} del pedido`}
+                        className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden
+                        >
+                          <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
+                        </svg>
+                      </button>
+                    )}
                     {errores[it.fila] && (
                       <p
                         role="alert"
