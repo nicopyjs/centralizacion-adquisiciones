@@ -56,6 +56,9 @@ export default function LoginGestion({
     }
   }
 
+  const volver =
+    typeof window === "undefined" ? "/" : window.location.pathname;
+
   return (
     <form
       onSubmit={entrar}
@@ -68,7 +71,17 @@ export default function LoginGestion({
         Elige tu área y usuario e ingresa la contraseña para continuar.
       </p>
 
-      <div className="mt-5">
+      <a
+        href={`/api/auth/google/login?volver=${encodeURIComponent(volver)}`}
+        className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
+      >
+        Entrar con Google (cuenta @nebchile.cl)
+      </a>
+      <p className="mt-4 text-center text-xs text-muted-foreground">
+        o con contraseña
+      </p>
+
+      <div className="mt-3">
         <label htmlFor="area" className={labelClass}>
           Área
         </label>

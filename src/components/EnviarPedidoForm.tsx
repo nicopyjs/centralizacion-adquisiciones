@@ -158,6 +158,9 @@ function fechaEntregaPorDefecto(): string {
 
 const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
+const MAX_ADJUNTOS = 3;
+const MAX_BYTES_ADJUNTOS = 4 * 1024 * 1024;
+const EXT_ADJUNTOS = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g)$/i;
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 // Como fieldClass, pero sin w-full: se usa en inputs dentro de un flex row
@@ -251,6 +254,7 @@ type ResumenEnvio = {
   asunto: string;
   cuerpo: string;
   urgente: boolean;
+  adjuntos: string[];
   items: {
     id: string;
     nombre: string;
@@ -268,11 +272,14 @@ type ResumenEnvio = {
 function ConfirmarEnvioDialog({
   resumen,
   enviando,
+  porApi,
   onCancelar,
   onConfirmar,
 }: {
   resumen: ResumenEnvio;
   enviando: boolean;
+  /** true si el correo sale solo por la Gmail API (cuenta Google conectada). */
+  porApi: boolean;
   onCancelar: () => void;
   onConfirmar: () => void;
 }) {
@@ -327,6 +334,7 @@ function ConfirmarEnvioDialog({
   if (resumen.despacho) datos.push(["Despacho", resumen.despacho]);
   if (resumen.clasificador1) datos.push(["Clasificador 1", resumen.clasificador1]);
   if (resumen.clasificador2) datos.push(["Clasificador 2", resumen.clasificador2]);
+  if (resumen.adjuntos.length) datos.push(["Adjuntos", resumen.adjuntos.join(", ")]);
 
   return createPortal(
     <div
@@ -361,8 +369,9 @@ function ConfirmarEnvioDialog({
               id="confirmar-desc"
               className="mt-1 text-sm text-muted-foreground"
             >
-              Al confirmar se registra en la planilla y se abre el correo listo
-              para enviar. No podrás editarlo: tendrás que enviarlo sí o sí.
+              {porApi
+                ? "Al confirmar se registra en la planilla y el correo se envía de inmediato a Adquisiciones desde tu cuenta. No podrás editarlo ni agregar archivos después."
+                : "Al confirmar se registra en la planilla y se abre el correo listo para enviar. No podrás editarlo: tendrás que enviarlo sí o sí."}
             </p>
           </div>
         </div>
@@ -704,11 +713,54 @@ export default function EnviarPedidoForm({
     null
   );
   const [confirmando, setConfirmando] = useState(false);
+  // Cuenta Google conectada (envío por la Gmail API). null = no conectada.
+  const [googleEmail, setGoogleEmail] = useState<string | null>(null);
+  const [avisoGoogle, setAvisoGoogle] = useState<string | null>(null);
+  // Archivos para adjuntar al correo (solo con la cuenta Google conectada).
+  const [adjuntos, setAdjuntos] = useState<File[]>([]);
+  const [errorAdjuntos, setErrorAdjuntos] = useState<string | null>(null);
+  const inputAdjuntos = useRef<HTMLInputElement>(null);
+  // Resultado del envío por la API: desde qué cuenta salió, o el error.
+  const [correoEnviado, setCorreoEnviado] = useState<
+    { ok: true; desde: string } | { ok: false; error: string } | null
+  >(null);
   // Se activa al intentar enviar con campos faltantes: marca los vacíos en rojo.
   const [mostrarErrores, setMostrarErrores] = useState(false);
   // Fila recién agregada: su buscador de artículo recibe el foco al montarse.
   const [lineaNuevaId, setLineaNuevaId] = useState<string | null>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelado) setGoogleEmail(d?.googleEmail ?? null);
+      })
+      .catch(() => {});
+    // Regreso del login de Google: ?google=ok | ?google=error&motivo=...
+    const q = new URLSearchParams(window.location.search);
+    const g = q.get("google");
+    if (g) {
+      const motivos: Record<string, string> = {
+        dominio: "Usa tu cuenta @nebchile.cl.",
+        permisos: "Debes aceptar el permiso para enviar correos.",
+        cancelado: "Cancelaste la conexión con Google.",
+        config: "El login con Google no está configurado.",
+      };
+      setTimeout(() => {
+        setAvisoGoogle(
+          g === "ok"
+            ? null
+            : motivos[q.get("motivo") ?? ""] ??
+                "No se pudo conectar con Google. Inténtalo de nuevo."
+        );
+      }, 0);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+    return () => {
+      cancelado = true;
+    };
+  }, []);
   // Folio del pedido del que se copiaron los datos (aviso informativo).
   const [copiadoDe, setCopiadoDe] = useState<string | null>(null);
   // Borradores del navegador y el que se está editando (si viene de uno).
@@ -1257,6 +1309,38 @@ export default function EnviarPedidoForm({
     const correoFinal = resultado.ok
       ? construirCorreo(resultado.folio)
       : correoActual;
+    // Con la cuenta Google conectada, el correo sale por la Gmail API.
+    let enviadoPorApi = false;
+    setCorreoEnviado(null);
+    if (resultado.ok && googleEmail) {
+      try {
+        const form = new FormData();
+        form.set("folio", resultado.folio);
+        form.set("cc", correoFinal.cc);
+        form.set("asunto", correoFinal.asunto);
+        form.set("cuerpo", correoFinal.cuerpoCorreo);
+        for (const f of adjuntos) form.append("archivo", f);
+        const res = await fetch("/api/pedidos/correo", {
+          method: "POST",
+          body: form,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          enviadoPorApi = true;
+          setCorreoEnviado({ ok: true, desde: data.desde as string });
+        } else {
+          if (data.reconectar) setGoogleEmail(null);
+          setCorreoEnviado({
+            ok: false,
+            error:
+              (data.error || "No se pudo enviar el correo.") +
+              (adjuntos.length ? " Recuerda adjuntar los archivos en Gmail." : ""),
+          });
+        }
+      } catch {
+        setCorreoEnviado({ ok: false, error: "Error de red al enviar el correo." });
+      }
+    }
     if (resultado.ok) {
       // Copia del correo para «Abrir Gmail» y limpieza de los campos, así el
       // pedido no se puede volver a registrar por error.
@@ -1270,8 +1354,8 @@ export default function EnviarPedidoForm({
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
     // bloquea la apertura automática) y abre el correo.
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    // Se abre Gmail igual: el registro en planilla es complementario al correo.
-    abrirGmail(correoFinal);
+    // Si no salió por la API, se abre Gmail como siempre.
+    if (!enviadoPorApi) abrirGmail(correoFinal);
   }
 
   const hayAlgoQueGuardar =
@@ -1360,8 +1444,28 @@ export default function EnviarPedidoForm({
     setClasificador2("");
     setDespacho("");
     setComentario("");
+    setAdjuntos([]);
+    setErrorAdjuntos(null);
     setFechaEntrega(fechaEntregaPorDefecto());
     setUrgente(false);
+  }
+
+  function elegirAdjuntos(lista: FileList | null) {
+    if (!lista) return;
+    const sig = [...adjuntos, ...Array.from(lista)];
+    if (sig.length > MAX_ADJUNTOS) {
+      setErrorAdjuntos(`Máximo ${MAX_ADJUNTOS} archivos.`);
+    } else if (sig.reduce((s, f) => s + f.size, 0) > MAX_BYTES_ADJUNTOS) {
+      setErrorAdjuntos("Los archivos superan el máximo de 4 MB en total.");
+    } else if (
+      sig.some((f) => !EXT_ADJUNTOS.test(f.name))
+    ) {
+      setErrorAdjuntos("Solo PDF, Excel, Word, CSV o imágenes (PNG/JPG).");
+    } else {
+      setErrorAdjuntos(null);
+      setAdjuntos(sig);
+    }
+    if (inputAdjuntos.current) inputAdjuntos.current.value = "";
   }
 
   function nuevoPedido() {
@@ -1426,6 +1530,7 @@ export default function EnviarPedidoForm({
     asunto,
     cuerpo: cuerpoCorreo,
     urgente,
+    adjuntos: adjuntos.map((f) => f.name),
     items: lineasCompletas.map((l) => ({
       id: l.id,
       nombre: l.nombre,
@@ -1518,6 +1623,80 @@ export default function EnviarPedidoForm({
             </ul>
           </section>
         )}
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3 text-sm shadow-sm sm:px-4"
+        >
+          <p className="min-w-0 text-card-foreground/80">
+            {googleEmail ? (
+              <>
+                El correo del pedido se enviará desde{" "}
+                <strong className="text-primary">{googleEmail}</strong>.
+              </>
+            ) : (
+              <>
+                Conecta tu cuenta de Google para que la app envíe el correo por
+                ti. Sin conectar, se abrirá Gmail para que lo envíes a mano.
+              </>
+            )}
+            {avisoGoogle && (
+              <span className="mt-1 block font-semibold text-warning">
+                {avisoGoogle}
+              </span>
+            )}
+          </p>
+          {googleEmail ? (
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch("/api/auth/google/logout", { method: "POST" });
+                setGoogleEmail(null);
+              }}
+              className={botonSecundario}
+            >
+              Desconectar
+            </button>
+          ) : (
+            <a
+              href={`/api/auth/google/login?volver=${encodeURIComponent(
+                typeof window === "undefined" ? "/enviar-pedido" : window.location.pathname
+              )}`}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
+            >
+              <IconMail />
+              Conectar con Google
+            </a>
+          )}
+        </div>
+        {googleEmail && !registro && (
+          <div
+            role="note"
+            className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning-surface p-3 text-sm sm:px-4"
+          >
+            <span
+              aria-hidden
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-warning text-accent-foreground"
+            >
+              <IconWarning />
+            </span>
+            <div className="min-w-0 text-card-foreground/90">
+              <p className="font-bold text-warning">Cambió la forma de enviar el pedido</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                <li>
+                  Ahora, al presionar <strong>«Revisar y enviar pedido»</strong> y
+                  confirmar, el pedido <strong>se envía directo por correo</strong>{" "}
+                  desde tu cuenta. Ya no se abre Gmail para revisarlo antes.
+                </li>
+                <li>
+                  Si necesitas <strong>adjuntar archivos</strong> (PDF, Excel…),
+                  hazlo <strong>aquí mismo en la página</strong>, en «Archivos
+                  adjuntos» (sección Datos del pedido), <strong>antes</strong> de
+                  enviar. Después no se pueden agregar.
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
         {registro && (
           <div
             ref={bannerRef}
@@ -1548,25 +1727,31 @@ export default function EnviarPedidoForm({
                     : "No se pudo registrar el pedido en la planilla"}
                 </p>
                 <p className="mt-0.5 text-sm text-card-foreground/80">
-                  {registro.ok
-                    ? "Si Gmail no se abrió solo, toca «Abrir Gmail». Revisa el correo y presiona Enviar."
-                    : `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`}
+                  {!registro.ok
+                    ? `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`
+                    : correoEnviado?.ok
+                      ? `Correo enviado a Adquisiciones desde ${correoEnviado.desde}.`
+                      : correoEnviado
+                        ? `${correoEnviado.error} Se abrió Gmail para que lo envíes a mano; si no lo ves, toca «Abrir Gmail».`
+                        : "Si Gmail no se abrió solo, toca «Abrir Gmail». Revisa el correo y presiona Enviar."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      abrirGmail(
-                        registro.ok && correoRegistrado
-                          ? correoRegistrado
-                          : correoActual
-                      )
-                    }
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
-                  >
-                    <IconMail />
-                    Abrir Gmail
-                  </button>
+                  {!correoEnviado?.ok && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        abrirGmail(
+                          registro.ok && correoRegistrado
+                            ? correoRegistrado
+                            : correoActual
+                        )
+                      }
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover"
+                    >
+                      <IconMail />
+                      Abrir Gmail
+                    </button>
+                  )}
                   {registro.ok && (
                     <button
                       type="button"
@@ -1775,6 +1960,72 @@ export default function EnviarPedidoForm({
               onChange={(e) => setComentario(e.target.value)}
               placeholder="Opcional"
             />
+          </div>
+
+          <div className="mt-4">
+            <span className={labelClass}>Archivos adjuntos</span>
+            {googleEmail ? (
+              <>
+                <input
+                  ref={inputAdjuntos}
+                  type="file"
+                  multiple
+                  accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg"
+                  className="hidden"
+                  onChange={(e) => elegirAdjuntos(e.target.files)}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => inputAdjuntos.current?.click()}
+                    disabled={adjuntos.length >= MAX_ADJUNTOS}
+                    className={botonSecundario}
+                  >
+                    Adjuntar archivo
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    PDF, Excel, Word, CSV o imagen · máx. {MAX_ADJUNTOS}{" "}
+                    archivos y 4 MB en total.
+                  </span>
+                </div>
+                {adjuntos.length > 0 && (
+                  <ul className="mt-2 space-y-1.5">
+                    {adjuntos.map((f, i) => (
+                      <li
+                        key={`${f.name}-${i}`}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-sm"
+                      >
+                        <span className="min-w-0 truncate">
+                          {f.name}{" "}
+                          <span className="text-xs text-muted-foreground">
+                            ({Math.max(1, Math.round(f.size / 1024))} KB)
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdjuntos((prev) => prev.filter((_, j) => j !== i))
+                          }
+                          className="shrink-0 text-xs font-semibold text-destructive hover:underline"
+                        >
+                          Quitar
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {errorAdjuntos && (
+                  <p role="alert" className="mt-1.5 text-xs font-semibold text-destructive">
+                    {errorAdjuntos}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Conecta tu cuenta de Google (arriba) para adjuntar archivos al
+                correo. Sin conectar, adjúntalos a mano en Gmail.
+              </p>
+            )}
           </div>
         </SectionCard>
 
@@ -2099,7 +2350,11 @@ export default function EnviarPedidoForm({
             className="mt-4 hidden h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 data-[incompleto]:opacity-60 xl:inline-flex"
           >
             <IconMail />
-            {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
+            {registrando
+              ? "Registrando…"
+              : googleEmail
+                ? "Revisar y enviar pedido"
+                : "Revisar y enviar por Gmail"}
           </button>
 
           <button
@@ -2121,8 +2376,10 @@ export default function EnviarPedidoForm({
 
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
             <span className="font-bold text-warning">Importante:</span> al
-            confirmar no podrás editar el pedido y tendrás que enviar el correo
-            sí o sí.
+            confirmar no podrás editar el pedido
+            {googleEmail
+              ? " y el correo se enviará de inmediato."
+              : " y tendrás que enviar el correo sí o sí."}
           </p>
         </section>
 
@@ -2169,7 +2426,11 @@ export default function EnviarPedidoForm({
           className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 data-[incompleto]:opacity-60"
         >
           <IconMail />
-          {registrando ? "Registrando…" : "Revisar y enviar por Gmail"}
+          {registrando
+              ? "Registrando…"
+              : googleEmail
+                ? "Revisar y enviar pedido"
+                : "Revisar y enviar por Gmail"}
         </button>
         <div className="mt-1 flex items-center justify-center gap-4 text-xs font-semibold">
           <button
@@ -2195,6 +2456,7 @@ export default function EnviarPedidoForm({
         <ConfirmarEnvioDialog
           resumen={resumenEnvio}
           enviando={registrando}
+          porApi={googleEmail !== null}
           onCancelar={() => setConfirmando(false)}
           onConfirmar={registrarYAbrir}
         />

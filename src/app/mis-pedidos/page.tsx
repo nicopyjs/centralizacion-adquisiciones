@@ -1,8 +1,12 @@
 import { redirect } from "next/navigation";
+import CambiarAreaSelect from "@/components/CambiarAreaSelect";
+import CambiarVistaAdmin from "@/components/CambiarVistaAdmin";
 import CerrarSesionButton from "@/components/CerrarSesionButton";
 import LoginGestion from "@/components/LoginGestion";
 import MisPedidosPanel from "@/components/MisPedidosPanel";
 import { areaLabel, getSesion, perfilLabel } from "@/lib/auth";
+import { getGoogleEmail } from "@/lib/google-oauth";
+import { perfilDeEmail } from "@/lib/usuarios";
 
 export const metadata = {
   title: "Mis Pedidos | Centralización Adquisiciones",
@@ -20,8 +24,13 @@ export default async function MisPedidosPage() {
       </div>
     );
   }
-  // Adquisiciones trabaja en Gestión de Pedidos.
-  if (sesion.perfil === "adquisiciones" || !sesion.area) redirect("/gestion-pedidos");
+  // Adquisiciones trabaja en Gestión de Pedidos; el admin elige un área.
+  if (sesion.perfil === "adquisiciones" || !sesion.area) {
+    if (perfilDeEmail(await getGoogleEmail())?.admin) {
+      return <CambiarVistaAdmin destino="area" />;
+    }
+    redirect("/gestion-pedidos");
+  }
 
   const area = areaLabel(sesion.area);
 
@@ -40,6 +49,7 @@ export default async function MisPedidosPage() {
           <span className="hidden text-xs text-muted-foreground sm:inline">
             Sesión: {perfilLabel(sesion.perfil)} · {area}
           </span>
+          <CambiarAreaSelect actual={sesion.area} />
           <CerrarSesionButton />
         </div>
       </header>

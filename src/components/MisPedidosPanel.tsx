@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
+import ReportarCorreo from "@/components/ReportarCorreo";
 
 type PedidoItem = {
   categoria: string;
@@ -842,6 +843,7 @@ export default function MisPedidosPanel() {
                     sinLeer={noLeidos[p.pedidoId] ?? 0}
                     onActividad={refrescarNoLeidos}
                   />
+                  <ReportarCorreo folio={p.pedidoId} items={p.items} />
 
                   <div className="mt-4 overflow-x-auto">
                     <table className="w-full min-w-[760px] text-left text-sm">

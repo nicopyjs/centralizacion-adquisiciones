@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
+import ReportarCorreo from "@/components/ReportarCorreo";
 
 type PedidoItem = {
   fila: number;
@@ -2542,6 +2543,7 @@ function Detalle({
           sinLeer={sinLeer}
           onActividad={onActividad}
         />
+        <ReportarCorreo folio={pedido.pedidoId} items={pedido.items} />
       </div>
 
       <div className="overflow-x-auto">

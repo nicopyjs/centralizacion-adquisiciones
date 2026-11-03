@@ -1,8 +1,12 @@
 import { redirect } from "next/navigation";
 import CerrarSesionButton from "@/components/CerrarSesionButton";
+import CambiarAreaSelect from "@/components/CambiarAreaSelect";
+import CambiarVistaAdmin from "@/components/CambiarVistaAdmin";
 import GestionPedidosPanel from "@/components/GestionPedidosPanel";
 import LoginGestion from "@/components/LoginGestion";
 import { getPerfil, perfilLabel } from "@/lib/auth";
+import { getGoogleEmail } from "@/lib/google-oauth";
+import { perfilDeEmail } from "@/lib/usuarios";
 
 export const metadata = {
   title: "Gestión de Pedidos | Centralización Adquisiciones",
@@ -20,8 +24,13 @@ export default async function GestionPedidosPage() {
       </div>
     );
   }
-  // Supervisor y Maestro solo consultan: van a su vista.
-  if (perfil !== "adquisiciones") redirect("/mis-pedidos");
+  // Supervisor y Maestro solo consultan: van a su vista. El admin, que puede
+  // estar mirando un área, elige volver a Adquisiciones.
+  const admin = perfilDeEmail(await getGoogleEmail())?.admin ?? false;
+  if (perfil !== "adquisiciones") {
+    if (admin) return <CambiarVistaAdmin destino="adquisiciones" />;
+    redirect("/mis-pedidos");
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1800px]">
@@ -38,6 +47,7 @@ export default async function GestionPedidosPage() {
           <span className="hidden text-xs text-muted-foreground sm:inline">
             Sesión: {perfilLabel(perfil)}
           </span>
+          {admin && <CambiarAreaSelect actual="adquisiciones" />}
           <CerrarSesionButton />
         </div>
       </header>

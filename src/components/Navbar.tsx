@@ -16,12 +16,15 @@ export default function Navbar() {
   const pathname = usePathname();
   // Cada perfil ve solo su sección; sin sesión aparecen ambas.
   const [perfil, setPerfil] = useState<string | null>(null);
+  const [admin, setAdmin] = useState(false);
   useEffect(() => {
     let cancelado = false;
     fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelado) setPerfil(d?.perfil ?? null);
+        if (cancelado) return;
+        setPerfil(d?.perfil ?? null);
+        setAdmin(Boolean(d?.admin));
       })
       .catch(() => {});
     return () => {
@@ -32,8 +35,10 @@ export default function Navbar() {
     ...TABS_BASE,
     ...(perfil === null
       ? [TAB_GESTION, TAB_MIS_PEDIDOS]
-      : perfil === "adquisiciones"
-        ? [TAB_GESTION]
+      : admin
+        ? [TAB_GESTION, TAB_MIS_PEDIDOS]
+        : perfil === "adquisiciones"
+          ? [TAB_GESTION]
         : [TAB_MIS_PEDIDOS]),
   ];
   // Gestión de Pedidos usa todo el ancho; el navbar acompaña ese mismo ancho.
