@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 
 type PedidoItem = {
   categoria: string;
@@ -257,6 +258,7 @@ export default function MisPedidosPanel() {
   const [orden, setOrden] = useState<Orden>("recientes");
   const [visibles, setVisibles] = useState(POR_PAGINA);
   const [abiertos, setAbiertos] = useState<Set<string>>(new Set());
+  const [noLeidos, refrescarNoLeidos] = useChatNoLeidos();
 
   // La API ya devuelve solo los pedidos del área de la sesión.
   useEffect(() => {
@@ -755,6 +757,7 @@ export default function MisPedidosPanel() {
                       Atrasado
                     </span>
                   )}
+                  <InsigniaChat cantidad={noLeidos[p.pedidoId] ?? 0} />
                 </span>
                 <span className="col-span-2 min-w-0 truncate text-sm text-card-foreground lg:col-span-1">
                   {p.centroNegocio || p.centroCodigo || "—"}
@@ -832,6 +835,13 @@ export default function MisPedidosPanel() {
                       Copia este pedido en Enviar Pedido para ajustarlo y enviarlo.
                     </span>
                   </div>
+
+                  <ChatPedido
+                    folio={p.pedidoId}
+                    rol="solicitante"
+                    sinLeer={noLeidos[p.pedidoId] ?? 0}
+                    onActividad={refrescarNoLeidos}
+                  />
 
                   <div className="mt-4 overflow-x-auto">
                     <table className="w-full min-w-[760px] text-left text-sm">

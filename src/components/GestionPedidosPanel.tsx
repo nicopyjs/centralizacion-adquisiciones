@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
+import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 
 type PedidoItem = {
   fila: number;
@@ -254,6 +255,7 @@ function normalizar(s: string): string {
 }
 
 export default function GestionPedidosPanel() {
+  const [noLeidos, refrescarNoLeidos] = useChatNoLeidos();
   const [pedidos, setPedidos] = useState<PedidoResumen[]>([]);
   const [loading, setLoading] = useState(true);
   const [refrescando, setRefrescando] = useState(false);
@@ -1518,6 +1520,7 @@ export default function GestionPedidosPanel() {
                               Atrasado
                             </span>
                           )}
+                          <InsigniaChat cantidad={noLeidos[p.pedidoId] ?? 0} />
                         </span>
                         <span
                           className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${estado.chip}`}
@@ -1602,6 +1605,8 @@ export default function GestionPedidosPanel() {
             <Detalle
               key={pedidoActual.pedidoId}
               pedido={pedidoActual}
+              sinLeer={noLeidos[pedidoActual.pedidoId] ?? 0}
+              onActividad={refrescarNoLeidos}
               ediciones={ediciones}
               guardando={guardando}
               guardado={guardado}
@@ -2089,6 +2094,8 @@ function Kbd({ children }: { children: React.ReactNode }) {
 
 function Detalle({
   pedido,
+  sinLeer,
+  onActividad,
   ediciones,
   guardando,
   guardado,
@@ -2127,6 +2134,9 @@ function Detalle({
   onSiguiente: () => void;
   onCambiar: (it: PedidoItem, campo: keyof LineaEdit, valor: string) => void;
   onMarcarRecibido: (items: PedidoItem[]) => void;
+  /** Mensajes del chat sin leer para este pedido. */
+  sinLeer: number;
+  onActividad: () => void;
   onGuardarLinea: (it: PedidoItem) => Promise<boolean>;
   onGuardarPedido: () => void;
   onAlternarFila: (fila: number) => void;
@@ -2524,6 +2534,15 @@ function Detalle({
           </button>
         </div>
       )}
+
+      <div className="px-4 pb-3">
+        <ChatPedido
+          folio={pedido.pedidoId}
+          rol="adquisiciones"
+          sinLeer={sinLeer}
+          onActividad={onActividad}
+        />
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1340px] border-collapse text-sm">

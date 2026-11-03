@@ -11,7 +11,11 @@ import { JWT } from "google-auth-library";
  *  - CENTROS_SHEET_ID             : ID del spreadsheet de centros de negocio
  */
 
-const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  // Drive: adjuntos del chat de pedidos (carpeta compartida con la cuenta de servicio)
+  "https://www.googleapis.com/auth/drive",
+];
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -54,7 +58,7 @@ function getClient(): JWT {
   return cachedClient;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+export async function authHeaders(): Promise<Record<string, string>> {
   const client = getClient();
   const token = await client.getAccessToken();
   if (!token || !token.token) {
