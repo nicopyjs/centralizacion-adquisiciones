@@ -77,6 +77,8 @@ type DatosBorrador = {
   despacho: string;
   fechaEntrega: string;
   urgente: boolean;
+  /** Texto que se agrega al asunto del correo. */
+  asuntoExtra?: string;
   comentario: string;
   lineas: LineaPedido[];
 };
@@ -703,6 +705,8 @@ export default function EnviarPedidoForm({
   const [fechaEntrega, setFechaEntrega] = useState(fechaEntregaPorDefecto);
   const [urgente, setUrgente] = useState(false);
   const [comentario, setComentario] = useState("");
+  // Texto extra del asunto del correo (aparte del comentario).
+  const [asuntoExtra, setAsuntoExtra] = useState("");
 
   const [lineas, setLineas] = useState<LineaPedido[]>([]);
   const [registrando, setRegistrando] = useState(false);
@@ -1117,9 +1121,9 @@ export default function EnviarPedidoForm({
     { label: "Al menos un artículo con cantidad", ok: lineasCompletas.length > 0 },
   ];
 
-  const comentarioAsunto = comentario.replace(/\s+/g, " ").trim();
+  const asuntoTexto = asuntoExtra.replace(/\s+/g, " ").trim();
   const asunto = `NEB Chile // Adquisiciones // ${centroDesc}${
-    comentarioAsunto ? ` // ${comentarioAsunto}` : ""
+    asuntoTexto ? ` // ${asuntoTexto}` : ""
   }`;
 
   const cuerpoCorreo = useMemo(() => {
@@ -1142,6 +1146,7 @@ export default function EnviarPedidoForm({
 
     const partes = [
       saludo,
+      ...(comentario.trim() ? ["", comentario.trim()] : []),
       "",
       "Junto con saludar, solicito gestión del siguiente pedido:",
       ...(urgente ? ["", "*** PEDIDO URGENTE ***"] : []),
@@ -1156,10 +1161,6 @@ export default function EnviarPedidoForm({
       "Elementos a solicitar:",
       elementos,
     ];
-
-    if (comentario.trim()) {
-      partes.push("", `Comentario: ${comentario.trim()}`);
-    }
 
     partes.push("", "Saludos,", solicitante.trim() || "Nombre");
 
@@ -1362,6 +1363,7 @@ export default function EnviarPedidoForm({
     lineas.length > 0 ||
     centroSel !== "" ||
     comentario.trim() !== "" ||
+    asuntoExtra.trim() !== "" ||
     clasificador1 !== "" ||
     clasificador2 !== "";
 
@@ -1386,6 +1388,7 @@ export default function EnviarPedidoForm({
         despacho,
         fechaEntrega,
         urgente,
+        asuntoExtra,
         comentario,
         lineas,
       },
@@ -1412,6 +1415,7 @@ export default function EnviarPedidoForm({
     setClasificador2(d.clasificador2 ?? "");
     setDespacho(d.despacho ?? "");
     setComentario(d.comentario ?? "");
+    setAsuntoExtra(d.asuntoExtra ?? "");
     setUrgente(d.urgente === true);
     // Una fecha ya vencida (o anterior al mínimo de un pedido normal) vuelve
     // al valor por defecto.
@@ -1444,6 +1448,7 @@ export default function EnviarPedidoForm({
     setClasificador2("");
     setDespacho("");
     setComentario("");
+    setAsuntoExtra("");
     setAdjuntos([]);
     setErrorAdjuntos(null);
     setFechaEntrega(fechaEntregaPorDefecto());
@@ -1949,6 +1954,21 @@ export default function EnviarPedidoForm({
           </div>
 
           <div className="mt-4">
+            <label htmlFor="asunto-extra" className={labelClass}>
+              Asunto
+            </label>
+            <input
+              id="asunto-extra"
+              type="text"
+              className={fieldClass}
+              value={asuntoExtra}
+              onChange={(e) => setAsuntoExtra(e.target.value)}
+              maxLength={120}
+              placeholder="Opcional · se agrega al final del asunto del correo"
+            />
+          </div>
+
+          <div className="mt-4">
             <label htmlFor="comentario" className={labelClass}>
               Comentario
             </label>
@@ -1958,7 +1978,7 @@ export default function EnviarPedidoForm({
               rows={2}
               value={comentario}
               onChange={(e) => setComentario(e.target.value)}
-              placeholder="Opcional"
+              placeholder="Opcional · va en el cuerpo del correo, justo después del saludo"
             />
           </div>
 
