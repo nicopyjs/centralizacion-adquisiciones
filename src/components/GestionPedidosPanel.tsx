@@ -4,6 +4,11 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 import ReportarCorreo from "@/components/ReportarCorreo";
+import {
+  AVISO_RECEPCION,
+  problemasRecepcion,
+  type LineaOC,
+} from "@/lib/defontana";
 
 type PedidoItem = {
   fila: number;
@@ -2086,6 +2091,17 @@ function DialogoConsumo({
   const [ambiente, setAmbiente] = useState("");
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
+  // Recepción de la OC en Defontana (parte de entrada): sin ella no hay stock.
+  type EstadoOC =
+    | { estado: "cargando" | "inexistente" | "error" }
+    | { estado: "ok"; lineas: LineaOC[] };
+  const [ocLeida, setOcLeida] = useState<(EstadoOC & { oc: string }) | null>(null);
+  // Mientras no llegue la respuesta de la OC escrita, se muestra «cargando».
+  const ocInfo: EstadoOC | null = !oc
+    ? null
+    : ocLeida?.oc === oc
+      ? ocLeida
+      : { estado: "cargando" };
   const [cargando, setCargando] = useState(true);
   // Stock por bodega { BC14: { AICA0081: 10 } }; null mientras carga.
   const [stock, setStock] = useState<Record<string, Record<string, number>> | null>(
@@ -2123,6 +2139,50 @@ function DialogoConsumo({
   }, []);
 
   useEffect(() => {
+    if (!oc) return;
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      fetch(`/api/defontana/oc?numero=${oc}`, { cache: "no-store", signal: ctl.signal })
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error);
+          setOcLeida(
+            d.existe
+              ? { oc, estado: "ok", lineas: d.lineas ?? [] }
+              : { oc, estado: "inexistente" }
+          );
+        })
+        .catch((e) => {
+          if (e?.name !== "AbortError") setOcLeida({ oc, estado: "error" });
+        });
+    }, 400);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [oc]);
+
+  // Artículos marcados que la OC aún no tiene recepcionados.
+  const problemasOC =
+    ocInfo?.estado === "ok"
+      ? problemasRecepcion(
+          ocInfo,
+          elegibles
+            .filter((i) => marcadas.has(i.fila))
+            .map((i) => ({
+              codigo: i.codigo,
+              nombre: i.nombre,
+              cantidad: Number(cant[i.fila]) || 0,
+            }))
+        )
+      : [];
+  const ocBloquea =
+    !!oc &&
+    (ocInfo?.estado === "cargando" ||
+      ocInfo?.estado === "inexistente" ||
+      problemasOC.length > 0);
+
+  useEffect(() => {
     caja.current?.focus();
     fetch("/api/defontana/bodegas", { cache: "no-store" })
       .then(async (r) => {
@@ -2149,6 +2209,7 @@ function DialogoConsumo({
       .filter((i) => marcadas.has(i.fila))
       .map((i) => ({ fila: i.fila, cantidad: Number(cant[i.fila]) }));
     if (!bodega) return setError("Elige la bodega de origen.");
+    if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
       const it = elegibles.find((i) => i.fila === l.fila)!;
@@ -2271,6 +2332,29 @@ function DialogoConsumo({
             placeholder="Ej.: 4331"
             className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
           />
+          {ocInfo?.estado === "cargando" && (
+            <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
+          )}
+          {ocInfo?.estado === "inexistente" && (
+            <p className="mt-1 text-xs font-semibold text-destructive">
+              La OC {oc} no existe en Defontana.
+            </p>
+          )}
+          {ocInfo?.estado === "error" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No se pudo consultar la OC; se validará al registrar.
+            </p>
+          )}
+          {ocInfo?.estado === "ok" && problemasOC.length === 0 && (
+            <p className="mt-1 text-xs font-semibold text-success">
+              OC {oc} recepcionada en Defontana.
+            </p>
+          )}
+          {problemasOC.length > 0 && (
+            <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+              OC {oc}: {problemasOC.join("; ")}. {AVISO_RECEPCION}
+            </p>
+          )}
         </label>
 
         <div className="mt-4">
@@ -2358,7 +2442,7 @@ function DialogoConsumo({
           <button
             type="button"
             onClick={() => void confirmar()}
-            disabled={enviando || cargando || elegibles.length === 0}
+            disabled={enviando || cargando || elegibles.length === 0 || ocBloquea}
             className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
           >
             {enviando ? "Registrando…" : "Registrar en Defontana"}

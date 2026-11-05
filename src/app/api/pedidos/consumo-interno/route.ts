@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
-import { ambienteDefontana, crearConsumoInterno } from "@/lib/defontana";
+import {
+  AVISO_RECEPCION,
+  ambienteDefontana,
+  crearConsumoInterno,
+  problemasRecepcion,
+  recepcionOC,
+} from "@/lib/defontana";
 import {
   articulosSheetId,
   batchWriteRanges,
@@ -129,6 +135,28 @@ export async function POST(request: Request) {
         { error: "El pedido no tiene código de centro de negocio." },
         { status: 400 }
       );
+    }
+
+    // Con OC: el material debe estar recepcionado en Defontana (parte de
+    // entrada); si no, el stock no existe o no corresponde a esta OC.
+    if (ocNumero !== undefined) {
+      const oc = await recepcionOC(ocNumero);
+      if (!oc) {
+        return NextResponse.json(
+          { error: `La OC ${ocNumero} no existe en Defontana.` },
+          { status: 400 }
+        );
+      }
+      const problemas = problemasRecepcion(
+        oc,
+        detalle.map((d) => ({ codigo: d.codigo, nombre: d.nombre, cantidad: d.cantidad }))
+      );
+      if (problemas.length > 0) {
+        return NextResponse.json(
+          { error: `OC ${ocNumero}: ${problemas.join("; ")}. ${AVISO_RECEPCION}` },
+          { status: 409 }
+        );
+      }
     }
 
     const fecha = new Date().toLocaleDateString("sv-SE", {

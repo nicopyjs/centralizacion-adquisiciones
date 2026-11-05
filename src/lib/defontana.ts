@@ -54,8 +54,14 @@ async function llamar<T>(
     throw new Error(`Defontana respondió HTTP ${res.status} con un formato inesperado.`);
   }
   if (!res.ok) {
-    const d = data as { title?: string; errors?: Record<string, string[]> };
-    const det = d.errors ? Object.values(d.errors).flat().join(" ") : (d.title ?? "");
+    const d = data as {
+      title?: string;
+      errors?: Record<string, string[]>;
+      exceptionMessage?: string | null;
+    };
+    const det = d.errors
+      ? Object.values(d.errors).flat().join(" ")
+      : (d.exceptionMessage || d.title || "");
     throw new Error(`Defontana respondió HTTP ${res.status}. ${det}`.trim());
   }
   return data as T;
@@ -201,3 +207,68 @@ export async function crearConsumoInterno(
   }
   return { folio: r.number, tipo: r.documentType ?? "CI" };
 }
+
+export type LineaOC = { codigo: string; pedida: number; recibida: number };
+
+/**
+ * Lee una OC de Defontana y cuánto se ha recepcionado de cada línea (la
+ * recepción genera el parte de entrada que sube el stock). Devuelve null si la
+ * OC no existe.
+ */
+export async function recepcionOC(
+  numero: number
+): Promise<{ numero: number; estado: string; lineas: LineaOC[] } | null> {
+  try {
+    const r = await llamar<{
+      success: boolean;
+      purchaseOrderData?: {
+        receiptState?: string;
+        purchaseOrderDetail?: {
+          productId: string;
+          quantity: number;
+          receivedQuantity: number;
+        }[];
+      } | null;
+    }>(`/api/PurchaseOrder/Get?Number=${numero}`);
+    const o = r.purchaseOrderData;
+    if (!r.success || !o) return null;
+    return {
+      numero,
+      estado: o.receiptState ?? "",
+      lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
+        codigo: d.productId,
+        pedida: Number(d.quantity) || 0,
+        recibida: Number(d.receivedQuantity) || 0,
+      })),
+    };
+  } catch (e) {
+    if (e instanceof Error && /no existe/i.test(e.message)) return null;
+    throw e;
+  }
+}
+
+/**
+ * Motivos por los que no se puede consumir contra la OC: el artículo no está
+ * en la OC o aún no se recepcionó (sin parte de entrada no hay stock).
+ */
+export function problemasRecepcion(
+  oc: { lineas: LineaOC[] },
+  pedido: { codigo: string; nombre: string; cantidad: number }[]
+): string[] {
+  const out: string[] = [];
+  for (const p of pedido) {
+    const lineas = oc.lineas.filter((l) => l.codigo === p.codigo);
+    if (lineas.length === 0) {
+      out.push(`«${p.nombre}» no está en la OC`);
+      continue;
+    }
+    const recibida = lineas.reduce((a, l) => a + l.recibida, 0);
+    if (recibida <= 0) out.push(`«${p.nombre}» aún no está recepcionado en la OC`);
+    else if (recibida < p.cantidad)
+      out.push(`«${p.nombre}»: la OC tiene recepcionado ${recibida} y pides ${p.cantidad}`);
+  }
+  return out;
+}
+
+export const AVISO_RECEPCION =
+  "Entra a Defontana, recepciona la OC (genera el parte de entrada que sube el stock) y vuelve a intentarlo.";
