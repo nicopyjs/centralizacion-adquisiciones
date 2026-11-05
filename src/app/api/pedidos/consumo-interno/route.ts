@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     pedidoId?: unknown;
     bodega?: unknown;
     oc?: unknown;
+    sinOc?: unknown;
     lineas?: unknown;
   };
   try {
@@ -46,6 +47,15 @@ export async function POST(request: Request) {
   const bodega = str(body.bodega);
   const ocTexto = str(body.oc);
   const ocNumero = ocTexto === "" ? undefined : Number(ocTexto);
+  if (ocNumero === undefined && body.sinOc !== true) {
+    return NextResponse.json(
+      {
+        error:
+          "Indica el N° de OC, o marca «Sin OC» si el material ya estaba en bodega.",
+      },
+      { status: 400 }
+    );
+  }
   if (
     ocNumero !== undefined &&
     (!Number.isInteger(ocNumero) || ocNumero <= 0 || ocNumero > 99_999_999)

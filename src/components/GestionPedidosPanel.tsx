@@ -2091,6 +2091,8 @@ function DialogoConsumo({
   const [ambiente, setAmbiente] = useState("");
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
+  // Excepción: consumo de stock que ya estaba en bodega (sin OC de por medio).
+  const [sinOc, setSinOc] = useState(false);
   // Recepción de la OC en Defontana (parte de entrada): sin ella no hay stock.
   type EstadoOC =
     | { estado: "cargando" | "inexistente" | "error" }
@@ -2209,6 +2211,11 @@ function DialogoConsumo({
       .filter((i) => marcadas.has(i.fila))
       .map((i) => ({ fila: i.fila, cantidad: Number(cant[i.fila]) }));
     if (!bodega) return setError("Elige la bodega de origen.");
+    if (!oc && !sinOc) {
+      return setError(
+        "Indica el N° de OC, o marca «Sin OC» si el material ya estaba en bodega."
+      );
+    }
     if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
@@ -2240,7 +2247,7 @@ function DialogoConsumo({
       const res = await fetch("/api/pedidos/consumo-interno", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pedidoId: pedido.pedidoId, bodega, oc: oc.trim(), lineas }),
+        body: JSON.stringify({ pedidoId: pedido.pedidoId, bodega, oc: oc.trim(), sinOc, lineas }),
       });
       if (res.status === 401) {
         window.location.reload();
@@ -2322,12 +2329,12 @@ function DialogoConsumo({
         </label>
 
         <label className="mt-4 block">
-          <span className={labelClass}>N° de OC (opcional)</span>
+          <span className={labelClass}>N° de OC</span>
           <input
             type="text"
             inputMode="numeric"
             value={oc}
-            disabled={enviando}
+            disabled={enviando || sinOc}
             onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
             placeholder="Ej.: 4331"
             className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -2355,6 +2362,23 @@ function DialogoConsumo({
               OC {oc}: {problemasOC.join("; ")}. {AVISO_RECEPCION}
             </p>
           )}
+        </label>
+
+        <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={sinOc}
+            disabled={enviando}
+            onChange={(e) => {
+              setSinOc(e.target.checked);
+              if (e.target.checked) setOc("");
+            }}
+            className="mt-0.5"
+          />
+          <span>
+            Sin OC: el material ya estaba en bodega (no llegó con una OC). No se
+            valida la recepción; solo el stock de la bodega.
+          </span>
         </label>
 
         <div className="mt-4">
@@ -2442,7 +2466,7 @@ function DialogoConsumo({
           <button
             type="button"
             onClick={() => void confirmar()}
-            disabled={enviando || cargando || elegibles.length === 0 || ocBloquea}
+            disabled={enviando || cargando || elegibles.length === 0 || ocBloquea || (!oc && !sinOc)}
             className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
           >
             {enviando ? "Registrando…" : "Registrar en Defontana"}
