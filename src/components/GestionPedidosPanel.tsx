@@ -1681,7 +1681,7 @@ export default function GestionPedidosPanel() {
             <DialogoConsumo
               pedido={ped}
               onCerrar={() => setConsumoPedido(null)}
-              onRegistrado={(folio, ambiente, lineas) => {
+              onRegistrado={(res, ambiente, lineas) => {
                 const porFila = new Map(
                   lineas.map((l) => [l.fila, l.consumoInterno])
                 );
@@ -1705,7 +1705,14 @@ export default function GestionPedidosPanel() {
                 );
                 setConsumoPedido(null);
                 setAvisoConsumo(
-                  `Consumo interno CI-${folio} registrado en Defontana (${ambiente}).`
+                  `${[
+                    res.folioEntrada
+                      ? `${res.accion === "pe_cd" ? "PE costo directo" : "Parte de entrada"} N° ${res.folioEntrada}`
+                      : "",
+                    res.folioConsumo ? `Consumo interno CI-${res.folioConsumo}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" y ")} registrado en Defontana (${ambiente}).`
                 );
                 window.setTimeout(() => setAvisoConsumo(null), 8000);
               }}
@@ -2079,7 +2086,7 @@ function DialogoConsumo({
   pedido: PedidoResumen;
   onCerrar: () => void;
   onRegistrado: (
-    folio: number,
+    res: { accion: string; folioEntrada?: number; folioConsumo?: number },
     ambiente: string,
     lineas: { fila: number; consumoInterno: string }[]
   ) => void;
@@ -2091,15 +2098,19 @@ function DialogoConsumo({
   const [ambiente, setAmbiente] = useState("");
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
-  // Excepción: consumo de stock que ya estaba en bodega (sin OC de por medio).
-  const [sinOc, setSinOc] = useState(false);
+  type Accion = "pe_ci" | "ci" | "pe" | "pe_cd";
+  const [accion, setAccion] = useState<Accion>("pe_ci");
+  // Costo unitario neto por fila (solo para las acciones con parte de entrada).
+  const [costo, setCosto] = useState<Record<number, string>>({});
+  const conEntrada = accion !== "ci";
+  const conConsumo = accion === "ci" || accion === "pe_ci";
   // Recepción de la OC en Defontana (parte de entrada): sin ella no hay stock.
   type EstadoOC =
     | { estado: "cargando" | "inexistente" | "error" }
     | { estado: "ok"; lineas: LineaOC[] };
   const [ocLeida, setOcLeida] = useState<(EstadoOC & { oc: string }) | null>(null);
   // Mientras no llegue la respuesta de la OC escrita, se muestra «cargando».
-  const ocInfo: EstadoOC | null = !oc
+  const ocInfo: EstadoOC | null = !oc || accion !== "ci"
     ? null
     : ocLeida?.oc === oc
       ? ocLeida
@@ -2113,20 +2124,24 @@ function DialogoConsumo({
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   // Solo artículos ya recibidos y sin consumo registrado.
-  const elegibles = pedido.items.filter(
-    (i) => (i.cantidadRecibida ?? 0) > 0 && !/CI-\d+/.test(i.consumoInterno)
+  const recibidos = pedido.items.filter((i) => (i.cantidadRecibida ?? 0) > 0);
+  const elegibles = recibidos.filter(
+    (i) =>
+      !/CI-\d+/.test(i.consumoInterno) &&
+      (conEntrada ? !/PE(?:CD)?-\d+/.test(i.consumoInterno) : true) &&
+      (conConsumo ? !/PECD-\d+/.test(i.consumoInterno) : true)
   );
   const [cant, setCant] = useState<Record<number, string>>(() =>
     Object.fromEntries(
-      elegibles.map((i) => [i.fila, String(i.cantidadRecibida)])
+      recibidos.map((i) => [i.fila, String(i.cantidadRecibida)])
     )
   );
   const [marcadas, setMarcadas] = useState<Set<number>>(
-    () => new Set(elegibles.map((i) => i.fila))
+    () => new Set(recibidos.map((i) => i.fila))
   );
 
   useEffect(() => {
-    const codigos = Array.from(new Set(elegibles.map((i) => i.codigo)));
+    const codigos = Array.from(new Set(recibidos.map((i) => i.codigo)));
     if (codigos.length === 0) return;
     fetch(`/api/defontana/stock?codigos=${encodeURIComponent(codigos.join(","))}`, {
       cache: "no-store",
@@ -2141,7 +2156,7 @@ function DialogoConsumo({
   }, []);
 
   useEffect(() => {
-    if (!oc) return;
+    if (!oc || accion !== "ci") return;
     const ctl = new AbortController();
     const t = setTimeout(() => {
       fetch(`/api/defontana/oc?numero=${oc}`, { cache: "no-store", signal: ctl.signal })
@@ -2162,7 +2177,7 @@ function DialogoConsumo({
       clearTimeout(t);
       ctl.abort();
     };
-  }, [oc]);
+  }, [oc, accion]);
 
   // Artículos marcados que la OC aún no tiene recepcionados.
   const problemasOC =
@@ -2179,6 +2194,7 @@ function DialogoConsumo({
         )
       : [];
   const ocBloquea =
+    accion === "ci" &&
     !!oc &&
     (ocInfo?.estado === "cargando" ||
       ocInfo?.estado === "inexistente" ||
@@ -2211,11 +2227,6 @@ function DialogoConsumo({
       .filter((i) => marcadas.has(i.fila))
       .map((i) => ({ fila: i.fila, cantidad: Number(cant[i.fila]) }));
     if (!bodega) return setError("Elige la bodega de origen.");
-    if (!oc && !sinOc) {
-      return setError(
-        "Indica el N° de OC, o marca «Sin OC» si el material ya estaba en bodega."
-      );
-    }
     if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
@@ -2226,7 +2237,16 @@ function DialogoConsumo({
         );
       }
     }
-    const faltantes = lineas
+    if (conEntrada) {
+      for (const l of lineas) {
+        const it = elegibles.find((i) => i.fila === l.fila)!;
+        if (!(Number(costo[l.fila]) > 0)) {
+          return setError(`«${it.nombre}»: indica el costo unitario neto (mayor que 0).`);
+        }
+      }
+    }
+    // Con parte de entrada el stock sube antes de consumir: no se valida aquí.
+    const faltantes = (accion === "ci" ? lineas : [])
       .map((l) => ({ l, it: elegibles.find((i) => i.fila === l.fila)! }))
       .filter(({ l, it }) => {
         const disp = stock?.[bodega]?.[it.codigo];
@@ -2247,7 +2267,16 @@ function DialogoConsumo({
       const res = await fetch("/api/pedidos/consumo-interno", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pedidoId: pedido.pedidoId, bodega, oc: oc.trim(), sinOc, lineas }),
+        body: JSON.stringify({
+          pedidoId: pedido.pedidoId,
+          bodega,
+          accion,
+          oc: oc.trim(),
+          lineas: lineas.map((l) => ({
+            ...l,
+            ...(conEntrada ? { costo: Number(costo[l.fila]) } : {}),
+          })),
+        }),
       });
       if (res.status === 401) {
         window.location.reload();
@@ -2255,7 +2284,7 @@ function DialogoConsumo({
       }
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "No se pudo registrar.");
-      onRegistrado(d.folio, d.ambiente, d.lineas ?? []);
+      onRegistrado(d, d.ambiente, d.lineas ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error de red.");
     } finally {
@@ -2282,16 +2311,42 @@ function DialogoConsumo({
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
-          Consumo interno · pedido {folioCorto(pedido.pedidoId)}
+          Movimiento de inventario · pedido {folioCorto(pedido.pedidoId)}
         </h3>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Crea un documento «Consumo interno» en Defontana que descuenta el
-          stock de la bodega y lo imputa al centro{" "}
+          Centro de negocio:{" "}
           <strong className="text-card-foreground">
             {pedido.centroCodigo || "(sin código)"}
           </strong>
           .
         </p>
+        <label className="mt-4 block">
+          <span className={labelClass}>¿Qué quieres registrar?</span>
+          <select
+            value={accion}
+            onChange={(e) => {
+              setAccion(e.target.value as Accion);
+              setError(null);
+            }}
+            disabled={enviando}
+            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <option value="pe_ci">Entrada a bodega + consumo interno</option>
+            <option value="ci">Solo consumo interno (ya hay stock)</option>
+            <option value="pe">Solo parte de entrada a bodega</option>
+            <option value="pe_cd">Parte de entrada a costo directo</option>
+          </select>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {accion === "pe_ci" &&
+              "Sube el stock con un parte de entrada (PE) y enseguida lo descuenta con un consumo interno (CI) imputado al centro."}
+            {accion === "ci" &&
+              "Descuenta stock que ya existe en la bodega (por ejemplo, recepcionado en Defontana) e imputa el gasto al centro."}
+            {accion === "pe" &&
+              "Ingresa el material al inventario (Mercaderías). Queda en stock, sin gasto todavía."}
+            {accion === "pe_cd" &&
+              "Ingresa el material y lo carga directo al gasto del centro (PE costo directo). No hagas consumo interno después: se contaría dos veces."}
+          </span>
+        </label>
         {ambiente === "pruebas" && (
           <p className="mt-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent">
             Ambiente de PRUEBAS (replapi): no afecta la contabilidad real.
@@ -2305,7 +2360,9 @@ function DialogoConsumo({
         )}
 
         <label className="mt-4 block">
-          <span className={labelClass}>Bodega de origen</span>
+          <span className={labelClass}>
+            {accion === "ci" ? "Bodega de origen" : "Bodega"}
+          </span>
           <select
             value={bodega}
             onChange={(e) => setBodega(e.target.value)}
@@ -2328,13 +2385,14 @@ function DialogoConsumo({
           </select>
         </label>
 
+        {accion === "ci" && (
         <label className="mt-4 block">
-          <span className={labelClass}>N° de OC</span>
+          <span className={labelClass}>N° de OC (opcional)</span>
           <input
             type="text"
             inputMode="numeric"
             value={oc}
-            disabled={enviando || sinOc}
+            disabled={enviando}
             onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
             placeholder="Ej.: 4331"
             className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -2363,23 +2421,7 @@ function DialogoConsumo({
             </p>
           )}
         </label>
-
-        <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={sinOc}
-            disabled={enviando}
-            onChange={(e) => {
-              setSinOc(e.target.checked);
-              if (e.target.checked) setOc("");
-            }}
-            className="mt-0.5"
-          />
-          <span>
-            Sin OC: el material ya estaba en bodega (no llegó con una OC). No se
-            valida la recepción; solo el stock de la bodega.
-          </span>
-        </label>
+        )}
 
         <div className="mt-4">
           <span className={labelClass}>
@@ -2419,7 +2461,7 @@ function DialogoConsumo({
                         if (errorStock) return " · stock no disponible";
                         if (!stock) return " · consultando stock…";
                         const disp = stock[bodega]?.[i.codigo] ?? 0;
-                        const falta = disp < Number(cant[i.fila] || 0);
+                        const falta = accion === "ci" && disp < Number(cant[i.fila] || 0);
                         return (
                           <span
                             className={`font-semibold ${falta ? "text-destructive" : "text-success"}`}
@@ -2431,6 +2473,21 @@ function DialogoConsumo({
                       })()}
                     </p>
                   </div>
+                  {conEntrada && (
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={costo[i.fila] ?? ""}
+                      disabled={enviando || !marcadas.has(i.fila)}
+                      onChange={(e) =>
+                        setCosto((prev) => ({ ...prev, [i.fila]: e.target.value }))
+                      }
+                      placeholder="Costo unit."
+                      aria-label={`Costo unitario neto de ${i.nombre}`}
+                      className="h-9 w-24 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                    />
+                  )}
                   <input
                     type="number"
                     min={0}
@@ -2466,10 +2523,18 @@ function DialogoConsumo({
           <button
             type="button"
             onClick={() => void confirmar()}
-            disabled={enviando || cargando || elegibles.length === 0 || ocBloquea || (!oc && !sinOc)}
+            disabled={enviando || cargando || elegibles.length === 0 || ocBloquea}
             className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
           >
-            {enviando ? "Registrando…" : "Registrar en Defontana"}
+            {enviando
+              ? "Registrando…"
+              : accion === "pe_ci"
+                ? "Registrar entrada y consumo"
+                : accion === "ci"
+                  ? "Registrar consumo interno"
+                  : accion === "pe"
+                    ? "Registrar parte de entrada"
+                    : "Registrar entrada a costo directo"}
           </button>
         </div>
       </div>

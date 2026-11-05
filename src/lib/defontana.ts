@@ -272,3 +272,59 @@ export function problemasRecepcion(
 
 export const AVISO_RECEPCION =
   "Entra a Defontana, recepciona la OC (genera el parte de entrada que sube el stock) y vuelve a intentarlo.";
+
+export type ParteEntradaInput = {
+  /** PE = a inventario (Mercaderías); PE_CD = directo al gasto del centro. */
+  tipo: "PE" | "PE_CD";
+  externalId: string;
+  /** "YYYY-MM-DD" */
+  fecha: string;
+  glosa: string;
+  bodega: string;
+  centroNegocio: string;
+  /** costo: unitario neto de compra. */
+  lineas: { articleId: string; cantidad: number; costo: number }[];
+};
+
+/**
+ * Crea un parte de entrada (sube el stock de la bodega). Contablemente debita
+ * Mercaderías (PE) o el gasto de la categoría con el centro (PE_CD) y acredita
+ * «Facturas por recibir». Devuelve el folio.
+ */
+export async function crearParteEntrada(
+  input: ParteEntradaInput
+): Promise<{ folio: number; tipo: string }> {
+  const analysis = { businessCenter: input.centroNegocio };
+  const r = await llamar<{
+    number?: number;
+    documentType?: string;
+    success: boolean;
+    message?: string | null;
+    exceptionMessage?: string | null;
+  }>("/api/Inventory/Insert", {
+    method: "POST",
+    body: {
+      documentTypeId: input.tipo,
+      fiscalYear: input.fecha.slice(0, 4),
+      gloss: input.glosa,
+      reasonId: "COMPRA",
+      destinationStowageId: input.bodega,
+      date: input.fecha,
+      externalDocumentID: input.externalId,
+      analysis,
+      details: input.lineas.map((l) => ({
+        articleId: l.articleId,
+        count: l.cantidad,
+        price: l.costo,
+        comment: "",
+        analysis,
+      })),
+    },
+  });
+  if (!r.success || !r.number) {
+    throw new Error(
+      r.exceptionMessage || r.message || "Defontana rechazó el parte de entrada."
+    );
+  }
+  return { folio: r.number, tipo: r.documentType ?? input.tipo };
+}
