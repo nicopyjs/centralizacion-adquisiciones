@@ -303,6 +303,10 @@ export default function GestionPedidosPanel() {
   const [enviandoEstado, setEnviandoEstado] = useState(false);
   const [errorEstado, setErrorEstado] = useState<string | null>(null);
 
+  // Consumo interno directo a Defontana (diálogo con bodega y artículos).
+  const [consumoPedido, setConsumoPedido] = useState<string | null>(null);
+  const [avisoConsumo, setAvisoConsumo] = useState<string | null>(null);
+
   // Eliminar un artículo de un pedido (con diálogo de confirmación).
   const [eliminando, setEliminando] = useState<{
     pedidoId: string;
@@ -1636,6 +1640,7 @@ export default function GestionPedidosPanel() {
               onAlternarFila={alternarFila}
               onAlternarTodasLasFilas={alternarTodasLasFilas}
               onAccion={abrirAccion}
+              onConsumo={() => setConsumoPedido(pedidoActual.pedidoId)}
               onAplicarATodos={aplicarCamposEnBloque}
               hayCambiosPendientes={totalCambios > 0}
               onEliminar={(it) => {
@@ -1661,6 +1666,55 @@ export default function GestionPedidosPanel() {
           onCancelar={() => setEliminando(null)}
           onConfirmar={() => void confirmarEliminar()}
         />
+      )}
+
+      {consumoPedido &&
+        (() => {
+          const ped = pedidos.find((p) => p.pedidoId === consumoPedido);
+          if (!ped) return null;
+          return (
+            <DialogoConsumo
+              pedido={ped}
+              onCerrar={() => setConsumoPedido(null)}
+              onRegistrado={(folio, ambiente, lineas) => {
+                const porFila = new Map(
+                  lineas.map((l) => [l.fila, l.consumoInterno])
+                );
+                setPedidos((prev) =>
+                  prev.map((p) =>
+                    p.pedidoId !== ped.pedidoId
+                      ? p
+                      : {
+                          ...p,
+                          items: p.items.map((x) =>
+                            porFila.has(x.fila)
+                              ? {
+                                  ...x,
+                                  consumoInterno:
+                                    porFila.get(x.fila) ?? x.consumoInterno,
+                                }
+                              : x
+                          ),
+                        }
+                  )
+                );
+                setConsumoPedido(null);
+                setAvisoConsumo(
+                  `Consumo interno CI-${folio} registrado en Defontana (${ambiente}).`
+                );
+                window.setTimeout(() => setAvisoConsumo(null), 8000);
+              }}
+            />
+          );
+        })()}
+
+      {avisoConsumo && (
+        <div
+          role="status"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"
+        >
+          {avisoConsumo}
+        </div>
       )}
 
       {accion && (
@@ -2012,6 +2066,309 @@ function DialogoEstado({
   );
 }
 
+function DialogoConsumo({
+  pedido,
+  onCerrar,
+  onRegistrado,
+}: {
+  pedido: PedidoResumen;
+  onCerrar: () => void;
+  onRegistrado: (
+    folio: number,
+    ambiente: string,
+    lineas: { fila: number; consumoInterno: string }[]
+  ) => void;
+}) {
+  const caja = useRef<HTMLDivElement>(null);
+  const [bodegas, setBodegas] = useState<{ codigo: string; nombre: string }[]>(
+    []
+  );
+  const [ambiente, setAmbiente] = useState("");
+  const [bodega, setBodega] = useState("");
+  const [oc, setOc] = useState("");
+  const [cargando, setCargando] = useState(true);
+  // Stock por bodega { BC14: { AICA0081: 10 } }; null mientras carga.
+  const [stock, setStock] = useState<Record<string, Record<string, number>> | null>(
+    null
+  );
+  const [errorStock, setErrorStock] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  // Solo artículos ya recibidos y sin consumo registrado.
+  const elegibles = pedido.items.filter(
+    (i) => (i.cantidadRecibida ?? 0) > 0 && !/CI-\d+/.test(i.consumoInterno)
+  );
+  const [cant, setCant] = useState<Record<number, string>>(() =>
+    Object.fromEntries(
+      elegibles.map((i) => [i.fila, String(i.cantidadRecibida)])
+    )
+  );
+  const [marcadas, setMarcadas] = useState<Set<number>>(
+    () => new Set(elegibles.map((i) => i.fila))
+  );
+
+  useEffect(() => {
+    const codigos = Array.from(new Set(elegibles.map((i) => i.codigo)));
+    if (codigos.length === 0) return;
+    fetch(`/api/defontana/stock?codigos=${encodeURIComponent(codigos.join(","))}`, {
+      cache: "no-store",
+    })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setStock(d.stock ?? {});
+      })
+      .catch(() => setErrorStock(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    caja.current?.focus();
+    fetch("/api/defontana/bodegas", { cache: "no-store" })
+      .then(async (r) => {
+        if (r.status === 401) {
+          window.location.reload();
+          return;
+        }
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "No se pudieron leer las bodegas.");
+        const lista: { codigo: string; nombre: string }[] = d.bodegas ?? [];
+        setBodegas(lista);
+        setAmbiente(d.ambiente ?? "");
+        // Bodega habitual de los consumos internos de contabilidad.
+        if (lista.some((b) => b.codigo === "BODEGACENTRAL")) {
+          setBodega((prev) => prev || "BODEGACENTRAL");
+        }
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Error de red."))
+      .finally(() => setCargando(false));
+  }, []);
+
+  async function confirmar() {
+    const lineas = elegibles
+      .filter((i) => marcadas.has(i.fila))
+      .map((i) => ({ fila: i.fila, cantidad: Number(cant[i.fila]) }));
+    if (!bodega) return setError("Elige la bodega de origen.");
+    if (lineas.length === 0) return setError("Marca al menos un artículo.");
+    for (const l of lineas) {
+      const it = elegibles.find((i) => i.fila === l.fila)!;
+      if (!(l.cantidad > 0) || l.cantidad > (it.cantidadRecibida ?? 0)) {
+        return setError(
+          `«${it.nombre}»: la cantidad debe ser mayor que 0 y no superar lo recibido (${it.cantidadRecibida}).`
+        );
+      }
+    }
+    const faltantes = lineas
+      .map((l) => ({ l, it: elegibles.find((i) => i.fila === l.fila)! }))
+      .filter(({ l, it }) => {
+        const disp = stock?.[bodega]?.[it.codigo];
+        return disp !== undefined && l.cantidad > disp;
+      });
+    if (faltantes.length > 0) {
+      return setError(
+        `Sin stock suficiente en ${bodega}: ` +
+          faltantes
+            .map(({ l, it }) => `${it.nombre} (pides ${l.cantidad}, hay ${stock?.[bodega]?.[it.codigo]})`)
+            .join("; ") +
+          ". Cambia de bodega o ajusta la cantidad."
+      );
+    }
+    setEnviando(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/pedidos/consumo-interno", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pedidoId: pedido.pedidoId, bodega, oc: oc.trim(), lineas }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "No se pudo registrar.");
+      onRegistrado(d.folio, d.ambiente, d.lineas ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error de red.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCerrar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) onCerrar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Consumo interno en Defontana"
+        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold text-primary">
+          Consumo interno · pedido {folioCorto(pedido.pedidoId)}
+        </h3>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Crea un documento «Consumo interno» en Defontana que descuenta el
+          stock de la bodega y lo imputa al centro{" "}
+          <strong className="text-card-foreground">
+            {pedido.centroCodigo || "(sin código)"}
+          </strong>
+          .
+        </p>
+        {ambiente === "pruebas" && (
+          <p className="mt-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent">
+            Ambiente de PRUEBAS (replapi): no afecta la contabilidad real.
+          </p>
+        )}
+        {ambiente === "produccion" && (
+          <p className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-1.5 text-xs font-semibold text-destructive">
+            PRODUCCIÓN: esto descuenta stock y genera un comprobante contable
+            real.
+          </p>
+        )}
+
+        <label className="mt-4 block">
+          <span className={labelClass}>Bodega de origen</span>
+          <select
+            value={bodega}
+            onChange={(e) => setBodega(e.target.value)}
+            disabled={cargando || enviando}
+            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <option value="">{cargando ? "Cargando…" : "Elige una bodega"}</option>
+            {bodegas.map((b) => {
+              const st = stock?.[b.codigo];
+              const ok = st
+                ? elegibles.filter((i) => (st[i.codigo] ?? 0) >= Number(cant[i.fila] || 0)).length
+                : 0;
+              return (
+                <option key={b.codigo} value={b.codigo}>
+                  {b.codigo} · {b.nombre}
+                  {st ? ` — stock para ${ok} de ${elegibles.length}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+
+        <label className="mt-4 block">
+          <span className={labelClass}>N° de OC (opcional)</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={oc}
+            disabled={enviando}
+            onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
+            placeholder="Ej.: 4331"
+            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+          />
+        </label>
+
+        <div className="mt-4">
+          <span className={labelClass}>
+            Artículos (recibidos y sin consumo registrado)
+          </span>
+          {elegibles.length === 0 ? (
+            <p className="mt-1 text-sm text-muted-foreground">
+              No hay artículos disponibles: deben tener cantidad recibida y no
+              tener ya un CI-folio.
+            </p>
+          ) : (
+            <ul className="mt-1 divide-y divide-border rounded-lg border border-border">
+              {elegibles.map((i) => (
+                <li key={i.fila} className="flex items-center gap-3 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={marcadas.has(i.fila)}
+                    disabled={enviando}
+                    onChange={(e) =>
+                      setMarcadas((prev) => {
+                        const n = new Set(prev);
+                        if (e.target.checked) n.add(i.fila);
+                        else n.delete(i.fila);
+                        return n;
+                      })
+                    }
+                    aria-label={`Incluir ${i.nombre}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-card-foreground">
+                      {i.nombre}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {i.codigo} · recibido {i.cantidadRecibida} {i.unidad}
+                      {(() => {
+                        if (!bodega) return null;
+                        if (errorStock) return " · stock no disponible";
+                        if (!stock) return " · consultando stock…";
+                        const disp = stock[bodega]?.[i.codigo] ?? 0;
+                        const falta = disp < Number(cant[i.fila] || 0);
+                        return (
+                          <span
+                            className={`font-semibold ${falta ? "text-destructive" : "text-success"}`}
+                          >
+                            {" · "}stock en {bodega}: {disp}
+                            {falta ? " (insuficiente)" : ""}
+                          </span>
+                        );
+                      })()}
+                    </p>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={cant[i.fila] ?? ""}
+                    disabled={enviando || !marcadas.has(i.fila)}
+                    onChange={(e) =>
+                      setCant((prev) => ({ ...prev, [i.fila]: e.target.value }))
+                    }
+                    aria-label={`Cantidad de ${i.nombre}`}
+                    className="h-9 w-20 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCerrar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirmar()}
+            disabled={enviando || cargando || elegibles.length === 0}
+            className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
+          >
+            {enviando ? "Registrando…" : "Registrar en Defontana"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DialogoEliminar({
   nombre,
   pedidoId,
@@ -2116,6 +2473,7 @@ function Detalle({
   onAlternarFila,
   onAlternarTodasLasFilas,
   onAccion,
+  onConsumo,
   onAplicarATodos,
   hayCambiosPendientes,
   onEliminar,
@@ -2143,6 +2501,7 @@ function Detalle({
   onAlternarFila: (fila: number) => void;
   onAlternarTodasLasFilas: (items: PedidoItem[]) => void;
   onAccion: (tipo: "cerrado" | "anulado" | "") => void;
+  onConsumo: () => void;
   onAplicarATodos: (
     items: PedidoItem[],
     campos: Partial<Omit<LineaEdit, "cantidadRecibida">>
@@ -2330,6 +2689,24 @@ function Detalle({
             <IconCheck />
             Todo recibido
           </button>
+          {!bloqueado && (
+            <button
+              type="button"
+              onClick={onConsumo}
+              disabled={
+                !sinCambios ||
+                !pedido.items.some((i) => (i.cantidadRecibida ?? 0) > 0)
+              }
+              title={
+                !sinCambios
+                  ? "Guarda o descarta los cambios primero"
+                  : "Registrar en Defontana el consumo interno de artículos ya recibidos"
+              }
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Consumo interno
+            </button>
+          )}
           {bloqueado ? (
             <button
               type="button"
