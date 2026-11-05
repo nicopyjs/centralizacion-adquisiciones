@@ -75,6 +75,77 @@ export async function listarBodegas(): Promise<Bodega[]> {
     .map((b) => ({ codigo: b.code, nombre: b.description }));
 }
 
+const POR_PAGINA_STOCK = 250; // máximo que acepta GetStorageStock
+
+type PaginaStock = {
+  success: boolean;
+  message?: string;
+  totalItems?: number;
+  productList?: { productID: string; stock: number }[];
+};
+
+function paginaStock(bodega: string, pagina: number) {
+  return llamar<PaginaStock>(
+    `/api/Sale/GetStorageStock?storageID=${encodeURIComponent(bodega)}&itemsPerPage=${POR_PAGINA_STOCK}&pageNumber=${pagina}`
+  );
+}
+
+/**
+ * Stock de los artículos pedidos en cada bodega activa:
+ * { BC14: { AICA0081: 10, ... }, ... }. Un artículo que la bodega no lista
+ * queda en 0. Recorre las páginas de cada bodega en paralelo.
+ */
+export async function stockPorBodega(
+  codigos: string[]
+): Promise<Record<string, Record<string, number>>> {
+  const clave = `${ambienteDefontana()}:${[...codigos].sort().join(",")}`;
+  const hit = cacheStock.get(clave);
+  if (hit && Date.now() - hit.t < 60_000) return hit.v;
+  const v = await calcularStock(codigos);
+  cacheStock.set(clave, { t: Date.now(), v });
+  if (cacheStock.size > 50) cacheStock.delete(cacheStock.keys().next().value!);
+  return v;
+}
+
+// Caché corto: el stock es orientativo (Defontana lo valida al registrar) y
+// recorrer las bodegas grandes tarda unos segundos.
+const cacheStock = new Map<
+  string,
+  { t: number; v: Record<string, Record<string, number>> }
+>();
+
+async function calcularStock(
+  codigos: string[]
+): Promise<Record<string, Record<string, number>>> {
+  const buscados = new Set(codigos);
+  const bodegas = await listarBodegas();
+  const resultado: Record<string, Record<string, number>> = {};
+  await Promise.all(
+    bodegas.map(async (b) => {
+      const stock: Record<string, number> = Object.fromEntries(
+        codigos.map((c) => [c, 0])
+      );
+      const recoger = (p: PaginaStock) => {
+        if (!p.success) throw new Error(p.message || "No se pudo leer el stock.");
+        for (const x of p.productList ?? []) {
+          if (buscados.has(x.productID)) stock[x.productID] = Number(x.stock) || 0;
+        }
+      };
+      const primera = await paginaStock(b.codigo, 1);
+      recoger(primera);
+      const paginas = Math.ceil((primera.totalItems ?? 0) / POR_PAGINA_STOCK);
+      const resto = await Promise.all(
+        Array.from({ length: Math.max(0, paginas - 1) }, (_, i) =>
+          paginaStock(b.codigo, i + 2)
+        )
+      );
+      resto.forEach(recoger);
+      resultado[b.codigo] = stock;
+    })
+  );
+  return resultado;
+}
+
 export type ConsumoInternoInput = {
   /** ID externo para ubicar el documento (folio del pedido + sufijo). */
   externalId: string;

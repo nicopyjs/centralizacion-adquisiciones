@@ -2087,6 +2087,11 @@ function DialogoConsumo({
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
   const [cargando, setCargando] = useState(true);
+  // Stock por bodega { BC14: { AICA0081: 10 } }; null mientras carga.
+  const [stock, setStock] = useState<Record<string, Record<string, number>> | null>(
+    null
+  );
+  const [errorStock, setErrorStock] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   // Solo artículos ya recibidos y sin consumo registrado.
@@ -2101,6 +2106,21 @@ function DialogoConsumo({
   const [marcadas, setMarcadas] = useState<Set<number>>(
     () => new Set(elegibles.map((i) => i.fila))
   );
+
+  useEffect(() => {
+    const codigos = Array.from(new Set(elegibles.map((i) => i.codigo)));
+    if (codigos.length === 0) return;
+    fetch(`/api/defontana/stock?codigos=${encodeURIComponent(codigos.join(","))}`, {
+      cache: "no-store",
+    })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setStock(d.stock ?? {});
+      })
+      .catch(() => setErrorStock(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     caja.current?.focus();
@@ -2137,6 +2157,21 @@ function DialogoConsumo({
           `«${it.nombre}»: la cantidad debe ser mayor que 0 y no superar lo recibido (${it.cantidadRecibida}).`
         );
       }
+    }
+    const faltantes = lineas
+      .map((l) => ({ l, it: elegibles.find((i) => i.fila === l.fila)! }))
+      .filter(({ l, it }) => {
+        const disp = stock?.[bodega]?.[it.codigo];
+        return disp !== undefined && l.cantidad > disp;
+      });
+    if (faltantes.length > 0) {
+      return setError(
+        `Sin stock suficiente en ${bodega}: ` +
+          faltantes
+            .map(({ l, it }) => `${it.nombre} (pides ${l.cantidad}, hay ${stock?.[bodega]?.[it.codigo]})`)
+            .join("; ") +
+          ". Cambia de bodega o ajusta la cantidad."
+      );
     }
     setEnviando(true);
     setError(null);
@@ -2210,11 +2245,18 @@ function DialogoConsumo({
             className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <option value="">{cargando ? "Cargando…" : "Elige una bodega"}</option>
-            {bodegas.map((b) => (
-              <option key={b.codigo} value={b.codigo}>
-                {b.codigo} · {b.nombre}
-              </option>
-            ))}
+            {bodegas.map((b) => {
+              const st = stock?.[b.codigo];
+              const ok = st
+                ? elegibles.filter((i) => (st[i.codigo] ?? 0) >= Number(cant[i.fila] || 0)).length
+                : 0;
+              return (
+                <option key={b.codigo} value={b.codigo}>
+                  {b.codigo} · {b.nombre}
+                  {st ? ` — stock para ${ok} de ${elegibles.length}` : ""}
+                </option>
+              );
+            })}
           </select>
         </label>
 
@@ -2264,6 +2306,21 @@ function DialogoConsumo({
                     </p>
                     <p className="text-[11px] text-muted-foreground">
                       {i.codigo} · recibido {i.cantidadRecibida} {i.unidad}
+                      {(() => {
+                        if (!bodega) return null;
+                        if (errorStock) return " · stock no disponible";
+                        if (!stock) return " · consultando stock…";
+                        const disp = stock[bodega]?.[i.codigo] ?? 0;
+                        const falta = disp < Number(cant[i.fila] || 0);
+                        return (
+                          <span
+                            className={`font-semibold ${falta ? "text-destructive" : "text-success"}`}
+                          >
+                            {" · "}stock en {bodega}: {disp}
+                            {falta ? " (insuficiente)" : ""}
+                          </span>
+                        );
+                      })()}
                     </p>
                   </div>
                   <input
