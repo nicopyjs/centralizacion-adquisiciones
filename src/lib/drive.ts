@@ -87,3 +87,29 @@ export async function descargarArchivo(id: string): Promise<Response> {
   if (!res.ok) throw new Error(`Drive (descargar) HTTP ${res.status}`);
   return res;
 }
+
+export type ArchivoDrive = { id: string; nombre: string; mime: string; size: number };
+
+/**
+ * Archivos que hay en la carpeta del pedido, incluidos los subidos directo a
+ * Drive (no pasan por el chat). Devuelve [] si la carpeta aún no existe.
+ */
+export async function listarArchivosPedido(folio: string): Promise<ArchivoDrive[]> {
+  const chat = await buscarCarpeta(CARPETA_CHAT, rootId());
+  if (!chat) return [];
+  const carpeta = await buscarCarpeta(folio, chat);
+  if (!carpeta) return [];
+  const q = `'${carpeta}' in parents and mimeType!='${CARPETA}' and trashed=false`;
+  const url = `${FILES}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size)&orderBy=createdTime&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const res = await fetch(url, { headers: await authHeaders(), cache: "no-store" });
+  if (!res.ok) throw new Error(`Drive (listar archivos) HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    files?: { id: string; name: string; mimeType: string; size?: string }[];
+  };
+  return (data.files ?? []).map((f) => ({
+    id: f.id,
+    nombre: f.name,
+    mime: f.mimeType,
+    size: Number(f.size) || 0,
+  }));
+}

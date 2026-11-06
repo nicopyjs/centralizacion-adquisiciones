@@ -36,7 +36,12 @@ export async function GET(request: Request) {
     if (!puedeVer(acceso, area)) {
       return NextResponse.json({ error: "No autorizado." }, { status: 401 });
     }
-    const [mensajes] = await Promise.all([leerMensajes(folio), marcarLeido(folio, acceso)]);
+    // ?solo=lectura: ver fotos/adjuntos sin marcar el hilo como leído.
+    const soloLectura = new URL(request.url).searchParams.get("solo") === "lectura";
+    const [mensajes] = await Promise.all([
+      leerMensajes(folio),
+      soloLectura ? Promise.resolve() : marcarLeido(folio, acceso),
+    ]);
     return NextResponse.json({ mensajes });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";

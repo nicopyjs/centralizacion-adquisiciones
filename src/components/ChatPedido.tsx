@@ -57,6 +57,24 @@ export function InsigniaChat({ cantidad }: { cantidad: number }) {
   );
 }
 
+/** Reduce las fotos grandes (las del celular pesan varios MB) para que quepan en el envío. */
+async function comprimirImagen(f: File): Promise<File> {
+  if (!/^image\/(jpeg|png|webp)/.test(f.type) || f.size < 800 * 1024) return f;
+  try {
+    const bmp = await createImageBitmap(f);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * k);
+    c.height = Math.round(bmp.height * k);
+    c.getContext("2d")?.drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, "image/jpeg", 0.8));
+    if (!blob || blob.size >= f.size) return f;
+    return new File([blob], f.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return f;
+  }
+}
+
 function formatTs(ts: number): string {
   return new Date(ts).toLocaleString("es-CL", {
     day: "2-digit",
@@ -92,6 +110,7 @@ export default function ChatPedido({
   const [enviando, setEnviando] = useState(false);
   const finRef = useRef<HTMLDivElement>(null);
   const inputArchivo = useRef<HTMLInputElement>(null);
+  const inputCamara = useRef<HTMLInputElement>(null);
   const actividadRef = useRef(onActividad);
   useEffect(() => {
     actividadRef.current = onActividad;
@@ -125,14 +144,65 @@ export default function ChatPedido({
     };
   }, [abierto, cargar]);
 
+  // Al montar se leen los adjuntos (sin marcar como leído) para mostrar las fotos
+  // del pedido aunque el hilo esté cerrado.
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/pedidos/chat?folio=${encodeURIComponent(folio)}&solo=lectura`, {
+      cache: "no-store",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (vivo && d?.mensajes) setMensajes((prev) => prev ?? (d.mensajes as Mensaje[]));
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [folio]);
+
+  const [foto, setFoto] = useState<{ src: string; nombre: string } | null>(null);
+  useEffect(() => {
+    if (!foto) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFoto(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [foto]);
+
+  const urlArchivo = (id: string) =>
+    `/api/pedidos/chat/archivo?folio=${encodeURIComponent(folio)}&id=${encodeURIComponent(id)}`;
+  const esImagen = (a: Adjunto) => /^image\/(?!svg)/.test(a.mime);
+  // Carpeta de Drive del pedido: incluye lo subido directo a Drive.
+  const [enDrive, setEnDrive] = useState<Adjunto[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/pedidos/chat/fotos?folio=${encodeURIComponent(folio)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (vivo && d?.archivos) setEnDrive(d.archivos as Adjunto[]);
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [folio, mensajes?.length]);
+  const fotos = [
+    ...new Map(
+      [...(mensajes ?? []).flatMap((m) => m.adjuntos ?? []), ...enDrive]
+        .filter(esImagen)
+        .map((a) => [a.id, a] as const)
+    ).values(),
+  ];
+
   const cantidad = mensajes?.length ?? 0;
   useEffect(() => {
     finRef.current?.scrollIntoView({ block: "nearest" });
   }, [cantidad, abierto]);
 
-  function elegirArchivos(lista: FileList | null) {
+  async function elegirArchivos(lista: FileList | null) {
     if (!lista) return;
-    const sig = [...archivos, ...Array.from(lista)];
+    const nuevos = await Promise.all(Array.from(lista).map(comprimirImagen));
+    const sig = [...archivos, ...nuevos];
     if (sig.length > MAX_ARCHIVOS) {
       setError(`Máximo ${MAX_ARCHIVOS} archivos por mensaje.`);
     } else if (sig.reduce((s, f) => s + f.size, 0) > MAX_BYTES) {
@@ -142,6 +212,7 @@ export default function ChatPedido({
       setArchivos(sig);
     }
     if (inputArchivo.current) inputArchivo.current.value = "";
+    if (inputCamara.current) inputCamara.current.value = "";
   }
 
   async function enviar() {
@@ -168,6 +239,63 @@ export default function ChatPedido({
   }
 
   return (
+    <>
+      {fotos.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Fotos del pedido ({fotos.length})
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {fotos.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                title={a.nombre}
+                onClick={() => setFoto({ src: urlArchivo(a.id), nombre: a.nombre })}
+                className="overflow-hidden rounded-lg border border-border bg-muted hover:ring-2 hover:ring-accent"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={urlArchivo(a.id)}
+                  alt={a.nombre}
+                  loading="lazy"
+                  className="h-20 w-20 object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {foto && (
+        <div
+          role="dialog"
+          aria-label={foto.nombre}
+          onClick={() => setFoto(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-4"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={foto.src}
+            alt={foto.nombre}
+            className="max-h-[85vh] max-w-full rounded-lg object-contain"
+          />
+          <div className="flex items-center gap-3 text-sm text-white">
+            <span className="break-all">{foto.nombre}</span>
+            <a
+              href={foto.src}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="font-semibold underline"
+            >
+              Abrir
+            </a>
+            <button type="button" className="font-bold" onClick={() => setFoto(null)}>
+              Cerrar ✕
+            </button>
+          </div>
+        </div>
+      )}
     <div className="mt-4 rounded-lg border border-border bg-card">
       <button
         type="button"
@@ -212,8 +340,23 @@ export default function ChatPedido({
                       <ul className="mt-1 space-y-0.5">
                         {m.adjuntos.map((a) => (
                           <li key={a.id}>
+                            {esImagen(a) && (
+                              <button
+                                type="button"
+                                onClick={() => setFoto({ src: urlArchivo(a.id), nombre: a.nombre })}
+                                className="mb-1 block overflow-hidden rounded-md border border-border"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={urlArchivo(a.id)}
+                                  alt={a.nombre}
+                                  loading="lazy"
+                                  className="max-h-40 max-w-full object-contain"
+                                />
+                              </button>
+                            )}
                             <a
-                              href={`/api/pedidos/chat/archivo?folio=${encodeURIComponent(folio)}&id=${encodeURIComponent(a.id)}`}
+                              href={urlArchivo(a.id)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="break-all text-xs font-semibold text-accent hover:underline"
@@ -281,8 +424,25 @@ export default function ChatPedido({
               type="file"
               multiple
               className="hidden"
-              onChange={(e) => elegirArchivos(e.target.files)}
+              onChange={(e) => void elegirArchivos(e.target.files)}
             />
+            <input
+              ref={inputCamara}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => void elegirArchivos(e.target.files)}
+            />
+            <button
+              type="button"
+              onClick={() => inputCamara.current?.click()}
+              disabled={enviando || archivos.length >= MAX_ARCHIVOS}
+              title="Tomar una foto con la cámara"
+              className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm hover:bg-muted disabled:opacity-40"
+            >
+              📷 Cámara
+            </button>
             <button
               type="button"
               onClick={() => inputArchivo.current?.click()}
@@ -304,5 +464,6 @@ export default function ChatPedido({
         </div>
       )}
     </div>
+    </>
   );
 }
