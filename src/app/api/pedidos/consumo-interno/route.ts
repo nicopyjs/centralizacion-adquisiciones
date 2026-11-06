@@ -4,10 +4,12 @@ import {
   AVISO_RECEPCION,
   ambienteDefontana,
   crearConsumoInterno,
-  crearParteEntrada,
+  problemasPorRecibir,
   problemasRecepcion,
   recepcionOC,
+  recepcionarOC,
 } from "@/lib/defontana";
+import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
 import {
   articulosSheetId,
   batchWriteRanges,
@@ -15,25 +17,22 @@ import {
 } from "@/lib/google-sheets";
 
 const PEDIDOS_SHEET = "Pedidos";
-/** Marcas que se escriben en «Consumo interno» (col. R): "CI-2302", "PE-2047", "PECD-63". */
-const CON_CI = /CI-\d+/;
-const CON_PE = /PE(?:CD)?-\d+/;
-const CON_PECD = /PECD-\d+/;
 
-type Accion = "ci" | "pe_ci" | "pe" | "pe_cd";
-const ACCIONES: Accion[] = ["ci", "pe_ci", "pe", "pe_cd"];
+type Accion = "rec_ci" | "rec" | "ci";
+const ACCIONES: Accion[] = ["rec_ci", "rec", "ci"];
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : String(v ?? "").trim());
 
 /**
- * Movimientos de inventario en Defontana para artículos ya recepcionados de un
- * pedido; deja los folios en la columna «Consumo interno».
+ * Flujo de inventario en Defontana para artículos ya recibidos de un pedido;
+ * deja los folios en la columna «Consumo interno».
  *
- * Body: { pedidoId, bodega, accion, oc?, lineas: [{ fila, cantidad, costo? }] }
- *  - ci     : consumo interno (baja stock; imputa al centro)
- *  - pe_ci  : parte de entrada a inventario y luego consumo interno
- *  - pe     : solo parte de entrada a inventario
- *  - pe_cd  : parte de entrada a costo directo (gasto del centro; sin CI)
+ * Body: { pedidoId, bodega, accion, oc, lineas: [{ fila, cantidad }] }
+ *  - rec_ci : recepciona la OC (total o parcial; genera el parte de entrada) y
+ *             enseguida hace el consumo interno de lo recepcionado. Exige OC.
+ *  - rec    : solo recepciona la OC (el material queda en stock). Exige OC.
+ *  - ci     : consumo interno de stock existente; la OC es opcional y, si se
+ *             indica, debe estar recepcionada.
  * Todo lo demás (código de artículo, centro) se lee de la planilla en el
  * servidor, no del cliente.
  */
@@ -59,26 +58,31 @@ export async function POST(request: Request) {
   if (!ACCIONES.includes(accion)) {
     return NextResponse.json({ error: "Acción inválida." }, { status: 400 });
   }
-  const conEntrada = accion !== "ci";
-  const conConsumo = accion === "ci" || accion === "pe_ci";
-  // La OC solo aplica al consumo suelto: es la referencia del CI.
-  const ocTexto = accion === "ci" ? str(body.oc) : "";
+  const conRecepcion = accion !== "ci";
+  const conConsumo = accion !== "rec";
+  const ocTexto = str(body.oc);
   const ocNumero = ocTexto === "" ? undefined : Number(ocTexto);
   if (
     ocNumero !== undefined &&
     (!Number.isInteger(ocNumero) || ocNumero <= 0 || ocNumero > 99_999_999)
   ) {
     return NextResponse.json(
-      { error: "El N° de OC debe ser un número entero (o déjalo vacío)." },
+      { error: "El N° de OC debe ser un número entero." },
       { status: 400 }
     );
   }
-  const pedidas: { fila?: unknown; cantidad?: unknown; costo?: unknown }[] =
-    Array.isArray(body.lineas) ? body.lineas : [];
+  if (conRecepcion && ocNumero === undefined) {
+    return NextResponse.json(
+      { error: "Indica el N° de OC que vas a recepcionar." },
+      { status: 400 }
+    );
+  }
+  const pedidas: { fila?: unknown; cantidad?: unknown }[] = Array.isArray(body.lineas)
+    ? body.lineas
+    : [];
   const lineas = pedidas.map((l) => ({
     fila: Number(l?.fila),
     cantidad: Number(l?.cantidad),
-    costo: Number(l?.costo),
   }));
   if (!pedidoId || !bodega || lineas.length === 0 || lineas.length > 100) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
@@ -89,19 +93,11 @@ export async function POST(request: Request) {
         !Number.isInteger(l.fila) ||
         l.fila < 2 ||
         !Number.isFinite(l.cantidad) ||
-        l.cantidad <= 0 ||
-        (conEntrada && !(l.costo > 0 && l.costo < 1e10))
+        l.cantidad <= 0
     ) ||
     new Set(lineas.map((l) => l.fila)).size !== lineas.length
   ) {
-    return NextResponse.json(
-      {
-        error: conEntrada
-          ? "Líneas inválidas: indica cantidad y costo unitario mayores que 0."
-          : "Líneas inválidas.",
-      },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Líneas inválidas." }, { status: 400 });
   }
 
   try {
@@ -121,10 +117,11 @@ export async function POST(request: Request) {
     const detalle: {
       fila: number;
       cantidad: number;
-      costo: number;
       codigo: string;
       nombre: string;
       previo: string;
+      /** Línea de servicio: se recepciona pero no entra a stock ni se consume. */
+      servicio: boolean;
     }[] = [];
     for (const l of lineas) {
       const row = rows[l.fila - 2];
@@ -142,62 +139,74 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      if (l.cantidad > recibida) {
-        return NextResponse.json(
-          { error: `«${nombre}»: la cantidad supera lo recibido (${recibida}).` },
-          { status: 400 }
-        );
-      }
       const marca = str(row[17]);
-      if (CON_CI.test(marca)) {
-        return NextResponse.json(
-          { error: `«${nombre}» ya tiene un consumo interno registrado (${marca}).` },
-          { status: 409 }
-        );
-      }
-      if (conEntrada && CON_PE.test(marca)) {
-        return NextResponse.json(
-          { error: `«${nombre}» ya tiene un parte de entrada registrado (${marca}).` },
-          { status: 409 }
-        );
-      }
-      if (conConsumo && CON_PECD.test(marca)) {
+      // Los topes descuentan lo ya recepcionado / consumido desde aquí: evita
+      // duplicar con doble clic y permite hacerlo en partes.
+      const porConsumir = recibida - yaConsumido(marca);
+      const porRecepcionar = recibida - yaRecepcionado(marca);
+      const tope = Math.min(
+        conConsumo ? porConsumir : Infinity,
+        conRecepcion ? porRecepcionar : Infinity
+      );
+      if (l.cantidad > tope) {
         return NextResponse.json(
           {
-            error: `«${nombre}» entró a costo directo (${marca}): ya está en el gasto del centro, un consumo interno lo contaría dos veces.`,
+            error:
+              tope <= 0
+                ? `«${nombre}» ya está ${conRecepcion && porRecepcionar <= 0 ? "recepcionado" : "consumido"} por completo (${marca}).`
+                : `«${nombre}»: solo quedan ${tope} disponibles (recibido ${recibida}).`,
           },
-          { status: 409 }
+          { status: tope <= 0 ? 409 : 400 }
         );
       }
-      detalle.push({ ...l, codigo: str(row[11]), nombre, previo: marca });
+      detalle.push({
+        ...l,
+        codigo: str(row[11]),
+        nombre,
+        previo: marca,
+        servicio: false,
+      });
     }
 
     const cabecera = delPedido[0];
     const centro = str(cabecera[5]);
-    if (!centro) {
+    if (conConsumo && !centro) {
       return NextResponse.json(
         { error: "El pedido no tiene código de centro de negocio." },
         { status: 400 }
       );
     }
 
-    // Consumo suelto con OC: el material debe estar recepcionado en Defontana
-    // (parte de entrada); si no, el stock no existe o no corresponde a la OC.
-    if (accion === "ci" && ocNumero !== undefined) {
-      const oc = await recepcionOC(ocNumero);
-      if (!oc) {
-        return NextResponse.json(
-          { error: `La OC ${ocNumero} no existe en Defontana.` },
-          { status: 400 }
-        );
-      }
-      const problemas = problemasRecepcion(
-        oc,
-        detalle.map((d) => ({ codigo: d.codigo, nombre: d.nombre, cantidad: d.cantidad }))
+    // Lectura de la OC: para recepcionar (exige cantidades válidas) o para
+    // exigir, en el consumo suelto, que ya esté recepcionada.
+    const oc = ocNumero !== undefined ? await recepcionOC(ocNumero) : null;
+    if (ocNumero !== undefined && !oc) {
+      return NextResponse.json(
+        { error: `La OC ${ocNumero} no existe en Defontana.` },
+        { status: 400 }
       );
+    }
+    const pedido = detalle.map((d) => ({
+      codigo: d.codigo,
+      nombre: d.nombre,
+      cantidad: d.cantidad,
+    }));
+    if (oc && conRecepcion) {
+      const problemas = problemasPorRecibir(oc, pedido);
       if (problemas.length > 0) {
         return NextResponse.json(
-          { error: `OC ${ocNumero}: ${problemas.join("; ")}. ${AVISO_RECEPCION}` },
+          { error: `OC ${oc.numero}: ${problemas.join("; ")}.` },
+          { status: 409 }
+        );
+      }
+      for (const d of detalle) {
+        d.servicio = oc.lineas.find((x) => x.codigo === d.codigo)?.servicio === true;
+      }
+    } else if (oc && accion === "ci") {
+      const problemas = problemasRecepcion(oc, pedido);
+      if (problemas.length > 0) {
+        return NextResponse.json(
+          { error: `OC ${oc.numero}: ${problemas.join("; ")}. ${AVISO_RECEPCION}` },
           { status: 409 }
         );
       }
@@ -207,11 +216,12 @@ export async function POST(request: Request) {
       timeZone: "America/Santiago",
     });
     const glosa = [pedidoId, str(cabecera[15])].filter(Boolean).join(" - ").slice(0, 200);
-    const anotaciones = new Map<number, string>(
-      detalle.map((d) => [d.fila, d.previo])
-    );
-    const anotar = (marcaDe: (d: (typeof detalle)[number]) => string) => {
-      for (const d of detalle) {
+    const anotaciones = new Map<number, string>(detalle.map((d) => [d.fila, d.previo]));
+    const anotar = (
+      filas: typeof detalle,
+      marcaDe: (d: (typeof detalle)[number]) => string
+    ) => {
+      for (const d of filas) {
         anotaciones.set(
           d.fila,
           [anotaciones.get(d.fila), marcaDe(d)].filter(Boolean).join(" | ")
@@ -226,68 +236,77 @@ export async function POST(request: Request) {
           values: [[anotaciones.get(d.fila) ?? ""]],
         }))
       );
-    const resultado = () =>
-      detalle.map((d) => ({ fila: d.fila, consumoInterno: anotaciones.get(d.fila) ?? "" }));
 
-    let folioEntrada: number | undefined;
-    if (conEntrada) {
-      const tipo = accion === "pe_cd" ? "PE_CD" : "PE";
-      const { folio } = await crearParteEntrada({
-        tipo,
-        externalId: `${pedidoId}-${tipo}-${Date.now().toString(36)}`,
-        fecha,
-        glosa,
+    let folioRecepcion: number | undefined;
+    let partes: number[] = [];
+    if (conRecepcion && oc) {
+      const r = await recepcionarOC({
+        oc,
         bodega,
-        centroNegocio: centro,
-        lineas: detalle.map((d) => ({
-          articleId: d.codigo,
-          cantidad: d.cantidad,
-          costo: d.costo,
-        })),
+        lineas: detalle.map((d) => ({ codigo: d.codigo, cantidad: d.cantidad })),
       });
-      folioEntrada = folio;
-      const prefijo = tipo === "PE_CD" ? "PECD" : "PE";
-      anotar((d) => `${prefijo}-${folio} (${d.cantidad} · ${bodega})`);
-      // Se anota ya: si luego falla el consumo, el PE queda registrado.
+      folioRecepcion = r.recepcion;
+      partes = r.partes;
+      const etiqueta = `REC-${r.recepcion}${partes.length ? `/PE-${partes.join("+")}` : ""}`;
+      anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega})`);
+      // Se anota ya: si luego falla el consumo, la recepción queda registrada.
       try {
         await escribir();
       } catch {
         return NextResponse.json(
           {
-            error: `El parte de entrada SÍ se creó en Defontana (folio ${prefijo}-${folio}) pero no se pudo anotar en la planilla. Anótalo a mano en «Consumo interno»; no lo registres de nuevo.${conConsumo ? " El consumo interno NO se hizo." : ""}`,
-            folio,
+            error: `La OC SÍ se recepcionó en Defontana (${etiqueta}) pero no se pudo anotar en la planilla. Anótalo a mano en «Consumo interno»; no la recepciones de nuevo.${conConsumo ? " El consumo interno NO se hizo." : ""}`,
+            folio: r.recepcion,
           },
           { status: 500 }
         );
       }
     }
 
+    // Servicios: se recepcionan pero no tienen stock que consumir.
+    const aConsumir = conConsumo ? detalle.filter((d) => !d.servicio) : [];
+    const omitidos = conConsumo ? detalle.filter((d) => d.servicio) : [];
     let folioConsumo: number | undefined;
-    if (conConsumo) {
+    if (aConsumir.length > 0) {
       try {
-        const { folio } = await crearConsumoInterno({
-          externalId: `${pedidoId}-${Date.now().toString(36)}`,
-          fecha,
-          glosa,
-          bodega,
-          centroNegocio: centro,
-          ocNumero,
-          lineas: detalle.map((d) => ({ articleId: d.codigo, cantidad: d.cantidad })),
-        });
-        folioConsumo = folio;
+        const externalId = `${pedidoId}-${Date.now().toString(36)}`;
+        // Recién recepcionada, el stock tarda unos segundos en reflejarse: se
+        // reintenta mientras Defontana diga que no hay saldo.
+        for (let intento = 0; ; intento++) {
+          try {
+            const { folio } = await crearConsumoInterno({
+              externalId,
+              fecha,
+              glosa,
+              bodega,
+              centroNegocio: centro,
+              ocNumero,
+              lineas: aConsumir.map((d) => ({
+                articleId: d.codigo,
+                cantidad: d.cantidad,
+              })),
+            });
+            folioConsumo = folio;
+            break;
+          } catch (e) {
+            const sinSaldo = e instanceof Error && /saldo suficiente/i.test(e.message);
+            if (!(conRecepcion && sinSaldo) || intento >= 7) throw e;
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Error desconocido";
         return NextResponse.json(
           {
-            error: folioEntrada
-              ? `El parte de entrada PE-${folioEntrada} SÍ se creó, pero el consumo interno falló: ${message} Recarga y hazlo con «Solo consumo interno»; no repitas la entrada.`
+            error: folioRecepcion
+              ? `La OC SÍ se recepcionó (REC-${folioRecepcion}), pero el consumo interno falló: ${message} Recarga y hazlo con «Solo consumo interno»; no recepciones de nuevo.`
               : message,
-            ...(folioEntrada ? { folio: folioEntrada } : {}),
+            ...(folioRecepcion ? { folio: folioRecepcion } : {}),
           },
           { status: 502 }
         );
       }
-      anotar((d) => `CI-${folioConsumo} (${d.cantidad} · ${bodega})`);
+      anotar(aConsumir, (d) => `CI-${folioConsumo} (${d.cantidad} · ${bodega})`);
       // El documento ya existe en Defontana: si falla la planilla, el error
       // incluye el folio para no duplicarlo a ciegas.
       try {
@@ -306,11 +325,15 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       accion,
-      folio: folioConsumo ?? folioEntrada,
-      folioEntrada,
+      folioRecepcion,
+      partes,
       folioConsumo,
+      serviciosSinConsumo: omitidos.map((d) => d.nombre),
       ambiente: ambienteDefontana(),
-      lineas: resultado(),
+      lineas: detalle.map((d) => ({
+        fila: d.fila,
+        consumoInterno: anotaciones.get(d.fila) ?? "",
+      })),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
