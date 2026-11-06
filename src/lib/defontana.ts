@@ -208,25 +208,60 @@ export async function crearConsumoInterno(
   return { folio: r.number, tipo: r.documentType ?? "CI" };
 }
 
-export type LineaOC = { codigo: string; pedida: number; recibida: number };
+/**
+ * RUT con puntos y guion (77.949.210-9). PurchaseOrder/Get lo entrega sin
+ * puntos, pero la recepción solo reconoce al proveedor con el formato de las
+ * listas.
+ */
+export function formatearRut(rut: string): string {
+  const limpio = rut.replace(/[.\s]/g, "").toUpperCase();
+  const m = limpio.match(/^(\d+)-?([\dK])$/);
+  if (!m) return rut;
+  return `${m[1].replace(/\B(?=(\d{3})+(?!\d))/g, ".")}-${m[2]}`;
+}
+
+export type LineaOC = {
+  /** N° de línea dentro de la OC (lo exige la recepción). */
+  linea: number;
+  codigo: string;
+  pedida: number;
+  recibida: number;
+  /** Monto neto de la línea completa (ya con descuento). */
+  monto: number;
+  servicio: boolean;
+  usaLotes: boolean;
+};
+
+export type OrdenCompra = {
+  numero: number;
+  /** receiptState de Defontana: P pendiente, I parcial, C completa. */
+  estado: string;
+  serie: string;
+  proveedorRut: string;
+  proveedorNombre: string;
+  lineas: LineaOC[];
+};
 
 /**
- * Lee una OC de Defontana y cuánto se ha recepcionado de cada línea (la
- * recepción genera el parte de entrada que sube el stock). Devuelve null si la
- * OC no existe.
+ * Lee una OC de Defontana con proveedor y cuánto se ha recepcionado de cada
+ * línea (la recepción genera el parte de entrada que sube el stock). Devuelve
+ * null si la OC no existe.
  */
-export async function recepcionOC(
-  numero: number
-): Promise<{ numero: number; estado: string; lineas: LineaOC[] } | null> {
+export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
   try {
     const r = await llamar<{
       success: boolean;
       purchaseOrderData?: {
         receiptState?: string;
+        series?: string | null;
+        providerInfo?: { legalCode?: string; name?: string };
         purchaseOrderDetail?: {
+          line: number;
           productId: string;
           quantity: number;
           receivedQuantity: number;
+          amount: number;
+          product?: { isService?: boolean; usesLotes?: boolean } | null;
         }[];
       } | null;
     }>(`/api/PurchaseOrder/Get?Number=${numero}`);
@@ -235,10 +270,17 @@ export async function recepcionOC(
     return {
       numero,
       estado: o.receiptState ?? "",
+      serie: o.series ?? "",
+      proveedorRut: formatearRut(o.providerInfo?.legalCode ?? ""),
+      proveedorNombre: o.providerInfo?.name ?? "",
       lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
+        linea: d.line,
         codigo: d.productId,
         pedida: Number(d.quantity) || 0,
         recibida: Number(d.receivedQuantity) || 0,
+        monto: Number(d.amount) || 0,
+        servicio: d.product?.isService === true,
+        usaLotes: d.product?.usesLotes === true,
       })),
     };
   } catch (e) {
@@ -271,60 +313,106 @@ export function problemasRecepcion(
 }
 
 export const AVISO_RECEPCION =
-  "Entra a Defontana, recepciona la OC (genera el parte de entrada que sube el stock) y vuelve a intentarlo.";
+  "Recepciona la OC desde aquí (opción «Recepcionar OC») o en Defontana, y vuelve a intentarlo.";
 
-export type ParteEntradaInput = {
-  /** PE = a inventario (Mercaderías); PE_CD = directo al gasto del centro. */
-  tipo: "PE" | "PE_CD";
-  externalId: string;
-  /** "YYYY-MM-DD" */
-  fecha: string;
-  glosa: string;
+/**
+ * Problemas para recepcionar estas cantidades contra la OC: el artículo debe
+ * estar en la OC, ser entero, caber en lo pendiente y no usar lotes.
+ */
+export function problemasPorRecibir(
+  oc: { lineas: LineaOC[] },
+  pedido: { codigo: string; nombre: string; cantidad: number }[]
+): string[] {
+  const out: string[] = [];
+  for (const p of pedido) {
+    const l = oc.lineas.find((x) => x.codigo === p.codigo);
+    if (!l) {
+      out.push(`«${p.nombre}» no está en la OC`);
+    } else if (l.usaLotes) {
+      out.push(`«${p.nombre}» usa lotes: recepciónalo en Defontana`);
+    } else if (!Number.isInteger(p.cantidad)) {
+      out.push(`«${p.nombre}»: Defontana solo recepciona cantidades enteras`);
+    } else if (p.cantidad > l.pedida - l.recibida) {
+      out.push(
+        `«${p.nombre}»: en la OC quedan ${l.pedida - l.recibida} por recibir y pides ${p.cantidad}`
+      );
+    }
+  }
+  return out;
+}
+
+export type RecepcionInput = {
+  oc: OrdenCompra;
   bodega: string;
-  centroNegocio: string;
-  /** costo: unitario neto de compra. */
-  lineas: { articleId: string; cantidad: number; costo: number }[];
+  lineas: { codigo: string; cantidad: number }[];
 };
 
 /**
- * Crea un parte de entrada (sube el stock de la bodega). Contablemente debita
- * Mercaderías (PE) o el gasto de la categoría con el centro (PE_CD) y acredita
- * «Facturas por recibir». Devuelve el folio.
+ * Recepciona (total o parcialmente) una OC: Defontana crea el documento de
+ * recepción y el parte de entrada ligado a la OC, con el proveedor y el costo
+ * de la OC. Devuelve el N° de recepción y los folios de los PE generados.
  */
-export async function crearParteEntrada(
-  input: ParteEntradaInput
-): Promise<{ folio: number; tipo: string }> {
-  const analysis = { businessCenter: input.centroNegocio };
+export async function recepcionarOC(
+  input: RecepcionInput
+): Promise<{ recepcion: number; partes: number[] }> {
+  const { oc } = input;
+  const detail = input.lineas.map((l) => {
+    const d = oc.lineas.find((x) => x.codigo === l.codigo);
+    if (!d) throw new Error(`«${l.codigo}» no está en la OC ${oc.numero}.`);
+    return {
+      line: d.linea,
+      productId: d.codigo,
+      quantity: l.cantidad,
+      // Costo de la OC proporcional a lo que se recibe.
+      total: Math.round((d.monto / d.pedida) * l.cantidad * 100) / 100,
+      isService: d.servicio,
+    };
+  });
   const r = await llamar<{
-    number?: number;
-    documentType?: string;
+    number?: string | number | null;
     success: boolean;
     message?: string | null;
     exceptionMessage?: string | null;
-  }>("/api/Inventory/Insert", {
+  }>("/api/PurchaseOrder/InsertReceptionDocument", {
     method: "POST",
     body: {
-      documentTypeId: input.tipo,
-      fiscalYear: input.fecha.slice(0, 4),
-      gloss: input.glosa,
-      reasonId: "COMPRA",
-      destinationStowageId: input.bodega,
-      date: input.fecha,
-      externalDocumentID: input.externalId,
-      analysis,
-      details: input.lineas.map((l) => ({
-        articleId: l.articleId,
-        count: l.cantidad,
-        price: l.costo,
-        comment: "",
-        analysis,
-      })),
+      providerId: oc.proveedorRut,
+      purchaseOrderNumber: oc.numero,
+      // Defontana rechaza la OC si la serie va nula: debe ser "" cuando no hay.
+      series: oc.serie ?? "",
+      storageCode: input.bodega,
+      detail,
     },
   });
-  if (!r.success || !r.number) {
+  const recepcion = Number(r.number);
+  if (!r.success || !recepcion) {
     throw new Error(
-      r.exceptionMessage || r.message || "Defontana rechazó el parte de entrada."
+      r.exceptionMessage || r.message || "Defontana rechazó la recepción de la OC."
     );
   }
-  return { folio: r.number, tipo: r.documentType ?? input.tipo };
+  // El PE lo genera Defontana con un pequeño retraso: se espera a que aparezca
+  // para dejar el folio anotado (informativo; la recepción ya está hecha).
+  let partes: number[] = [];
+  for (let intento = 0; intento < 6 && partes.length === 0; intento++) {
+    if (intento > 0) await new Promise((r) => setTimeout(r, 700));
+    try {
+      const d = await llamar<{
+        receptionDocumentList?: {
+          receptionDocumentNumber: number;
+          inventoryDocumentList?: { numberDocInv: string; docTypeInv: string }[];
+        }[];
+      }>(`/api/PurchaseOrder/GetReceptionDocuments?Number=${oc.numero}`);
+      partes = (d.receptionDocumentList ?? [])
+        .filter((x) => x.receptionDocumentNumber === recepcion)
+        .flatMap((x) => x.inventoryDocumentList ?? [])
+        .filter((x) => x.docTypeInv === "PE")
+        .map((x) => Number(x.numberDocInv))
+        .filter(Boolean);
+    } catch {
+      break;
+    }
+    // Una OC solo de servicios no genera PE: no se espera de más.
+    if (detail.every((x) => x.isService)) break;
+  }
+  return { recepcion, partes };
 }

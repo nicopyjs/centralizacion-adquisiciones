@@ -4,8 +4,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 import ReportarCorreo from "@/components/ReportarCorreo";
+import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
 import {
   AVISO_RECEPCION,
+  problemasPorRecibir,
   problemasRecepcion,
   type LineaOC,
 } from "@/lib/defontana";
@@ -1706,13 +1708,19 @@ export default function GestionPedidosPanel() {
                 setConsumoPedido(null);
                 setAvisoConsumo(
                   `${[
-                    res.folioEntrada
-                      ? `${res.accion === "pe_cd" ? "PE costo directo" : "Parte de entrada"} N° ${res.folioEntrada}`
+                    res.folioRecepcion
+                      ? `OC recepcionada (recepción ${res.folioRecepcion}${
+                          res.partes?.length ? `, PE ${res.partes.join(", ")}` : ""
+                        })`
                       : "",
                     res.folioConsumo ? `Consumo interno CI-${res.folioConsumo}` : "",
                   ]
                     .filter(Boolean)
-                    .join(" y ")} registrado en Defontana (${ambiente}).`
+                    .join(" y ")} registrado en Defontana (${ambiente}).${
+                    res.serviciosSinConsumo?.length
+                      ? ` Sin consumo (servicio): ${res.serviciosSinConsumo.join(", ")}.`
+                      : ""
+                  }`
                 );
                 window.setTimeout(() => setAvisoConsumo(null), 8000);
               }}
@@ -2086,11 +2094,21 @@ function DialogoConsumo({
   pedido: PedidoResumen;
   onCerrar: () => void;
   onRegistrado: (
-    res: { accion: string; folioEntrada?: number; folioConsumo?: number },
+    res: {
+      accion: string;
+      folioRecepcion?: number;
+      partes?: number[];
+      folioConsumo?: number;
+      serviciosSinConsumo?: string[];
+    },
     ambiente: string,
     lineas: { fila: number; consumoInterno: string }[]
   ) => void;
 }) {
+  type Accion = "rec_ci" | "rec" | "ci";
+  type EstadoOC =
+    | { estado: "cargando" | "inexistente" | "error" }
+    | { estado: "ok"; lineas: LineaOC[]; proveedor: string; recibidaEstado: string };
   const caja = useRef<HTMLDivElement>(null);
   const [bodegas, setBodegas] = useState<{ codigo: string; nombre: string }[]>(
     []
@@ -2098,19 +2116,11 @@ function DialogoConsumo({
   const [ambiente, setAmbiente] = useState("");
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
-  type Accion = "pe_ci" | "ci" | "pe" | "pe_cd";
-  const [accion, setAccion] = useState<Accion>("pe_ci");
-  // Costo unitario neto por fila (solo para las acciones con parte de entrada).
-  const [costo, setCosto] = useState<Record<number, string>>({});
-  const conEntrada = accion !== "ci";
-  const conConsumo = accion === "ci" || accion === "pe_ci";
-  // Recepción de la OC en Defontana (parte de entrada): sin ella no hay stock.
-  type EstadoOC =
-    | { estado: "cargando" | "inexistente" | "error" }
-    | { estado: "ok"; lineas: LineaOC[] };
+  const [accion, setAccion] = useState<Accion>("rec_ci");
+  const conRecepcion = accion !== "ci";
   const [ocLeida, setOcLeida] = useState<(EstadoOC & { oc: string }) | null>(null);
   // Mientras no llegue la respuesta de la OC escrita, se muestra «cargando».
-  const ocInfo: EstadoOC | null = !oc || accion !== "ci"
+  const ocInfo: EstadoOC | null = !oc
     ? null
     : ocLeida?.oc === oc
       ? ocLeida
@@ -2123,22 +2133,24 @@ function DialogoConsumo({
   const [errorStock, setErrorStock] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
-  // Solo artículos ya recibidos y sin consumo registrado.
+
   const recibidos = pedido.items.filter((i) => (i.cantidadRecibida ?? 0) > 0);
-  const elegibles = recibidos.filter(
-    (i) =>
-      !/CI-\d+/.test(i.consumoInterno) &&
-      (conEntrada ? !/PE(?:CD)?-\d+/.test(i.consumoInterno) : true) &&
-      (conConsumo ? !/PECD-\d+/.test(i.consumoInterno) : true)
-  );
-  const [cant, setCant] = useState<Record<number, string>>(() =>
-    Object.fromEntries(
-      recibidos.map((i) => [i.fila, String(i.cantidadRecibida)])
-    )
-  );
-  const [marcadas, setMarcadas] = useState<Set<number>>(
-    () => new Set(recibidos.map((i) => i.fila))
-  );
+  // Tope y valor por defecto: lo recibido menos lo ya recepcionado y/o
+  // consumido desde aquí (se puede hacer en partes).
+  const tope = (i: (typeof recibidos)[number]) => {
+    const rec = i.cantidadRecibida ?? 0;
+    return Math.min(
+      accion === "rec" ? Infinity : rec - yaConsumido(i.consumoInterno),
+      accion === "ci" ? Infinity : rec - yaRecepcionado(i.consumoInterno)
+    );
+  };
+  const elegibles = recibidos.filter((i) => tope(i) > 0);
+  const [cantEditada, setCantEditada] = useState<Record<number, string>>({});
+  const cant = (i: (typeof recibidos)[number]) =>
+    cantEditada[i.fila] ?? String(tope(i));
+  const [desmarcadas, setDesmarcadas] = useState<Set<number>>(new Set());
+  const marcada = (fila: number) => !desmarcadas.has(fila);
+  const seleccion = elegibles.filter((i) => marcada(i.fila));
 
   useEffect(() => {
     const codigos = Array.from(new Set(recibidos.map((i) => i.codigo)));
@@ -2156,7 +2168,7 @@ function DialogoConsumo({
   }, []);
 
   useEffect(() => {
-    if (!oc || accion !== "ci") return;
+    if (!oc) return;
     const ctl = new AbortController();
     const t = setTimeout(() => {
       fetch(`/api/defontana/oc?numero=${oc}`, { cache: "no-store", signal: ctl.signal })
@@ -2165,7 +2177,13 @@ function DialogoConsumo({
           if (!r.ok) throw new Error(d.error);
           setOcLeida(
             d.existe
-              ? { oc, estado: "ok", lineas: d.lineas ?? [] }
+              ? {
+                  oc,
+                  estado: "ok",
+                  lineas: d.lineas ?? [],
+                  proveedor: d.proveedor ?? "",
+                  recibidaEstado: d.estado ?? "",
+                }
               : { oc, estado: "inexistente" }
           );
         })
@@ -2177,28 +2195,26 @@ function DialogoConsumo({
       clearTimeout(t);
       ctl.abort();
     };
-  }, [oc, accion]);
+  }, [oc]);
 
-  // Artículos marcados que la OC aún no tiene recepcionados.
+  // Avisos de la OC para los artículos marcados.
   const problemasOC =
     ocInfo?.estado === "ok"
-      ? problemasRecepcion(
+      ? (conRecepcion ? problemasPorRecibir : problemasRecepcion)(
           ocInfo,
-          elegibles
-            .filter((i) => marcadas.has(i.fila))
-            .map((i) => ({
-              codigo: i.codigo,
-              nombre: i.nombre,
-              cantidad: Number(cant[i.fila]) || 0,
-            }))
+          seleccion.map((i) => ({
+            codigo: i.codigo,
+            nombre: i.nombre,
+            cantidad: Number(cant(i)) || 0,
+          }))
         )
       : [];
   const ocBloquea =
-    accion === "ci" &&
-    !!oc &&
-    (ocInfo?.estado === "cargando" ||
-      ocInfo?.estado === "inexistente" ||
-      problemasOC.length > 0);
+    (conRecepcion && !oc) ||
+    (!!oc &&
+      (ocInfo?.estado === "cargando" ||
+        ocInfo?.estado === "inexistente" ||
+        problemasOC.length > 0));
 
   useEffect(() => {
     caja.current?.focus();
@@ -2223,31 +2239,25 @@ function DialogoConsumo({
   }, []);
 
   async function confirmar() {
-    const lineas = elegibles
-      .filter((i) => marcadas.has(i.fila))
-      .map((i) => ({ fila: i.fila, cantidad: Number(cant[i.fila]) }));
-    if (!bodega) return setError("Elige la bodega de origen.");
+    const lineas = seleccion.map((i) => ({ fila: i.fila, cantidad: Number(cant(i)) }));
+    if (!bodega) return setError("Elige la bodega.");
+    if (conRecepcion && !oc) return setError("Indica el N° de OC que vas a recepcionar.");
     if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
-      const it = elegibles.find((i) => i.fila === l.fila)!;
-      if (!(l.cantidad > 0) || l.cantidad > (it.cantidadRecibida ?? 0)) {
+      const it = seleccion.find((i) => i.fila === l.fila)!;
+      if (!(l.cantidad > 0) || l.cantidad > tope(it)) {
         return setError(
-          `«${it.nombre}»: la cantidad debe ser mayor que 0 y no superar lo recibido (${it.cantidadRecibida}).`
+          `«${it.nombre}»: la cantidad debe ser mayor que 0 y no superar ${tope(it)}.`
         );
       }
-    }
-    if (conEntrada) {
-      for (const l of lineas) {
-        const it = elegibles.find((i) => i.fila === l.fila)!;
-        if (!(Number(costo[l.fila]) > 0)) {
-          return setError(`«${it.nombre}»: indica el costo unitario neto (mayor que 0).`);
-        }
+      if (conRecepcion && !Number.isInteger(l.cantidad)) {
+        return setError(`«${it.nombre}»: la recepción solo acepta cantidades enteras.`);
       }
     }
-    // Con parte de entrada el stock sube antes de consumir: no se valida aquí.
+    // Con recepción el stock sube antes de consumir: solo se valida el consumo suelto.
     const faltantes = (accion === "ci" ? lineas : [])
-      .map((l) => ({ l, it: elegibles.find((i) => i.fila === l.fila)! }))
+      .map((l) => ({ l, it: seleccion.find((i) => i.fila === l.fila)! }))
       .filter(({ l, it }) => {
         const disp = stock?.[bodega]?.[it.codigo];
         return disp !== undefined && l.cantidad > disp;
@@ -2272,10 +2282,7 @@ function DialogoConsumo({
           bodega,
           accion,
           oc: oc.trim(),
-          lineas: lineas.map((l) => ({
-            ...l,
-            ...(conEntrada ? { costo: Number(costo[l.fila]) } : {}),
-          })),
+          lineas,
         }),
       });
       if (res.status === 401) {
@@ -2292,6 +2299,9 @@ function DialogoConsumo({
     }
   }
 
+  const inputClass =
+    "h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40";
+
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
@@ -2307,11 +2317,11 @@ function DialogoConsumo({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label="Consumo interno en Defontana"
+        aria-label="Recepción de OC y consumo interno en Defontana"
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
-          Movimiento de inventario · pedido {folioCorto(pedido.pedidoId)}
+          Inventario en Defontana · pedido {folioCorto(pedido.pedidoId)}
         </h3>
         <p className="mt-1.5 text-sm text-muted-foreground">
           Centro de negocio:{" "}
@@ -2320,6 +2330,17 @@ function DialogoConsumo({
           </strong>
           .
         </p>
+        {ambiente === "pruebas" && (
+          <p className="mt-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent">
+            Ambiente de PRUEBAS (replapi): no afecta la contabilidad real.
+          </p>
+        )}
+        {ambiente === "produccion" && (
+          <p className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-1.5 text-xs font-semibold text-destructive">
+            PRODUCCIÓN: esto mueve stock y genera comprobantes contables reales.
+          </p>
+        )}
+
         <label className="mt-4 block">
           <span className={labelClass}>¿Qué quieres registrar?</span>
           <select
@@ -2329,65 +2350,26 @@ function DialogoConsumo({
               setError(null);
             }}
             disabled={enviando}
-            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+            className={inputClass}
           >
-            <option value="pe_ci">Entrada a bodega + consumo interno</option>
+            <option value="rec_ci">Recepcionar OC + consumo interno</option>
+            <option value="rec">Solo recepcionar OC (queda en stock)</option>
             <option value="ci">Solo consumo interno (ya hay stock)</option>
-            <option value="pe">Solo parte de entrada a bodega</option>
-            <option value="pe_cd">Parte de entrada a costo directo</option>
           </select>
           <span className="mt-1 block text-xs text-muted-foreground">
-            {accion === "pe_ci" &&
-              "Sube el stock con un parte de entrada (PE) y enseguida lo descuenta con un consumo interno (CI) imputado al centro."}
+            {accion === "rec_ci" &&
+              "Recepciona la OC en Defontana (total o parcial): se crea el parte de entrada ligado a la compra, con proveedor y costo de la OC. Enseguida descuenta lo recibido con un consumo interno imputado al centro."}
+            {accion === "rec" &&
+              "Recepciona la OC en Defontana (total o parcial). El material queda en stock de la bodega; el consumo lo haces después."}
             {accion === "ci" &&
-              "Descuenta stock que ya existe en la bodega (por ejemplo, recepcionado en Defontana) e imputa el gasto al centro."}
-            {accion === "pe" &&
-              "Ingresa el material al inventario (Mercaderías). Queda en stock, sin gasto todavía."}
-            {accion === "pe_cd" &&
-              "Ingresa el material y lo carga directo al gasto del centro (PE costo directo). No hagas consumo interno después: se contaría dos veces."}
+              "Descuenta stock que ya existe en la bodega e imputa el gasto al centro. La OC es opcional; si la indicas, debe estar recepcionada."}
           </span>
         </label>
-        {ambiente === "pruebas" && (
-          <p className="mt-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent">
-            Ambiente de PRUEBAS (replapi): no afecta la contabilidad real.
-          </p>
-        )}
-        {ambiente === "produccion" && (
-          <p className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-1.5 text-xs font-semibold text-destructive">
-            PRODUCCIÓN: esto descuenta stock y genera un comprobante contable
-            real.
-          </p>
-        )}
 
         <label className="mt-4 block">
           <span className={labelClass}>
-            {accion === "ci" ? "Bodega de origen" : "Bodega"}
+            N° de OC{conRecepcion ? "" : " (opcional)"}
           </span>
-          <select
-            value={bodega}
-            onChange={(e) => setBodega(e.target.value)}
-            disabled={cargando || enviando}
-            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <option value="">{cargando ? "Cargando…" : "Elige una bodega"}</option>
-            {bodegas.map((b) => {
-              const st = stock?.[b.codigo];
-              const ok = st
-                ? elegibles.filter((i) => (st[i.codigo] ?? 0) >= Number(cant[i.fila] || 0)).length
-                : 0;
-              return (
-                <option key={b.codigo} value={b.codigo}>
-                  {b.codigo} · {b.nombre}
-                  {st ? ` — stock para ${ok} de ${elegibles.length}` : ""}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-
-        {accion === "ci" && (
-        <label className="mt-4 block">
-          <span className={labelClass}>N° de OC (opcional)</span>
           <input
             type="text"
             inputMode="numeric"
@@ -2395,7 +2377,7 @@ function DialogoConsumo({
             disabled={enviando}
             onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
             placeholder="Ej.: 4331"
-            className="h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+            className={inputClass}
           />
           {ocInfo?.estado === "cargando" && (
             <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
@@ -2410,98 +2392,134 @@ function DialogoConsumo({
               No se pudo consultar la OC; se validará al registrar.
             </p>
           )}
-          {ocInfo?.estado === "ok" && problemasOC.length === 0 && (
-            <p className="mt-1 text-xs font-semibold text-success">
-              OC {oc} recepcionada en Defontana.
+          {ocInfo?.estado === "ok" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              OC {oc} · {ocInfo.proveedor || "sin proveedor"} ·{" "}
+              {ocInfo.recibidaEstado === "C"
+                ? "recepcionada completa"
+                : ocInfo.recibidaEstado === "I"
+                  ? "recepcionada parcial"
+                  : "sin recepcionar"}
             </p>
           )}
           {problemasOC.length > 0 && (
             <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
-              OC {oc}: {problemasOC.join("; ")}. {AVISO_RECEPCION}
+              OC {oc}: {problemasOC.join("; ")}.
+              {!conRecepcion && ` ${AVISO_RECEPCION}`}
             </p>
           )}
         </label>
-        )}
+
+        <label className="mt-4 block">
+          <span className={labelClass}>
+            {accion === "ci" ? "Bodega de origen" : "Bodega"}
+          </span>
+          <select
+            value={bodega}
+            onChange={(e) => setBodega(e.target.value)}
+            disabled={cargando || enviando}
+            className={inputClass}
+          >
+            <option value="">{cargando ? "Cargando…" : "Elige una bodega"}</option>
+            {bodegas.map((b) => {
+              const st = stock?.[b.codigo];
+              const ok = st
+                ? elegibles.filter((i) => (st[i.codigo] ?? 0) >= Number(cant(i) || 0)).length
+                : 0;
+              return (
+                <option key={b.codigo} value={b.codigo}>
+                  {b.codigo} · {b.nombre}
+                  {st && accion === "ci" ? ` — stock para ${ok} de ${elegibles.length}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        </label>
 
         <div className="mt-4">
           <span className={labelClass}>
-            Artículos (recibidos y sin consumo registrado)
+            {conRecepcion
+              ? "Artículos recibidos por recepcionar"
+              : "Artículos (recibidos y sin consumo registrado)"}
           </span>
           {elegibles.length === 0 ? (
             <p className="mt-1 text-sm text-muted-foreground">
-              No hay artículos disponibles: deben tener cantidad recibida y no
-              tener ya un CI-folio.
+              No hay artículos disponibles: deben tener cantidad recibida que
+              aún no se haya {accion === "ci" ? "consumido" : "recepcionado"}.
             </p>
           ) : (
             <ul className="mt-1 divide-y divide-border rounded-lg border border-border">
-              {elegibles.map((i) => (
-                <li key={i.fila} className="flex items-center gap-3 px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={marcadas.has(i.fila)}
-                    disabled={enviando}
-                    onChange={(e) =>
-                      setMarcadas((prev) => {
-                        const n = new Set(prev);
-                        if (e.target.checked) n.add(i.fila);
-                        else n.delete(i.fila);
-                        return n;
-                      })
-                    }
-                    aria-label={`Incluir ${i.nombre}`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-card-foreground">
-                      {i.nombre}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {i.codigo} · recibido {i.cantidadRecibida} {i.unidad}
-                      {(() => {
-                        if (!bodega) return null;
-                        if (errorStock) return " · stock no disponible";
-                        if (!stock) return " · consultando stock…";
-                        const disp = stock[bodega]?.[i.codigo] ?? 0;
-                        const falta = accion === "ci" && disp < Number(cant[i.fila] || 0);
-                        return (
-                          <span
-                            className={`font-semibold ${falta ? "text-destructive" : "text-success"}`}
-                          >
-                            {" · "}stock en {bodega}: {disp}
-                            {falta ? " (insuficiente)" : ""}
+              {elegibles.map((i) => {
+                const lOC =
+                  ocInfo?.estado === "ok"
+                    ? ocInfo.lineas.find((l) => l.codigo === i.codigo)
+                    : undefined;
+                return (
+                  <li key={i.fila} className="flex items-center gap-3 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={marcada(i.fila)}
+                      disabled={enviando}
+                      onChange={(e) =>
+                        setDesmarcadas((prev) => {
+                          const n = new Set(prev);
+                          if (e.target.checked) n.delete(i.fila);
+                          else n.add(i.fila);
+                          return n;
+                        })
+                      }
+                      aria-label={`Incluir ${i.nombre}`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-card-foreground">
+                        {i.nombre}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {i.codigo} · recibido {i.cantidadRecibida} {i.unidad}
+                        {conRecepcion && lOC && (
+                          <span className="font-semibold text-card-foreground">
+                            {" · "}en la OC quedan {lOC.pedida - lOC.recibida} por recibir
+                            {lOC.servicio ? " (servicio: sin stock)" : ""}
                           </span>
-                        );
-                      })()}
-                    </p>
-                  </div>
-                  {conEntrada && (
+                        )}
+                        {conRecepcion && ocInfo?.estado === "ok" && !lOC && (
+                          <span className="font-semibold text-destructive">
+                            {" · "}no está en la OC
+                          </span>
+                        )}
+                        {!conRecepcion &&
+                          bodega &&
+                          (() => {
+                            if (errorStock) return " · stock no disponible";
+                            if (!stock) return " · consultando stock…";
+                            const disp = stock[bodega]?.[i.codigo] ?? 0;
+                            const falta = disp < Number(cant(i) || 0);
+                            return (
+                              <span
+                                className={`font-semibold ${falta ? "text-destructive" : "text-success"}`}
+                              >
+                                {" · "}stock en {bodega}: {disp}
+                                {falta ? " (insuficiente)" : ""}
+                              </span>
+                            );
+                          })()}
+                      </p>
+                    </div>
                     <input
                       type="number"
                       min={0}
-                      step="any"
-                      value={costo[i.fila] ?? ""}
-                      disabled={enviando || !marcadas.has(i.fila)}
+                      step={conRecepcion ? 1 : "any"}
+                      value={cant(i)}
+                      disabled={enviando || !marcada(i.fila)}
                       onChange={(e) =>
-                        setCosto((prev) => ({ ...prev, [i.fila]: e.target.value }))
+                        setCantEditada((prev) => ({ ...prev, [i.fila]: e.target.value }))
                       }
-                      placeholder="Costo unit."
-                      aria-label={`Costo unitario neto de ${i.nombre}`}
-                      className="h-9 w-24 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                      aria-label={`Cantidad de ${i.nombre}`}
+                      className="h-9 w-20 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
                     />
-                  )}
-                  <input
-                    type="number"
-                    min={0}
-                    step="any"
-                    value={cant[i.fila] ?? ""}
-                    disabled={enviando || !marcadas.has(i.fila)}
-                    onChange={(e) =>
-                      setCant((prev) => ({ ...prev, [i.fila]: e.target.value }))
-                    }
-                    aria-label={`Cantidad de ${i.nombre}`}
-                    className="h-9 w-20 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
-                  />
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -2528,13 +2546,11 @@ function DialogoConsumo({
           >
             {enviando
               ? "Registrando…"
-              : accion === "pe_ci"
-                ? "Registrar entrada y consumo"
-                : accion === "ci"
-                  ? "Registrar consumo interno"
-                  : accion === "pe"
-                    ? "Registrar parte de entrada"
-                    : "Registrar entrada a costo directo"}
+              : accion === "rec_ci"
+                ? "Recepcionar y consumir"
+                : accion === "rec"
+                  ? "Recepcionar OC"
+                  : "Registrar consumo interno"}
           </button>
         </div>
       </div>
