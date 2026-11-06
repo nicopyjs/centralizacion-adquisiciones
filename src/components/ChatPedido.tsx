@@ -173,7 +173,7 @@ export default function ChatPedido({
     `/api/pedidos/chat/archivo?folio=${encodeURIComponent(folio)}&id=${encodeURIComponent(id)}`;
   const esImagen = (a: Adjunto) => /^image\/(?!svg)/.test(a.mime);
   // Carpeta de Drive del pedido: incluye lo subido directo a Drive.
-  const [enDrive, setEnDrive] = useState<Adjunto[]>([]);
+  const [enDrive, setEnDrive] = useState<Adjunto[] | null>(null);
   useEffect(() => {
     let vivo = true;
     fetch(`/api/pedidos/chat/fotos?folio=${encodeURIComponent(folio)}`, { cache: "no-store" })
@@ -186,13 +186,12 @@ export default function ChatPedido({
       vivo = false;
     };
   }, [folio, mensajes?.length]);
-  const fotos = [
-    ...new Map(
-      [...(mensajes ?? []).flatMap((m) => m.adjuntos ?? []), ...enDrive]
-        .filter(esImagen)
-        .map((a) => [a.id, a] as const)
-    ).values(),
-  ];
+  // Drive es la fuente de verdad: lo borrado allí deja de mostrarse. Si Drive no
+  // responde, se usan los adjuntos guardados en el chat.
+  const existe = (a: Adjunto) => enDrive === null || enDrive.some((d) => d.id === a.id);
+  const fotos = (
+    enDrive ?? (mensajes ?? []).flatMap((m) => m.adjuntos ?? [])
+  ).filter(esImagen);
 
   const cantidad = mensajes?.length ?? 0;
   useEffect(() => {
@@ -340,7 +339,7 @@ export default function ChatPedido({
                       <ul className="mt-1 space-y-0.5">
                         {m.adjuntos.map((a) => (
                           <li key={a.id}>
-                            {esImagen(a) && (
+                            {esImagen(a) && existe(a) && (
                               <button
                                 type="button"
                                 onClick={() => setFoto({ src: urlArchivo(a.id), nombre: a.nombre })}
@@ -355,17 +354,25 @@ export default function ChatPedido({
                                 />
                               </button>
                             )}
-                            <a
-                              href={urlArchivo(a.id)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="break-all text-xs font-semibold text-accent hover:underline"
-                            >
-                              📎 {a.nombre}
-                            </a>{" "}
-                            <span className="text-[11px] text-muted-foreground">
-                              ({formatTam(a.size)})
-                            </span>
+                            {existe(a) ? (
+                              <>
+                                <a
+                                  href={urlArchivo(a.id)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="break-all text-xs font-semibold text-accent hover:underline"
+                                >
+                                  📎 {a.nombre}
+                                </a>{" "}
+                                <span className="text-[11px] text-muted-foreground">
+                                  ({formatTam(a.size)})
+                                </span>
+                              </>
+                            ) : (
+                              <span className="break-all text-xs italic text-muted-foreground">
+                                📎 {a.nombre} (archivo eliminado)
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ul>
