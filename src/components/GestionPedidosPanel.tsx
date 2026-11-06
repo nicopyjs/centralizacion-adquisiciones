@@ -324,6 +324,14 @@ export default function GestionPedidosPanel() {
   const [enviandoEliminar, setEnviandoEliminar] = useState(false);
   const [errorEliminar, setErrorEliminar] = useState<string | null>(null);
 
+  // Modificar un pedido ya enviado (corregir artículo/cantidad, agregar, datos).
+  const [modificando, setModificando] = useState<
+    | { tipo: "linea"; item: PedidoItem }
+    | { tipo: "agregar" }
+    | { tipo: "cabecera" }
+    | null
+  >(null);
+
   const detalleRef = useRef<HTMLElement>(null);
   const ultimaCarga = useRef(0);
 
@@ -1650,6 +1658,7 @@ export default function GestionPedidosPanel() {
               onConsumo={() => setConsumoPedido(pedidoActual.pedidoId)}
               onAplicarATodos={aplicarCamposEnBloque}
               hayCambiosPendientes={totalCambios > 0}
+              onModificar={setModificando}
               onEliminar={(it) => {
                 setErrorEliminar(null);
                 setEliminando({
@@ -1663,6 +1672,18 @@ export default function GestionPedidosPanel() {
           )}
         </section>
       </div>
+
+      {modificando && pedidoActual && (
+        <DialogoModificar
+          pedido={pedidoActual}
+          modo={modificando}
+          onCerrar={() => setModificando(null)}
+          onGuardado={async () => {
+            setModificando(null);
+            await cargarPedidos();
+          }}
+        />
+      )}
 
       {eliminando && (
         <DialogoEliminar
@@ -2558,6 +2579,247 @@ function DialogoConsumo({
   );
 }
 
+function DialogoModificar({
+  pedido,
+  modo,
+  onCerrar,
+  onGuardado,
+}: {
+  pedido: PedidoResumen;
+  modo:
+    | { tipo: "linea"; item: PedidoItem }
+    | { tipo: "agregar" }
+    | { tipo: "cabecera" };
+  onCerrar: () => void;
+  onGuardado: () => Promise<void>;
+}) {
+  const item = modo.tipo === "linea" ? modo.item : null;
+  const cabecera = modo.tipo === "cabecera";
+  const caja = useRef<HTMLDivElement>(null);
+  const [catalogo, setCatalogo] = useState<
+    { codigo: string; nombre: string; categoria: string; unidad: string }[]
+  >([]);
+  const [codigo, setCodigo] = useState(item?.codigo ?? "");
+  const [cantidad, setCantidad] = useState(item ? String(item.cantidad) : "");
+  const [comentarioArt, setComentarioArt] = useState(item?.comentarioArticulo ?? "");
+  const [fechaEntrega, setFechaEntrega] = useState(pedido.fechaEntrega);
+  const [despacho, setDespacho] = useState(pedido.despacho);
+  const [comentario, setComentario] = useState(pedido.comentario);
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Si ya hay recepción o consumo registrado, el artículo queda fijo.
+  const fijo = Boolean(item && ((item.cantidadRecibida ?? 0) > 0 || item.consumoInterno));
+
+  useEffect(() => {
+    caja.current?.focus();
+    if (cabecera) return;
+    fetch("/api/articulos")
+      .then((r) => r.json())
+      .then((d) => {
+        const lista: { codigo: string; nombre: string; categoria: string; unidad: string }[] = [];
+        for (const c of d.categorias ?? []) {
+          for (const a of c.articulos ?? []) {
+            lista.push({
+              codigo: a.codigo,
+              nombre: a.nombre,
+              categoria: a.categoria,
+              unidad: a.unidad,
+            });
+          }
+        }
+        setCatalogo(lista);
+      })
+      .catch(() => setError("No se pudo cargar el catálogo de artículos."));
+  }, [cabecera]);
+
+  const opciones: ComboOption[] = useMemo(() => {
+    const enPedido = new Set(
+      pedido.items.filter((x) => x.codigo !== item?.codigo).map((x) => x.codigo)
+    );
+    return catalogo
+      .filter((a) => !enPedido.has(a.codigo))
+      .map((a) => ({ value: a.codigo, label: `${a.nombre} · ${a.codigo}` }));
+  }, [catalogo, pedido.items, item]);
+
+  const elegido =
+    catalogo.find((a) => a.codigo === codigo) ??
+    (item && codigo === item.codigo
+      ? { codigo: item.codigo, nombre: item.nombre, categoria: item.categoria, unidad: item.unidad }
+      : null);
+
+  async function guardar() {
+    setError(null);
+    let payload: Record<string, unknown>;
+    if (cabecera) {
+      payload = { accion: "cabecera", pedidoId: pedido.pedidoId, fechaEntrega, despacho, comentario };
+    } else {
+      if (!elegido) return setError("Elige un artículo.");
+      const n = Number(cantidad);
+      if (!Number.isFinite(n) || n <= 0) return setError("Ingresa una cantidad mayor a 0.");
+      payload = {
+        accion: item ? "linea" : "agregar",
+        pedidoId: pedido.pedidoId,
+        fila: item?.fila,
+        codigoActual: item?.codigo,
+        codigo: elegido.codigo,
+        nombre: elegido.nombre,
+        categoria: elegido.categoria,
+        unidad: elegido.unidad,
+        cantidad: n,
+        comentarioArticulo: comentarioArt,
+      };
+    }
+    setEnviando(true);
+    try {
+      const res = await fetch("/api/pedidos/modificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo guardar.");
+      await onGuardado();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error de red.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  const titulo = cabecera
+    ? "Editar datos del pedido"
+    : item
+      ? "Corregir artículo"
+      : "Agregar artículo";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCerrar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) onCerrar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={titulo}
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold text-primary">
+          {titulo} · {folioCorto(pedido.pedidoId)}
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          El cambio queda registrado en el chat del pedido para que el solicitante lo vea.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          {cabecera ? (
+            <>
+              <label className="block">
+                <span className={labelClass}>Entrega comprometida</span>
+                <input type="date" className={fieldClass} value={fechaEntrega} onChange={(e) => setFechaEntrega(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Despacho</span>
+                <input className={fieldClass} value={despacho} onChange={(e) => setDespacho(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Comentario del pedido</span>
+                <textarea
+                  rows={3}
+                  className={`${fieldClass} h-auto py-2`}
+                  value={comentario}
+                  onChange={(e) => setComentario(e.target.value)}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <div>
+                <span className={labelClass}>Artículo</span>
+                {fijo ? (
+                  <p className="rounded-lg bg-muted px-3 py-2 text-sm text-card-foreground">
+                    {item?.nombre}
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      Ya tiene recepción o consumo registrado: solo puedes cambiar la cantidad.
+                    </span>
+                  </p>
+                ) : (
+                  <SearchCombobox
+                    ariaLabel="Artículo"
+                    placeholder="Buscar artículo…"
+                    options={opciones}
+                    value={codigo}
+                    onChange={setCodigo}
+                    autoFocus={!item}
+                  />
+                )}
+              </div>
+              <label className="block">
+                <span className={labelClass}>
+                  Cantidad{elegido ? ` (${elegido.unidad})` : ""}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputMode="decimal"
+                  className={fieldClass}
+                  value={cantidad}
+                  onChange={(e) => setCantidad(e.target.value)}
+                />
+                {item && (item.cantidadRecibida ?? 0) > 0 && (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Ya recibidos: {item.cantidadRecibida}
+                  </span>
+                )}
+              </label>
+              <label className="block">
+                <span className={labelClass}>Comentario del artículo</span>
+                <input className={fieldClass} value={comentarioArt} onChange={(e) => setComentarioArt(e.target.value)} placeholder="Opcional" />
+              </label>
+            </>
+          )}
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCerrar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => void guardar()}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
+          >
+            {enviando ? "Guardando…" : "Guardar cambios"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DialogoEliminar({
   nombre,
   pedidoId,
@@ -2665,6 +2927,7 @@ function Detalle({
   onConsumo,
   onAplicarATodos,
   hayCambiosPendientes,
+  onModificar,
   onEliminar,
 }: {
   pedido: PedidoResumen;
@@ -2698,6 +2961,9 @@ function Detalle({
   /** Hay filas editadas sin guardar en algún pedido: no se puede eliminar. */
   hayCambiosPendientes: boolean;
   onEliminar: (it: PedidoItem) => void;
+  onModificar: (
+    m: { tipo: "linea"; item: PedidoItem } | { tipo: "agregar" } | { tipo: "cabecera" }
+  ) => void;
 }) {
   const bloqueado = pedido.estadoManual !== "";
   const sinCambios = cambios === 0;
@@ -3044,6 +3310,24 @@ function Detalle({
             ? "Ocultar datos del pedido"
             : "Ver más datos (área, clasificadores, fechas)"}
         </button>
+        {!bloqueado && (
+          <span className="ml-4 mt-1.5 inline-flex gap-4">
+            <button
+              type="button"
+              onClick={() => onModificar({ tipo: "cabecera" })}
+              className="text-xs font-semibold text-accent hover:underline"
+            >
+              Editar datos del pedido
+            </button>
+            <button
+              type="button"
+              onClick={() => onModificar({ tipo: "agregar" })}
+              className="text-xs font-semibold text-accent hover:underline"
+            >
+              + Agregar artículo
+            </button>
+          </span>
+        )}
       </div>
 
       {!bloqueado && pedido.items.length > 1 && (
@@ -3363,6 +3647,18 @@ function Detalle({
                             : "Guardar"}
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onModificar({ tipo: "linea", item: it })}
+                      disabled={lock}
+                      title="Corregir artículo, cantidad o comentario"
+                      aria-label={`Corregir ${it.nombre}`}
+                      className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/10 hover:text-accent disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" />
+                      </svg>
+                    </button>
                     {pedido.items.length > 1 && (
                       <button
                         type="button"
