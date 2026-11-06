@@ -67,3 +67,12 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* En celular, 16px en los campos evita que iOS haga zoom al enfocarlos. */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
