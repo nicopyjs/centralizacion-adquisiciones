@@ -34,7 +34,7 @@ export default async function GestionPedidosPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1800px]">
-      <header className="mb-3 flex items-center justify-between gap-4">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <h1 className="text-xl font-extrabold tracking-tight text-primary">
             Gestión de Pedidos
@@ -43,7 +43,7 @@ export default async function GestionPedidosPage() {
             Recepción, entrega y cierre de los pedidos de todas las áreas.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:gap-3">
           <span className="hidden text-xs text-muted-foreground sm:inline">
             Sesión: {perfilLabel(perfil)}
           </span>

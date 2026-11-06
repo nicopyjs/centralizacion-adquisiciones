@@ -627,7 +627,7 @@ export default function MisPedidosPanel() {
               ))}
             </select>
           </label>
-          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5 lg:justify-end">
+          <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-5 lg:justify-end">
             {hayFiltros && (
               <button
                 type="button"
@@ -845,7 +845,52 @@ export default function MisPedidosPanel() {
                   />
                   <ReportarCorreo folio={p.pedidoId} items={p.items} />
 
-                  <div className="mt-4 overflow-x-auto">
+                  <ul className="mt-4 space-y-2 md:hidden">
+                    {p.items.map((it, i) => {
+                      const e = ESTADOS[estadoLinea(it)];
+                      return (
+                        <li
+                          key={i}
+                          className="rounded-lg border border-border bg-background p-3 text-sm"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 font-semibold text-card-foreground">
+                              {it.nombre}
+                            </span>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-px text-[11px] font-semibold ${e.chip}`}
+                            >
+                              {e.label}
+                            </span>
+                          </div>
+                          {it.comentarioArticulo && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {it.comentarioArticulo}
+                            </p>
+                          )}
+                          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                            <Dato label="Pedido">
+                              {it.cantidad.toLocaleString("es-CL")} {it.unidad}
+                            </Dato>
+                            <Dato label="Recibido">
+                              {it.cantidadRecibida === null
+                                ? "—"
+                                : `${it.cantidadRecibida.toLocaleString("es-CL")} ${it.unidad}`}
+                            </Dato>
+                            <Dato label="Recibido por">{it.recepcionadoPor || "—"}</Dato>
+                            <Dato label="Recepción bodega">
+                              {formatFecha(it.fechaRecepcionBodega)}
+                            </Dato>
+                            <Dato label="Entrega">
+                              {formatFecha(it.fechaEntregaSolicitante)}
+                            </Dato>
+                          </dl>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  <div className="mt-4 hidden overflow-x-auto md:block">
                     <table className="w-full min-w-[760px] text-left text-sm">
                       <thead>
                         <tr className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -925,7 +970,7 @@ export default function MisPedidosPanel() {
               maxLength={MAX_ETIQUETA}
               onChange={(e) => setTextoEtiqueta(e.target.value)}
               placeholder="Etiqueta (p. ej. Calderas)"
-              className={`${fieldClass} !w-56`}
+              className={`${fieldClass} !w-full sm:!w-56`}
             />
             <datalist id="etiquetas-existentes">
               {opciones.etiquetas.map((t) => (

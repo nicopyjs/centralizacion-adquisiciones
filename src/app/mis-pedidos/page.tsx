@@ -36,7 +36,7 @@ export default async function MisPedidosPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1400px]">
-      <header className="mb-5 flex items-center justify-between gap-4">
+      <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-primary">
             Pedidos de {area}
@@ -45,7 +45,7 @@ export default async function MisPedidosPage() {
             Revisa el estado de los pedidos de tu área, de solo lectura.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:gap-3">
           <span className="hidden text-xs text-muted-foreground sm:inline">
             Sesión: {perfilLabel(sesion.perfil)} · {area}
           </span>

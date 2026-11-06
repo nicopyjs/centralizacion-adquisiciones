@@ -411,7 +411,7 @@ export default function ChatPedido({
             </ul>
           )}
 
-          <div className="mt-2 flex items-end gap-2">
+          <div className="mt-2 flex flex-wrap items-end gap-2">
             <textarea
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
@@ -424,7 +424,7 @@ export default function ChatPedido({
               rows={2}
               maxLength={2000}
               placeholder="Escribe un mensaje… (Enter envía, Shift+Enter salto de línea)"
-              className="min-h-[2.5rem] flex-1 resize-y rounded-lg border border-border bg-card px-3 py-2 text-sm"
+              className="min-h-[2.5rem] w-full flex-1 basis-full resize-y sm:basis-0 rounded-lg border border-border bg-card px-3 py-2 text-sm"
             />
             <input
               ref={inputArchivo}
