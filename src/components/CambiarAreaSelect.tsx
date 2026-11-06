@@ -63,7 +63,7 @@ export default function CambiarAreaSelect({ actual }: { actual: string }) {
       value={actual}
       disabled={cambiando}
       onChange={(e) => void cambiar(e.target.value)}
-      className="h-9 rounded-lg border border-border bg-card px-2 text-sm font-semibold text-primary shadow-sm disabled:opacity-50"
+      className="h-9 max-w-full rounded-lg border border-border bg-card px-2 text-sm font-semibold text-primary shadow-sm disabled:opacity-50"
     >
       {actual === ADQ &&
         areas.map((a) => (
