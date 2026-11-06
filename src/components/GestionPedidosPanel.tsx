@@ -1762,7 +1762,7 @@ export default function GestionPedidosPanel() {
       {/* Barra fija inferior: edición en bloque + guardado global */}
       {hayBarra && (
         <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-6">
-          <div className="pointer-events-auto mx-auto flex w-full max-w-[1800px] flex-col gap-2">
+          <div className="pointer-events-auto mx-auto flex max-h-[55dvh] w-full max-w-[1800px] flex-col gap-2 overflow-y-auto">
             {objetivo.length > 0 && (
               <div className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-xl border border-accent/40 bg-card p-3 shadow-lg ring-1 ring-accent/10">
                 <div className="mr-1 min-w-[150px]">
@@ -2035,7 +2035,7 @@ function DialogoEstado({
         role="dialog"
         aria-modal="true"
         aria-label={textos.titulo}
-        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl outline-none"
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
           {textos.titulo}
@@ -2318,7 +2318,7 @@ function DialogoConsumo({
         role="dialog"
         aria-modal="true"
         aria-label="Recepción de OC y consumo interno en Defontana"
-        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+        className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
           Inventario en Defontana · pedido {folioCorto(pedido.pedidoId)}
@@ -2593,7 +2593,7 @@ function DialogoEliminar({
         role="dialog"
         aria-modal="true"
         aria-label="Eliminar artículo del pedido"
-        className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl outline-none"
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold text-primary">
           Eliminar artículo del pedido {folioCorto(pedidoId)}
@@ -3113,8 +3113,8 @@ function Detalle({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1340px] border-collapse text-sm">
-          <thead>
+        <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1340px]">
+          <thead className="max-lg:hidden">
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pl-4 pr-1.5 font-semibold">
                 <input
@@ -3138,7 +3138,7 @@ function Detalle({
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-lg:block">
             {pedido.items.map((it) => {
               const edicion = ediciones[it.fila] ?? lineaEditDesdeItem(it);
               const sucia = tieneCambios(it, ediciones[it.fila]);
@@ -3161,7 +3161,7 @@ function Detalle({
               return (
                 <tr
                   key={it.fila}
-                  className={`border-b border-border/70 align-top last:border-0 ${
+                  className={`border-b border-border/70 align-top last:border-0 max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 ${
                     seleccionada
                       ? "bg-accent/10"
                       : sucia
@@ -3169,7 +3169,7 @@ function Detalle({
                         : "hover:bg-muted/30"
                   }`}
                 >
-                  <td className="py-2 pl-4 pr-1.5 pt-3">
+                  <td className="py-2 pl-4 pr-1.5 pt-3 max-lg:absolute max-lg:right-3 max-lg:top-3 max-lg:p-0">
                     <input
                       type="checkbox"
                       className="h-4 w-4 cursor-pointer accent-accent"
@@ -3180,7 +3180,7 @@ function Detalle({
                     />
                   </td>
                   <td
-                    className={`border-l-4 py-2 pl-2 pr-3 ${
+                    className={`border-l-4 py-2 pl-2 pr-3 max-lg:col-span-2 max-lg:py-0 max-lg:pr-8 ${
                       sucia
                         ? "border-l-accent"
                         : estadoLinea(it) === "completo"
@@ -3201,18 +3201,20 @@ function Detalle({
                       </span>
                     </div>
                     {it.comentarioArticulo && (
-                      <p className="mt-1 max-w-[260px] text-xs italic text-muted-foreground">
+                      <p className="mt-1 max-w-[260px] text-xs italic max-lg:max-w-none text-muted-foreground">
                         {it.comentarioArticulo}
                       </p>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-2 pt-2.5 tabular-nums">
+                  <td className="whitespace-nowrap px-2 py-2 pt-2.5 tabular-nums max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Pedido</span>
                     <span className="text-base font-bold text-primary">
                       {it.cantidad.toLocaleString("es-CL")}
                     </span>{" "}
                     <span className="text-muted-foreground">{it.unidad}</span>
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-2 max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Recibido</span>
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
@@ -3261,13 +3263,14 @@ function Detalle({
                       </p>
                     )}
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Llegó a bodega</span>
                     <div className="flex items-center gap-1">
                       <input
                         type="date"
                         disabled={lock}
                         aria-label={`Fecha en que llegó a bodega ${it.nombre}`}
-                        className={`${fieldClass} w-[136px]! shrink-0`}
+                        className={`${fieldClass} w-[136px]! shrink-0 max-lg:w-auto! max-lg:min-w-0 max-lg:flex-1`}
                         value={edicion.fechaRecepcionBodega}
                         onChange={(e) =>
                           onCambiar(it, "fechaRecepcionBodega", e.target.value)
@@ -3286,8 +3289,9 @@ function Detalle({
                       </button>
                     </div>
                   </td>
-                  <td className="px-2 py-2">
-                    <div className="w-[230px]" title={edicion.recepcionadoPor || undefined}>
+                  <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Recepcionado por</span>
+                    <div className="w-[230px] max-lg:w-full" title={edicion.recepcionadoPor || undefined}>
                       <SearchCombobox
                         size="sm"
                         allowCustom
@@ -3301,13 +3305,14 @@ function Detalle({
                       />
                     </div>
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Entregado el</span>
                     <div className="flex items-center gap-1">
                       <input
                         type="date"
                         disabled={lock}
                         aria-label={`Fecha en que se entregó al solicitante ${it.nombre}`}
-                        className={`${fieldClass} w-[136px]! shrink-0`}
+                        className={`${fieldClass} w-[136px]! shrink-0 max-lg:w-auto! max-lg:min-w-0 max-lg:flex-1`}
                         value={edicion.fechaEntregaSolicitante}
                         onChange={(e) =>
                           onCambiar(it, "fechaEntregaSolicitante", e.target.value)
@@ -3328,11 +3333,12 @@ function Detalle({
                       </button>
                     </div>
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Consumo interno</span>
                     <input
                       disabled={lock}
                       aria-label={`Consumo interno de ${it.nombre}`}
-                      className={`${fieldClass} w-[120px]!`}
+                      className={`${fieldClass} w-[120px]! max-lg:w-full!`}
                       value={edicion.consumoInterno}
                       onChange={(e) =>
                         onCambiar(it, "consumoInterno", e.target.value)
@@ -3341,7 +3347,7 @@ function Detalle({
                       placeholder="Opcional"
                     />
                   </td>
-                  <td className="whitespace-nowrap py-2 pl-2 pr-4 text-right">
+                  <td className="whitespace-nowrap py-2 pl-2 pr-4 text-right max-lg:col-span-2 max-lg:p-0 max-lg:text-left empty:hidden">
                     {sucia || guardando[it.fila] || guardado[it.fila] ? (
                       <button
                         type="button"
