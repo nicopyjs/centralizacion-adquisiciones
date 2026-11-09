@@ -1734,6 +1734,7 @@ export default function GestionPedidosPanel() {
                           res.partes?.length ? `, PE ${res.partes.join(", ")}` : ""
                         })`
                       : "",
+                    res.folioEntrada ? `Parte de entrada PECD-${res.folioEntrada}` : "",
                     res.folioConsumo ? `Consumo interno CI-${res.folioConsumo}` : "",
                   ]
                     .filter(Boolean)
@@ -2119,6 +2120,7 @@ function DialogoConsumo({
       accion: string;
       folioRecepcion?: number;
       partes?: number[];
+      folioEntrada?: number;
       folioConsumo?: number;
       serviciosSinConsumo?: string[];
     },
@@ -2126,7 +2128,7 @@ function DialogoConsumo({
     lineas: { fila: number; consumoInterno: string }[]
   ) => void;
 }) {
-  type Accion = "rec_ci" | "rec" | "ci";
+  type Accion = "rec_ci" | "rec" | "ci" | "pe_cd";
   type EstadoOC =
     | { estado: "cargando" | "inexistente" | "error" }
     | { estado: "ok"; lineas: LineaOC[]; proveedor: string; recibidaEstado: string };
@@ -2138,7 +2140,13 @@ function DialogoConsumo({
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
   const [accion, setAccion] = useState<Accion>("rec_ci");
-  const conRecepcion = accion !== "ci";
+  // «Entra stock» por OC (rec*) o por ingreso directo sin OC (pe_cd, con
+  // costo escrito a mano); solo "ci" consume stock que ya existía. pe_cd es
+  // un paso único (entrada + gasto a la vez, ver nota en el endpoint), no
+  // una entrada "suelta" como "rec" sin consumo.
+  const conRecepcionOC = accion === "rec_ci" || accion === "rec";
+  const conEntradaDirecta = accion === "pe_cd";
+  const conRecepcion = conRecepcionOC || conEntradaDirecta;
   const [ocLeida, setOcLeida] = useState<(EstadoOC & { oc: string }) | null>(null);
   // Mientras no llegue la respuesta de la OC escrita, se muestra «cargando».
   const ocInfo: EstadoOC | null = !oc
@@ -2160,8 +2168,9 @@ function DialogoConsumo({
   // consumido desde aquí (se puede hacer en partes).
   const tope = (i: (typeof recibidos)[number]) => {
     const rec = i.cantidadRecibida ?? 0;
+    const soloEntrada = accion === "rec";
     return Math.min(
-      accion === "rec" ? Infinity : rec - yaConsumido(i.consumoInterno),
+      soloEntrada ? Infinity : rec - yaConsumido(i.consumoInterno),
       accion === "ci" ? Infinity : rec - yaRecepcionado(i.consumoInterno)
     );
   };
@@ -2169,6 +2178,8 @@ function DialogoConsumo({
   const [cantEditada, setCantEditada] = useState<Record<number, string>>({});
   const cant = (i: (typeof recibidos)[number]) =>
     cantEditada[i.fila] ?? String(tope(i));
+  const [costoEditada, setCostoEditada] = useState<Record<number, string>>({});
+  const costo = (i: (typeof recibidos)[number]) => costoEditada[i.fila] ?? "";
   const [desmarcadas, setDesmarcadas] = useState<Set<number>>(new Set());
   const marcada = (fila: number) => !desmarcadas.has(fila);
   const seleccion = elegibles.filter((i) => marcada(i.fila));
@@ -2221,7 +2232,7 @@ function DialogoConsumo({
   // Avisos de la OC para los artículos marcados.
   const problemasOC =
     ocInfo?.estado === "ok"
-      ? (conRecepcion ? problemasPorRecibir : problemasRecepcion)(
+      ? (conRecepcionOC ? problemasPorRecibir : problemasRecepcion)(
           ocInfo,
           seleccion.map((i) => ({
             codigo: i.codigo,
@@ -2231,7 +2242,7 @@ function DialogoConsumo({
         )
       : [];
   const ocBloquea =
-    (conRecepcion && !oc) ||
+    (conRecepcionOC && !oc) ||
     (!!oc &&
       (ocInfo?.estado === "cargando" ||
         ocInfo?.estado === "inexistente" ||
@@ -2260,9 +2271,13 @@ function DialogoConsumo({
   }, []);
 
   async function confirmar() {
-    const lineas = seleccion.map((i) => ({ fila: i.fila, cantidad: Number(cant(i)) }));
+    const lineas = seleccion.map((i) => ({
+      fila: i.fila,
+      cantidad: Number(cant(i)),
+      ...(conEntradaDirecta ? { costoUnitario: Number(costo(i)) } : {}),
+    }));
     if (!bodega) return setError("Elige la bodega.");
-    if (conRecepcion && !oc) return setError("Indica el N° de OC que vas a recepcionar.");
+    if (conRecepcionOC && !oc) return setError("Indica el N° de OC que vas a recepcionar.");
     if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
@@ -2272,8 +2287,11 @@ function DialogoConsumo({
           `«${it.nombre}»: la cantidad debe ser mayor que 0 y no superar ${tope(it)}.`
         );
       }
-      if (conRecepcion && !Number.isInteger(l.cantidad)) {
+      if (conRecepcionOC && !Number.isInteger(l.cantidad)) {
         return setError(`«${it.nombre}»: la recepción solo acepta cantidades enteras.`);
+      }
+      if (conEntradaDirecta && !(l.costoUnitario! > 0)) {
+        return setError(`«${it.nombre}»: indica el costo unitario (mayor a 0).`);
       }
     }
     // Con recepción el stock sube antes de consumir: solo se valida el consumo suelto.
@@ -2376,6 +2394,7 @@ function DialogoConsumo({
             <option value="rec_ci">Recepcionar OC + consumo interno</option>
             <option value="rec">Solo recepcionar OC (queda en stock)</option>
             <option value="ci">Solo consumo interno (ya hay stock)</option>
+            <option value="pe_cd">Ingresar sin OC (costo directo)</option>
           </select>
           <span className="mt-1 block text-xs text-muted-foreground">
             {accion === "rec_ci" &&
@@ -2384,52 +2403,63 @@ function DialogoConsumo({
               "Recepciona la OC en Defontana (total o parcial). El material queda en stock de la bodega; el consumo lo haces después."}
             {accion === "ci" &&
               "Descuenta stock que ya existe en la bodega e imputa el gasto al centro. La OC es opcional; si la indicas, debe estar recepcionada."}
+            {accion === "pe_cd" &&
+              "Para material sin OC detrás: imputa el gasto directo al centro, con el costo que escribas por artículo. A diferencia de una recepción de OC, esto no pasa por el stock contable de mercaderías: es un solo paso, no necesita consumo interno después."}
           </span>
         </label>
 
-        <label className="mt-4 block">
-          <span className={labelClass}>
-            N° de OC{conRecepcion ? "" : " (opcional)"}
-          </span>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={oc}
-            disabled={enviando}
-            onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
-            placeholder="Ej.: 4331"
-            className={inputClass}
-          />
-          {ocInfo?.estado === "cargando" && (
-            <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
-          )}
-          {ocInfo?.estado === "inexistente" && (
-            <p className="mt-1 text-xs font-semibold text-destructive">
-              La OC {oc} no existe en Defontana.
-            </p>
-          )}
-          {ocInfo?.estado === "error" && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              No se pudo consultar la OC; se validará al registrar.
-            </p>
-          )}
-          {ocInfo?.estado === "ok" && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              OC {oc} · {ocInfo.proveedor || "sin proveedor"} ·{" "}
-              {ocInfo.recibidaEstado === "C"
-                ? "recepcionada completa"
-                : ocInfo.recibidaEstado === "I"
-                  ? "recepcionada parcial"
-                  : "sin recepcionar"}
-            </p>
-          )}
-          {problemasOC.length > 0 && (
-            <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
-              OC {oc}: {problemasOC.join("; ")}.
-              {!conRecepcion && ` ${AVISO_RECEPCION}`}
-            </p>
-          )}
-        </label>
+        {!conEntradaDirecta && (
+          <label className="mt-4 block">
+            <span className={labelClass}>
+              N° de OC{conRecepcionOC ? "" : " (opcional)"}
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={oc}
+              disabled={enviando}
+              onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
+              placeholder="Ej.: 4331"
+              className={inputClass}
+            />
+            {ocInfo?.estado === "cargando" && (
+              <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
+            )}
+            {ocInfo?.estado === "inexistente" && (
+              <p className="mt-1 text-xs font-semibold text-destructive">
+                La OC {oc} no existe en Defontana.
+              </p>
+            )}
+            {ocInfo?.estado === "error" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                No se pudo consultar la OC; se validará al registrar.
+              </p>
+            )}
+            {ocInfo?.estado === "ok" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                OC {oc} · {ocInfo.proveedor || "sin proveedor"} ·{" "}
+                {ocInfo.recibidaEstado === "C"
+                  ? "recepcionada completa"
+                  : ocInfo.recibidaEstado === "I"
+                    ? "recepcionada parcial"
+                    : "sin recepcionar"}
+              </p>
+            )}
+            {problemasOC.length > 0 && (
+              <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+                OC {oc}: {problemasOC.join("; ")}.
+                {!conRecepcionOC && ` ${AVISO_RECEPCION}`}
+              </p>
+            )}
+          </label>
+        )}
+
+        {ambiente === "pruebas" && conEntradaDirecta && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Tipo de documento «PE_CD» (Parte de Entrada Costo Directo): primera
+            vez que se usa desde aquí — revisa que el folio quede bien anotado.
+          </p>
+        )}
 
         <label className="mt-4 block">
           <span className={labelClass}>
@@ -2459,14 +2489,22 @@ function DialogoConsumo({
 
         <div className="mt-4">
           <span className={labelClass}>
-            {conRecepcion
+            {conRecepcionOC
               ? "Artículos recibidos por recepcionar"
-              : "Artículos (recibidos y sin consumo registrado)"}
+              : conEntradaDirecta
+                ? "Artículos recibidos por ingresar a bodega"
+                : "Artículos (recibidos y sin consumo registrado)"}
           </span>
           {elegibles.length === 0 ? (
             <p className="mt-1 text-sm text-muted-foreground">
               No hay artículos disponibles: deben tener cantidad recibida que
-              aún no se haya {accion === "ci" ? "consumido" : "recepcionado"}.
+              aún no se haya{" "}
+              {accion === "ci"
+                ? "consumido"
+                : conEntradaDirecta
+                  ? "ingresado"
+                  : "recepcionado"}
+              .
             </p>
           ) : (
             <ul className="mt-1 divide-y divide-border rounded-lg border border-border">
@@ -2497,13 +2535,13 @@ function DialogoConsumo({
                       </p>
                       <p className="text-[11px] text-muted-foreground">
                         {i.codigo} · recibido {i.cantidadRecibida} {i.unidad}
-                        {conRecepcion && lOC && (
+                        {conRecepcionOC && lOC && (
                           <span className="font-semibold text-card-foreground">
                             {" · "}en la OC quedan {lOC.pedida - lOC.recibida} por recibir
                             {lOC.servicio ? " (servicio: sin stock)" : ""}
                           </span>
                         )}
-                        {conRecepcion && ocInfo?.estado === "ok" && !lOC && (
+                        {conRecepcionOC && ocInfo?.estado === "ok" && !lOC && (
                           <span className="font-semibold text-destructive">
                             {" · "}no está en la OC
                           </span>
@@ -2529,7 +2567,7 @@ function DialogoConsumo({
                     <input
                       type="number"
                       min={0}
-                      step={conRecepcion ? 1 : "any"}
+                      step={conRecepcionOC ? 1 : "any"}
                       value={cant(i)}
                       disabled={enviando || !marcada(i.fila)}
                       onChange={(e) =>
@@ -2538,6 +2576,23 @@ function DialogoConsumo({
                       aria-label={`Cantidad de ${i.nombre}`}
                       className="h-9 w-20 rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
                     />
+                    {conEntradaDirecta && (
+                      <div className="w-24 shrink-0">
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          value={costo(i)}
+                          disabled={enviando || !marcada(i.fila)}
+                          onChange={(e) =>
+                            setCostoEditada((prev) => ({ ...prev, [i.fila]: e.target.value }))
+                          }
+                          placeholder="Costo c/u"
+                          aria-label={`Costo unitario de ${i.nombre}`}
+                          className="h-9 w-full rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                        />
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -2571,7 +2626,9 @@ function DialogoConsumo({
                 ? "Recepcionar y consumir"
                 : accion === "rec"
                   ? "Recepcionar OC"
-                  : "Registrar consumo interno"}
+                  : accion === "pe_cd"
+                    ? "Ingresar (gasto directo)"
+                    : "Registrar consumo interno"}
           </button>
         </div>
       </div>

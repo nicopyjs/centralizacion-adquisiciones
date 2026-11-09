@@ -208,6 +208,74 @@ export async function crearConsumoInterno(
   return { folio: r.number, tipo: r.documentType ?? "CI" };
 }
 
+export type ParteEntradaCostoDirectoInput = {
+  /** ID externo para ubicar el documento (folio del pedido + sufijo). */
+  externalId: string;
+  /** "YYYY-MM-DD" */
+  fecha: string;
+  glosa: string;
+  /** Bodega de destino (donde queda el stock). */
+  bodega: string;
+  centroNegocio: string;
+  lineas: { articleId: string; cantidad: number; costoUnitario: number; comentario?: string }[];
+};
+
+/**
+ * Crea un documento de inventario PE_CD (Parte de Entrada Costo Directo):
+ * ingresa mercadería a bodega sin una OC detrás, con el costo escrito a mano
+ * en cada línea. Devuelve el folio.
+ *
+ * A diferencia de un PE normal (que sube la cuenta de Mercaderías, activo),
+ * un PE_CD imputa el monto directo a la cuenta de gasto de la categoría del
+ * artículo — verificado contra `GetAccountingDefinition` en `replapi` el
+ * 2026-11-09 (comparando PE / PE_CD / CI). Por eso es un paso único, SIN
+ * consumo interno después (ver nota en `src/app/api/pedidos/consumo-interno/route.ts`):
+ * y por eso, a diferencia de `recepcionarOC`, aquí SÍ hay que mandar el
+ * centro de negocio en `analysis` — nada más lo va a imputar.
+ *
+ * Probado en `replapi` el 2026-11-09 (folio PE_CD-89, artículo de prueba
+ * ACAC0001 en BODEGACENTRAL): Defontana exige el campo `analysis` incluso
+ * vacío — sin él responde 400 "Object reference not set to an instance of
+ * an object" (NullReferenceException interna), igual que si faltara en
+ * `crearConsumoInterno`.
+ */
+export async function crearParteEntradaCostoDirecto(
+  input: ParteEntradaCostoDirectoInput
+): Promise<{ folio: number; tipo: string }> {
+  const analysis = { businessCenter: input.centroNegocio };
+  const r = await llamar<{
+    number?: number;
+    documentType?: string;
+    success: boolean;
+    message?: string | null;
+    exceptionMessage?: string | null;
+  }>("/api/Inventory/Insert", {
+    method: "POST",
+    body: {
+      documentTypeId: "PE_CD",
+      fiscalYear: input.fecha.slice(0, 4),
+      gloss: input.glosa,
+      destinationStowageId: input.bodega,
+      date: input.fecha,
+      externalDocumentID: input.externalId,
+      analysis,
+      details: input.lineas.map((l) => ({
+        articleId: l.articleId,
+        count: l.cantidad,
+        price: l.costoUnitario,
+        comment: l.comentario ?? "",
+        analysis,
+      })),
+    },
+  });
+  if (!r.success || !r.number) {
+    throw new Error(
+      r.exceptionMessage || r.message || "Defontana rechazó el parte de entrada."
+    );
+  }
+  return { folio: r.number, tipo: r.documentType ?? "PE_CD" };
+}
+
 /**
  * RUT con puntos y guion (77.949.210-9). PurchaseOrder/Get lo entrega sin
  * puntos, pero la recepción solo reconoce al proveedor con el formato de las
