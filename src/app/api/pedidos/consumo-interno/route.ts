@@ -4,6 +4,7 @@ import {
   AVISO_RECEPCION,
   ambienteDefontana,
   crearConsumoInterno,
+  crearParteEntradaCostoDirecto,
   problemasPorRecibir,
   problemasRecepcion,
   recepcionOC,
@@ -18,8 +19,8 @@ import {
 
 const PEDIDOS_SHEET = "Pedidos";
 
-type Accion = "rec_ci" | "rec" | "ci";
-const ACCIONES: Accion[] = ["rec_ci", "rec", "ci"];
+type Accion = "rec_ci" | "rec" | "ci" | "pe_cd";
+const ACCIONES: Accion[] = ["rec_ci", "rec", "ci", "pe_cd"];
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : String(v ?? "").trim());
 
@@ -27,12 +28,19 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : String(v ?? "").
  * Flujo de inventario en Defontana para artículos ya recibidos de un pedido;
  * deja los folios en la columna «Consumo interno».
  *
- * Body: { pedidoId, bodega, accion, oc, lineas: [{ fila, cantidad }] }
+ * Body: { pedidoId, bodega, accion, oc, lineas: [{ fila, cantidad, costoUnitario }] }
  *  - rec_ci : recepciona la OC (total o parcial; genera el parte de entrada) y
  *             enseguida hace el consumo interno de lo recepcionado. Exige OC.
  *  - rec    : solo recepciona la OC (el material queda en stock). Exige OC.
  *  - ci     : consumo interno de stock existente; la OC es opcional y, si se
  *             indica, debe estar recepcionada.
+ *  - pe_cd  : ingresa a bodega sin OC con un parte de entrada costo directo
+ *             (el costo se escribe a mano por línea). A diferencia de rec*,
+ *             este documento imputa el gasto directo a la cuenta de la
+ *             categoría del artículo (no pasa por la cuenta de mercaderías
+ *             como un PE normal) — por eso es un paso único, SIN consumo
+ *             interno después: hacerlo duplicaría el gasto. Exige
+ *             costoUnitario > 0 por línea.
  * Todo lo demás (código de artículo, centro) se lee de la planilla en el
  * servidor, no del cliente.
  */
@@ -58,8 +66,13 @@ export async function POST(request: Request) {
   if (!ACCIONES.includes(accion)) {
     return NextResponse.json({ error: "Acción inválida." }, { status: 400 });
   }
-  const conRecepcion = accion !== "ci";
-  const conConsumo = accion !== "rec";
+  // «Entra stock» por OC (rec*) o por ingreso directo sin OC (pe_cd); solo
+  // "ci" consume stock que ya existía. pe_cd nunca lleva consumo interno
+  // después: el documento ya imputa el gasto él solo (ver comentario arriba).
+  const conRecepcionOC = accion === "rec_ci" || accion === "rec";
+  const conEntradaDirecta = accion === "pe_cd";
+  const conRecepcion = conRecepcionOC || conEntradaDirecta;
+  const conConsumo = accion === "rec_ci" || accion === "ci";
   const ocTexto = str(body.oc);
   const ocNumero = ocTexto === "" ? undefined : Number(ocTexto);
   if (
@@ -71,18 +84,18 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (conRecepcion && ocNumero === undefined) {
+  if (conRecepcionOC && ocNumero === undefined) {
     return NextResponse.json(
       { error: "Indica el N° de OC que vas a recepcionar." },
       { status: 400 }
     );
   }
-  const pedidas: { fila?: unknown; cantidad?: unknown }[] = Array.isArray(body.lineas)
-    ? body.lineas
-    : [];
+  const pedidas: { fila?: unknown; cantidad?: unknown; costoUnitario?: unknown }[] =
+    Array.isArray(body.lineas) ? body.lineas : [];
   const lineas = pedidas.map((l) => ({
     fila: Number(l?.fila),
     cantidad: Number(l?.cantidad),
+    costoUnitario: l?.costoUnitario === undefined ? undefined : Number(l.costoUnitario),
   }));
   if (!pedidoId || !bodega || lineas.length === 0 || lineas.length > 100) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
@@ -98,6 +111,15 @@ export async function POST(request: Request) {
     new Set(lineas.map((l) => l.fila)).size !== lineas.length
   ) {
     return NextResponse.json({ error: "Líneas inválidas." }, { status: 400 });
+  }
+  if (
+    conEntradaDirecta &&
+    lineas.some((l) => !Number.isFinite(l.costoUnitario) || (l.costoUnitario as number) <= 0)
+  ) {
+    return NextResponse.json(
+      { error: "Indica el costo unitario de cada artículo (mayor a 0)." },
+      { status: 400 }
+    );
   }
 
   try {
@@ -170,7 +192,9 @@ export async function POST(request: Request) {
 
     const cabecera = delPedido[0];
     const centro = str(cabecera[5]);
-    if (conConsumo && !centro) {
+    // pe_cd también imputa directo al centro (es su propio "consumo"), por
+    // eso lo exige igual que conConsumo.
+    if ((conConsumo || conEntradaDirecta) && !centro) {
       return NextResponse.json(
         { error: "El pedido no tiene código de centro de negocio." },
         { status: 400 }
@@ -191,7 +215,7 @@ export async function POST(request: Request) {
       nombre: d.nombre,
       cantidad: d.cantidad,
     }));
-    if (oc && conRecepcion) {
+    if (oc && conRecepcionOC) {
       const problemas = problemasPorRecibir(oc, pedido);
       if (problemas.length > 0) {
         return NextResponse.json(
@@ -239,7 +263,7 @@ export async function POST(request: Request) {
 
     let folioRecepcion: number | undefined;
     let partes: number[] = [];
-    if (conRecepcion && oc) {
+    if (conRecepcionOC && oc) {
       const r = await recepcionarOC({
         oc,
         bodega,
@@ -257,6 +281,43 @@ export async function POST(request: Request) {
           {
             error: `La OC SÍ se recepcionó en Defontana (${etiqueta}) pero no se pudo anotar en la planilla. Anótalo a mano en «Consumo interno»; no la recepciones de nuevo.${conConsumo ? " El consumo interno NO se hizo." : ""}`,
             folio: r.recepcion,
+          },
+          { status: 500 }
+        );
+      }
+    }
+
+    let folioEntrada: number | undefined;
+    if (conEntradaDirecta) {
+      const costoPorFila = new Map(lineas.map((l) => [l.fila, l.costoUnitario as number]));
+      try {
+        const r = await crearParteEntradaCostoDirecto({
+          externalId: `${pedidoId}-${Date.now().toString(36)}`,
+          fecha,
+          glosa,
+          bodega,
+          centroNegocio: centro,
+          lineas: detalle.map((d) => ({
+            articleId: d.codigo,
+            cantidad: d.cantidad,
+            costoUnitario: costoPorFila.get(d.fila) ?? 0,
+          })),
+        });
+        folioEntrada = r.folio;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Error desconocido";
+        return NextResponse.json({ error: message }, { status: 502 });
+      }
+      const etiqueta = `PECD-${folioEntrada}`;
+      anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega})`);
+      // Se anota ya: si luego falla el consumo, el ingreso queda registrado.
+      try {
+        await escribir();
+      } catch {
+        return NextResponse.json(
+          {
+            error: `El parte de entrada SÍ se creó en Defontana (${etiqueta}) pero no se pudo anotar en la planilla. Anótalo a mano en «Consumo interno»; no lo registres de nuevo.${conConsumo ? " El consumo interno NO se hizo." : ""}`,
+            folio: folioEntrada,
           },
           { status: 500 }
         );
@@ -300,8 +361,14 @@ export async function POST(request: Request) {
           {
             error: folioRecepcion
               ? `La OC SÍ se recepcionó (REC-${folioRecepcion}), pero el consumo interno falló: ${message} Recarga y hazlo con «Solo consumo interno»; no recepciones de nuevo.`
-              : message,
-            ...(folioRecepcion ? { folio: folioRecepcion } : {}),
+              : folioEntrada
+                ? `El parte de entrada SÍ se creó (PECD-${folioEntrada}), pero el consumo interno falló: ${message} Recarga y hazlo con «Solo consumo interno»; no lo registres de nuevo.`
+                : message,
+            ...(folioRecepcion
+              ? { folio: folioRecepcion }
+              : folioEntrada
+                ? { folio: folioEntrada }
+                : {}),
           },
           { status: 502 }
         );
@@ -327,6 +394,7 @@ export async function POST(request: Request) {
       accion,
       folioRecepcion,
       partes,
+      folioEntrada,
       folioConsumo,
       serviciosSinConsumo: omitidos.map((d) => d.nombre),
       ambiente: ambienteDefontana(),
