@@ -3139,7 +3139,11 @@ function Detalle({
             type="button"
             onClick={() => onMarcarRecibido(faltantes)}
             disabled={faltantes.length === 0 || bloqueado}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              faltantes.length === 0 || bloqueado
+                ? "border border-border bg-card text-primary hover:bg-muted"
+                : "bg-success text-white hover:opacity-90"
+            }`}
           >
             <IconCheck />
             Todo recibido
