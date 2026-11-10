@@ -3511,7 +3511,13 @@ function Detalle({
                       ? "bg-accent/10"
                       : sucia
                         ? "bg-accent/5"
-                        : "hover:bg-muted/30"
+                        : estadoLinea(it) === "completo"
+                          ? "bg-[#bdefd6] hover:bg-[#a9e8c8]"
+                          : estadoLinea(it) === "parcial"
+                            ? "bg-[#fed7aa] hover:bg-[#fdc88a]"
+                            : estadoLinea(it) === "pendiente"
+                              ? "bg-[#e3e9f2] hover:bg-[#d7dfeb]"
+                              : "hover:bg-muted/30"
                   }`}
                 >
                   <td className="py-2 pl-4 pr-1.5 pt-3 max-lg:absolute max-lg:right-3 max-lg:top-3 max-lg:p-0">
@@ -3529,8 +3535,12 @@ function Detalle({
                       sucia
                         ? "border-l-accent"
                         : estadoLinea(it) === "completo"
-                          ? "border-l-success/60"
-                          : "border-l-transparent"
+                          ? "border-l-success"
+                          : estadoLinea(it) === "parcial"
+                            ? "border-l-warning"
+                            : estadoLinea(it) === "pendiente"
+                              ? "border-l-slate-400"
+                              : "border-l-transparent"
                     }`}
                   >
                     <div className="font-medium leading-snug text-card-foreground">
@@ -3540,7 +3550,13 @@ function Detalle({
                       <span>{it.codigo}</span>
                       {it.categoria && <span>· {it.categoria}</span>}
                       <span
-                        className={`inline-flex items-center rounded-full px-2 py-px text-[11px] font-semibold ${estadoIt.chip}`}
+                        className={`inline-flex items-center rounded-full px-2 py-px text-[11px] font-semibold ${
+                          estadoLinea(it) === "parcial"
+                            ? "bg-warning-surface text-warning ring-1 ring-warning/40"
+                            : `${estadoIt.chip} ${
+                                estadoLinea(it) === "completo" ? "ring-1 ring-success/40" : ""
+                              }`
+                        }`}
                       >
                         {estadoIt.label}
                       </span>
