@@ -192,6 +192,8 @@ export async function POST(request: Request) {
 
     const cabecera = delPedido[0];
     const centro = str(cabecera[5]);
+    const clasificador1 = str(cabecera[7]);
+    const clasificador2 = str(cabecera[8]);
     // pe_cd también imputa directo al centro (es su propio "consumo"), por
     // eso lo exige igual que conConsumo.
     if ((conConsumo || conEntradaDirecta) && !centro) {
@@ -297,6 +299,8 @@ export async function POST(request: Request) {
           glosa,
           bodega,
           centroNegocio: centro,
+          clasificador1,
+          clasificador2,
           ...(oc ? { providerId: oc.proveedorRut, ocNumero: oc.numero } : {}),
           lineas: detalle.map((d) => ({
             articleId: d.codigo,

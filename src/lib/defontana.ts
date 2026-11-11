@@ -217,6 +217,9 @@ export type ParteEntradaCostoDirectoInput = {
   /** Bodega de destino (donde queda el stock). */
   bodega: string;
   centroNegocio: string;
+  /** Clasificador 1 y 2 del pedido/OC (campos de análisis del gasto en Defontana). */
+  clasificador1?: string;
+  clasificador2?: string;
   /** Proveedor de la OC de referencia (si la hay), en formato con puntos/guion. */
   providerId?: string;
   /** N° de OC de referencia (opcional): solo trazabilidad, NO la marca como recepcionada. */
@@ -254,11 +257,21 @@ export type ParteEntradaCostoDirectoInput = {
  * que la API de integración no expone: por eso un PE_CD solo se puede crear
  * por esta vía (`Inventory/Insert`), que NO actualiza el `receivedQuantity`
  * de la OC en Defontana (la OC seguirá viéndose pendiente ahí).
+ *
+ * `clasificador1`/`clasificador2` se mandan en `analysis` como `clasifier1`/
+ * `clasifier2` (verificado en `replapi` el 2026-11-11, folio PE_CD-99:
+ * Defontana los guarda tal cual a nivel cabecera y línea) — son los mismos
+ * clasificadores de análisis de gasto que trae el pedido/la OC, igual que un
+ * PE o CI reales.
  */
 export async function crearParteEntradaCostoDirecto(
   input: ParteEntradaCostoDirectoInput
 ): Promise<{ folio: number; tipo: string }> {
-  const analysis = { businessCenter: input.centroNegocio };
+  const analysis = {
+    businessCenter: input.centroNegocio,
+    ...(input.clasificador1 ? { clasifier1: input.clasificador1 } : {}),
+    ...(input.clasificador2 ? { clasifier2: input.clasificador2 } : {}),
+  };
   const r = await llamar<{
     number?: number;
     documentType?: string;

@@ -2430,7 +2430,7 @@ function DialogoConsumo({
             {accion === "ci" &&
               "Descuenta stock que ya existe en la bodega e imputa el gasto al centro. La OC es opcional; si la indicas, debe estar recepcionada."}
             {accion === "pe_cd" &&
-              "Imputa el gasto directo al centro, con el costo por artículo (si indicas la OC, se autocompleta con su precio). A diferencia de una recepción de OC, esto no pasa por el stock contable de mercaderías: es un solo paso, no necesita consumo interno después."}
+              "Imputa el gasto directo al centro (con los clasificadores 1 y 2 del pedido), con el costo por artículo (si indicas la OC, se autocompleta con su precio). A diferencia de una recepción de OC, esto no pasa por el stock contable de mercaderías: es un solo paso, no necesita consumo interno después."}
           </span>
         </label>
 
