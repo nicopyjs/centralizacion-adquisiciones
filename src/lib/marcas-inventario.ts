@@ -4,21 +4,24 @@
  *                                  todavía falta el consumo interno.
  *   "CI-2302 (1 · BODEGACENTRAL)"  consumo interno: baja el stock e imputa
  *                                  el gasto al centro.
- *   "PECD-2210 (1 · BC14)"         ingreso directo sin OC (parte de entrada
- *                                  costo directo): a diferencia de REC/PE,
- *                                  este documento imputa el gasto directo a
- *                                  la cuenta de la categoría del artículo (no
- *                                  pasa por la cuenta de mercaderías) — por
- *                                  eso NO lleva un consumo interno después;
- *                                  cuenta como recepcionado y consumido a la
- *                                  vez.
+ *   "PECD-2210/OC-4650 (1 · BC14)"  ingreso con costo directo (parte de
+ *                                  entrada costo directo): a diferencia de
+ *                                  REC/PE, este documento imputa el gasto
+ *                                  directo a la cuenta de la categoría del
+ *                                  artículo (no pasa por la cuenta de
+ *                                  mercaderías) — por eso NO lleva un consumo
+ *                                  interno después; cuenta como recepcionado
+ *                                  y consumido a la vez. El "/OC-NNN" es
+ *                                  opcional (solo trazabilidad: Defontana NO
+ *                                  marca esa OC como recepcionada con este
+ *                                  documento, a diferencia de REC/PE).
  * Varias marcas se separan con " | " y las cantidades se acumulan, así una
  * línea puede recepcionarse (u ocuparse) o consumirse en partes.
  */
 const MARCA_REC = /REC-\d+(?:\/PE-[\d+]+)? \(([\d.]+) ·/g;
 const MARCA_CI = /CI-\d+ \(([\d.]+) ·/g;
 const CUALQUIER_CI = /CI-\d+/g;
-const MARCA_PECD = /PECD-\d+ \(([\d.]+) ·/g;
+const MARCA_PECD = /PECD-\d+(?:\/OC-\d+)? \(([\d.]+) ·/g;
 
 /** Unidades de la línea ya recepcionadas en la OC desde esta app. */
 export function yaRecepcionado(marca: string): number {

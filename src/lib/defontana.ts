@@ -217,6 +217,10 @@ export type ParteEntradaCostoDirectoInput = {
   /** Bodega de destino (donde queda el stock). */
   bodega: string;
   centroNegocio: string;
+  /** Proveedor de la OC de referencia (si la hay), en formato con puntos/guion. */
+  providerId?: string;
+  /** N° de OC de referencia (opcional): solo trazabilidad, NO la marca como recepcionada. */
+  ocNumero?: number;
   lineas: { articleId: string; cantidad: number; costoUnitario: number; comentario?: string }[];
 };
 
@@ -238,6 +242,18 @@ export type ParteEntradaCostoDirectoInput = {
  * vacío — sin él responde 400 "Object reference not set to an instance of
  * an object" (NullReferenceException interna), igual que si faltara en
  * `crearConsumoInterno`.
+ *
+ * `providerId`/`ocNumero` son solo trazabilidad (se mandan como proveedor y
+ * `referenceDocumentFolio`/`referenceDocumentType:"OC_ABA"`, igual que hace
+ * `crearConsumoInterno`): verificado en `replapi` el 2026-11-11 que la API
+ * pública de recepción de OC (`PurchaseOrder/InsertReceptionDocument`) SIEMPRE
+ * genera un `PE` normal, nunca un `PE_CD`, sin importar la bodega de destino
+ * (se probó contra la bodega "PROYECTOS CD" — código `PROYECTOS` — y generó
+ * un PE). El selector "Parte de Entrada Costo Directo" que se ve en
+ * `erp.defontana.com` al recepcionar una OC es una función interna del ERP
+ * que la API de integración no expone: por eso un PE_CD solo se puede crear
+ * por esta vía (`Inventory/Insert`), que NO actualiza el `receivedQuantity`
+ * de la OC en Defontana (la OC seguirá viéndose pendiente ahí).
  */
 export async function crearParteEntradaCostoDirecto(
   input: ParteEntradaCostoDirectoInput
@@ -258,6 +274,10 @@ export async function crearParteEntradaCostoDirecto(
       destinationStowageId: input.bodega,
       date: input.fecha,
       externalDocumentID: input.externalId,
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.ocNumero
+        ? { referenceDocumentFolio: input.ocNumero, referenceDocumentType: "OC_ABA" }
+        : {}),
       analysis,
       details: input.lineas.map((l) => ({
         articleId: l.articleId,

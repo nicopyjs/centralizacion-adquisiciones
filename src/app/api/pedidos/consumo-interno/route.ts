@@ -297,6 +297,7 @@ export async function POST(request: Request) {
           glosa,
           bodega,
           centroNegocio: centro,
+          ...(oc ? { providerId: oc.proveedorRut, ocNumero: oc.numero } : {}),
           lineas: detalle.map((d) => ({
             articleId: d.codigo,
             cantidad: d.cantidad,
@@ -308,7 +309,7 @@ export async function POST(request: Request) {
         const message = err instanceof Error ? err.message : "Error desconocido";
         return NextResponse.json({ error: message }, { status: 502 });
       }
-      const etiqueta = `PECD-${folioEntrada}`;
+      const etiqueta = `PECD-${folioEntrada}${oc ? `/OC-${oc.numero}` : ""}`;
       anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega})`);
       // Se anota ya: si luego falla el consumo, el ingreso queda registrado.
       try {
