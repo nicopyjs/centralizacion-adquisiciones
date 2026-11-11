@@ -2229,9 +2229,11 @@ function DialogoConsumo({
     };
   }, [oc]);
 
-  // Avisos de la OC para los artículos marcados.
+  // Avisos de la OC para los artículos marcados. En pe_cd la OC es solo
+  // trazabilidad/autocompletado (no se exige que esté recepcionada ni que
+  // cuadren cantidades), así que no corre esta validación.
   const problemasOC =
-    ocInfo?.estado === "ok"
+    ocInfo?.estado === "ok" && !conEntradaDirecta
       ? (conRecepcionOC ? problemasPorRecibir : problemasRecepcion)(
           ocInfo,
           seleccion.map((i) => ({
@@ -2243,10 +2245,34 @@ function DialogoConsumo({
       : [];
   const ocBloquea =
     (conRecepcionOC && !oc) ||
-    (!!oc &&
+    (!conEntradaDirecta &&
+      !!oc &&
       (ocInfo?.estado === "cargando" ||
         ocInfo?.estado === "inexistente" ||
         problemasOC.length > 0));
+
+  // pe_cd: si se indica una OC válida, autocompleta bodega "PROYECTOS CD" y
+  // el costo por línea con el precio de la OC (sin pisar lo ya editado a mano).
+  useEffect(() => {
+    if (!conEntradaDirecta || ocInfo?.estado !== "ok") return;
+    setBodega((prev) => {
+      if (prev && prev !== "BODEGACENTRAL") return prev;
+      const cd = bodegas.find((b) => /proyectos/i.test(b.nombre));
+      return cd ? cd.codigo : prev;
+    });
+    setCostoEditada((prev) => {
+      const next = { ...prev };
+      for (const i of elegibles) {
+        if (next[i.fila] !== undefined) continue;
+        const lOC = ocInfo.lineas.find((l) => l.codigo === i.codigo);
+        if (lOC && lOC.pedida > 0) {
+          next[i.fila] = String(Math.round((lOC.monto / lOC.pedida) * 100) / 100);
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conEntradaDirecta, ocInfo, bodegas]);
 
   useEffect(() => {
     caja.current?.focus();
@@ -2404,55 +2430,63 @@ function DialogoConsumo({
             {accion === "ci" &&
               "Descuenta stock que ya existe en la bodega e imputa el gasto al centro. La OC es opcional; si la indicas, debe estar recepcionada."}
             {accion === "pe_cd" &&
-              "Para material sin OC detrás: imputa el gasto directo al centro, con el costo que escribas por artículo. A diferencia de una recepción de OC, esto no pasa por el stock contable de mercaderías: es un solo paso, no necesita consumo interno después."}
+              "Imputa el gasto directo al centro, con el costo por artículo (si indicas la OC, se autocompleta con su precio). A diferencia de una recepción de OC, esto no pasa por el stock contable de mercaderías: es un solo paso, no necesita consumo interno después."}
           </span>
         </label>
 
-        {!conEntradaDirecta && (
-          <label className="mt-4 block">
-            <span className={labelClass}>
-              N° de OC{conRecepcionOC ? "" : " (opcional)"}
+        <label className="mt-4 block">
+          <span className={labelClass}>
+            N° de OC{conRecepcionOC ? "" : " (opcional)"}
+          </span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={oc}
+            disabled={enviando}
+            onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
+            placeholder="Ej.: 4331"
+            className={inputClass}
+          />
+          {conEntradaDirecta && (
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Si la indicas, se autocompletan bodega y costo por artículo desde
+              la OC (y queda anotada para trazabilidad), pero Defontana NO la
+              marca como recepcionada: eso solo pasa con «Recepcionar OC».
             </span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={oc}
-              disabled={enviando}
-              onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
-              placeholder="Ej.: 4331"
-              className={inputClass}
-            />
-            {ocInfo?.estado === "cargando" && (
-              <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
-            )}
-            {ocInfo?.estado === "inexistente" && (
-              <p className="mt-1 text-xs font-semibold text-destructive">
-                La OC {oc} no existe en Defontana.
-              </p>
-            )}
-            {ocInfo?.estado === "error" && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                No se pudo consultar la OC; se validará al registrar.
-              </p>
-            )}
-            {ocInfo?.estado === "ok" && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                OC {oc} · {ocInfo.proveedor || "sin proveedor"} ·{" "}
-                {ocInfo.recibidaEstado === "C"
-                  ? "recepcionada completa"
-                  : ocInfo.recibidaEstado === "I"
-                    ? "recepcionada parcial"
-                    : "sin recepcionar"}
-              </p>
-            )}
-            {problemasOC.length > 0 && (
-              <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
-                OC {oc}: {problemasOC.join("; ")}.
-                {!conRecepcionOC && ` ${AVISO_RECEPCION}`}
-              </p>
-            )}
-          </label>
-        )}
+          )}
+          {ocInfo?.estado === "cargando" && (
+            <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
+          )}
+          {ocInfo?.estado === "inexistente" && (
+            <p className="mt-1 text-xs font-semibold text-destructive">
+              La OC {oc} no existe en Defontana.
+            </p>
+          )}
+          {ocInfo?.estado === "error" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No se pudo consultar la OC; se validará al registrar.
+            </p>
+          )}
+          {ocInfo?.estado === "ok" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              OC {oc} · {ocInfo.proveedor || "sin proveedor"}
+              {!conEntradaDirecta &&
+                ` · ${
+                  ocInfo.recibidaEstado === "C"
+                    ? "recepcionada completa"
+                    : ocInfo.recibidaEstado === "I"
+                      ? "recepcionada parcial"
+                      : "sin recepcionar"
+                }`}
+            </p>
+          )}
+          {problemasOC.length > 0 && (
+            <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+              OC {oc}: {problemasOC.join("; ")}.
+              {!conRecepcionOC && ` ${AVISO_RECEPCION}`}
+            </p>
+          )}
+        </label>
 
         {ambiente === "pruebas" && conEntradaDirecta && (
           <p className="mt-2 text-xs text-muted-foreground">
@@ -2544,6 +2578,11 @@ function DialogoConsumo({
                         {conRecepcionOC && ocInfo?.estado === "ok" && !lOC && (
                           <span className="font-semibold text-destructive">
                             {" · "}no está en la OC
+                          </span>
+                        )}
+                        {conEntradaDirecta && lOC && (
+                          <span className="text-card-foreground">
+                            {" · "}precio OC: ${Math.round((lOC.monto / lOC.pedida) * 100) / 100} c/u
                           </span>
                         )}
                         {!conRecepcion &&
