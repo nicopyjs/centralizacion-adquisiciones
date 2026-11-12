@@ -6,6 +6,7 @@ import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedi
 import ReportarCorreo from "@/components/ReportarCorreo";
 import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
+import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
   AVISO_RECEPCION,
   problemasPorRecibir,
@@ -2809,7 +2810,8 @@ function DialogoModificar({
   const [codigo, setCodigo] = useState(item?.codigo ?? "");
   const [cantidad, setCantidad] = useState(item ? String(item.cantidad) : "");
   const [comentarioArt, setComentarioArt] = useState(item?.comentarioArticulo ?? "");
-  const [fechaEntrega, setFechaEntrega] = useState(pedido.fechaEntrega);
+  // El campo de fecha solo entiende AAAA-MM-DD; la planilla trae «25-11-26».
+  const [fechaEntrega, setFechaEntrega] = useState(() => fechaEntregaAYMD(pedido.fechaEntrega));
   const [despacho, setDespacho] = useState(pedido.despacho);
   const [comentario, setComentario] = useState(pedido.comentario);
   const [solicitante, setSolicitante] = useState(pedido.solicitante);

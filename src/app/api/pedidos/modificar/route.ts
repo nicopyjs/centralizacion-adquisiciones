@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
 import { agregarMensaje, normArea } from "@/lib/chat";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
+import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
   appendRows,
   articulosSheetId,
@@ -182,7 +183,10 @@ export async function POST(request: Request) {
       if (urgente !== eraUrgente) {
         cambios.push(urgente ? "marcado como urgente" : "ya no es urgente");
       }
-      if (fechaEntrega !== str(prev[6])) cambios.push(`fecha de entrega ${fechaEntrega || "(sin fecha)"}`);
+      // La planilla guarda «25-11-26»; se compara el día, no el texto, para no
+      // reescribir ni avisar un cambio de fecha que no existe.
+      const fechaCambia = fechaEntrega !== fechaEntregaAYMD(str(prev[6]));
+      if (fechaCambia) cambios.push(`fecha de entrega ${fechaEntrega || "(sin fecha)"}`);
       if (despacho !== str(prev[9])) cambios.push(`despacho «${despacho || "—"}»`);
       if (comentario !== str(prev[15])) cambios.push("comentario del pedido");
       if (cambios.length === 0) return NextResponse.json({ ok: true });
@@ -192,7 +196,9 @@ export async function POST(request: Request) {
         delPedido.flatMap((x) => [
           { range: `${PEDIDOS_SHEET}!C${x.fila}`, values: [[solicitante]] },
           { range: `${PEDIDOS_SHEET}!E${x.fila}:F${x.fila}`, values: [[centroNegocio, centroCodigo]] },
-          { range: `${PEDIDOS_SHEET}!G${x.fila}`, values: [[fechaEntrega]] },
+          ...(fechaCambia
+            ? [{ range: `${PEDIDOS_SHEET}!G${x.fila}`, values: [[fechaEntrega]] }]
+            : []),
           { range: `${PEDIDOS_SHEET}!H${x.fila}:J${x.fila}`, values: [[clasificador1, clasificador2, despacho]] },
           { range: `${PEDIDOS_SHEET}!P${x.fila}`, values: [[comentario]] },
           { range: `${PEDIDOS_SHEET}!T${x.fila}`, values: [[urgente ? "Sí" : ""]] },
