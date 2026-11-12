@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
 import { agregarMensaje, normArea } from "@/lib/chat";
+import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import {
   appendRows,
   articulosSheetId,
@@ -45,7 +46,9 @@ const fmt = (n: number) => n.toLocaleString("es-CL");
  * supervisor se equivocó y avisó). Body según `accion`:
  *  - "linea":    `{ pedidoId, fila, codigoActual, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
  *  - "agregar":  `{ pedidoId, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
- *  - "cabecera": `{ pedidoId, fechaEntrega, despacho, comentario }`
+ *  - "cabecera": `{ pedidoId, fechaEntrega, despacho, comentario, solicitante,
+ *                  centroNegocio, centroCodigo, clasificador1, clasificador2, urgente }`
+ *                (el área no se cambia: define el folio, el chat y quién ve el pedido)
  * Todo cambio deja un aviso en el chat del pedido.
  */
 export async function POST(request: Request) {
@@ -153,7 +156,32 @@ export async function POST(request: Request) {
       if (!fechaValida(fechaEntrega)) return error("Fecha inválida (debe ser AAAA-MM-DD).");
 
       const prev = delPedido[0].r;
+      // Los campos que no vienen en el body (clientes antiguos) se dejan como están.
+      const solicitante = "solicitante" in body ? str(body.solicitante) : str(prev[2]);
+      const centroCodigo = "centroCodigo" in body ? str(body.centroCodigo) : str(prev[5]);
+      const centroNegocio = "centroNegocio" in body ? str(body.centroNegocio) : str(prev[4]);
+      const clasificador1 = "clasificador1" in body ? str(body.clasificador1) : str(prev[7]);
+      const clasificador2 = "clasificador2" in body ? str(body.clasificador2) : str(prev[8]);
+      const eraUrgente = ["si", "sí", "s", "1", "true", "urgente"].includes(str(prev[19]).toLowerCase());
+      const urgente = "urgente" in body ? body.urgente === true : eraUrgente;
+
+      if (!solicitante) return error("El solicitante no puede quedar vacío.");
+      if (!centroCodigo || !centroNegocio) return error("Debes elegir un centro de negocio.");
+      if (clasificador1 && clasificador1 !== str(prev[7]) && !CLASIFICADORES_1.includes(clasificador1)) {
+        return error("Clasificador 1 inválido.");
+      }
+      if (clasificador2 && clasificador2 !== str(prev[8]) && !CLASIFICADORES_2.includes(clasificador2)) {
+        return error("Clasificador 2 inválido.");
+      }
+
       const cambios: string[] = [];
+      if (solicitante !== str(prev[2])) cambios.push(`solicitante «${solicitante}»`);
+      if (centroCodigo !== str(prev[5])) cambios.push(`centro de negocio «${centroNegocio}»`);
+      if (clasificador1 !== str(prev[7])) cambios.push(`clasificador 1 «${clasificador1 || "—"}»`);
+      if (clasificador2 !== str(prev[8])) cambios.push(`clasificador 2 «${clasificador2 || "—"}»`);
+      if (urgente !== eraUrgente) {
+        cambios.push(urgente ? "marcado como urgente" : "ya no es urgente");
+      }
       if (fechaEntrega !== str(prev[6])) cambios.push(`fecha de entrega ${fechaEntrega || "(sin fecha)"}`);
       if (despacho !== str(prev[9])) cambios.push(`despacho «${despacho || "—"}»`);
       if (comentario !== str(prev[15])) cambios.push("comentario del pedido");
@@ -162,9 +190,12 @@ export async function POST(request: Request) {
       await batchWriteRanges(
         sheetId,
         delPedido.flatMap((x) => [
+          { range: `${PEDIDOS_SHEET}!C${x.fila}`, values: [[solicitante]] },
+          { range: `${PEDIDOS_SHEET}!E${x.fila}:F${x.fila}`, values: [[centroNegocio, centroCodigo]] },
           { range: `${PEDIDOS_SHEET}!G${x.fila}`, values: [[fechaEntrega]] },
-          { range: `${PEDIDOS_SHEET}!J${x.fila}`, values: [[despacho]] },
+          { range: `${PEDIDOS_SHEET}!H${x.fila}:J${x.fila}`, values: [[clasificador1, clasificador2, despacho]] },
           { range: `${PEDIDOS_SHEET}!P${x.fila}`, values: [[comentario]] },
+          { range: `${PEDIDOS_SHEET}!T${x.fila}`, values: [[urgente ? "Sí" : ""]] },
         ])
       );
       await avisarEnChat(pedidoId, area, `se actualizó ${cambios.join(", ")}.`);

@@ -5,6 +5,7 @@ import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 import ReportarCorreo from "@/components/ReportarCorreo";
 import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
+import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import {
   AVISO_RECEPCION,
   problemasPorRecibir,
@@ -2793,6 +2794,13 @@ function DialogoModificar({
   const [fechaEntrega, setFechaEntrega] = useState(pedido.fechaEntrega);
   const [despacho, setDespacho] = useState(pedido.despacho);
   const [comentario, setComentario] = useState(pedido.comentario);
+  const [solicitante, setSolicitante] = useState(pedido.solicitante);
+  const [centroCodigo, setCentroCodigo] = useState(pedido.centroCodigo);
+  const [clasificador1, setClasificador1] = useState(pedido.clasificador1);
+  const [clasificador2, setClasificador2] = useState(pedido.clasificador2);
+  const [urgente, setUrgente] = useState(pedido.urgente);
+  const [solicitantes, setSolicitantes] = useState<string[]>([]);
+  const [centros, setCentros] = useState<{ codigo: string; descripcion: string }[]>([]);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2801,7 +2809,17 @@ function DialogoModificar({
 
   useEffect(() => {
     caja.current?.focus();
-    if (cabecera) return;
+    if (cabecera) {
+      fetch("/api/solicitantes")
+        .then((r) => r.json())
+        .then((d) => setSolicitantes(d.solicitantes ?? []))
+        .catch(() => {});
+      fetch("/api/centros")
+        .then((r) => r.json())
+        .then((d) => setCentros(d.centros ?? []))
+        .catch(() => setError("No se pudo cargar la lista de centros de negocio."));
+      return;
+    }
     fetch("/api/articulos")
       .then((r) => r.json())
       .then((d) => {
@@ -2830,6 +2848,25 @@ function DialogoModificar({
       .map((a) => ({ value: a.codigo, label: `${a.nombre} · ${a.codigo}` }));
   }, [catalogo, pedido.items, item]);
 
+  // Solicitantes: la nómina más el actual (por si ya no figura en la planilla).
+  const opcionesSolicitante: ComboOption[] = useMemo(() => {
+    const nombres = new Set(solicitantes);
+    if (pedido.solicitante) nombres.add(pedido.solicitante);
+    return Array.from(nombres).map((n) => ({ value: n, label: n }));
+  }, [solicitantes, pedido.solicitante]);
+
+  // Centros del mismo prefijo (área) que el pedido: el área no se cambia.
+  const opcionesCentro: ComboOption[] = useMemo(() => {
+    const prefijo = pedido.centroCodigo.slice(0, 3).toUpperCase();
+    const lista = centros.filter(
+      (c) => !prefijo || c.codigo.toUpperCase().startsWith(prefijo)
+    );
+    if (pedido.centroCodigo && !lista.some((c) => c.codigo === pedido.centroCodigo)) {
+      lista.unshift({ codigo: pedido.centroCodigo, descripcion: pedido.centroNegocio });
+    }
+    return lista.map((c) => ({ value: c.codigo, label: c.descripcion }));
+  }, [centros, pedido.centroCodigo, pedido.centroNegocio]);
+
   const elegido =
     catalogo.find((a) => a.codigo === codigo) ??
     (item && codigo === item.codigo
@@ -2840,7 +2877,22 @@ function DialogoModificar({
     setError(null);
     let payload: Record<string, unknown>;
     if (cabecera) {
-      payload = { accion: "cabecera", pedidoId: pedido.pedidoId, fechaEntrega, despacho, comentario };
+      const centro = opcionesCentro.find((c) => c.value === centroCodigo);
+      if (!solicitante.trim()) return setError("Elige un solicitante.");
+      if (!centro) return setError("Elige un centro de negocio.");
+      payload = {
+        accion: "cabecera",
+        pedidoId: pedido.pedidoId,
+        fechaEntrega,
+        despacho,
+        comentario,
+        solicitante,
+        centroCodigo: centro.value,
+        centroNegocio: centro.label,
+        clasificador1,
+        clasificador2,
+        urgente,
+      };
     } else {
       if (!elegido) return setError("Elige un artículo.");
       const n = Number(cantidad);
@@ -2913,6 +2965,60 @@ function DialogoModificar({
         <div className="mt-4 space-y-3">
           {cabecera ? (
             <>
+              <div>
+                <span className={labelClass}>Solicitante</span>
+                <SearchCombobox
+                  ariaLabel="Solicitante"
+                  options={opcionesSolicitante}
+                  value={solicitante}
+                  onChange={setSolicitante}
+                />
+              </div>
+              <div>
+                <span className={labelClass}>Centro de negocio</span>
+                <SearchCombobox
+                  ariaLabel="Centro de negocio"
+                  options={opcionesCentro}
+                  value={centroCodigo}
+                  onChange={setCentroCodigo}
+                />
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Solo centros de la misma área ({pedido.area}); el área no se cambia.
+                </span>
+              </div>
+              <label className="block">
+                <span className={labelClass}>Clasificador 1</span>
+                <select className={fieldClass} value={clasificador1} onChange={(e) => setClasificador1(e.target.value)}>
+                  <option value="">—</option>
+                  {!CLASIFICADORES_1.includes(clasificador1) && clasificador1 && (
+                    <option value={clasificador1}>{clasificador1}</option>
+                  )}
+                  {CLASIFICADORES_1.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className={labelClass}>Clasificador 2</span>
+                <select className={fieldClass} value={clasificador2} onChange={(e) => setClasificador2(e.target.value)}>
+                  <option value="">—</option>
+                  {!CLASIFICADORES_2.includes(clasificador2) && clasificador2 && (
+                    <option value={clasificador2}>{clasificador2}</option>
+                  )}
+                  {CLASIFICADORES_2.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2 text-sm font-semibold text-primary">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer accent-accent"
+                  checked={urgente}
+                  onChange={(e) => setUrgente(e.target.checked)}
+                />
+                Pedido urgente
+              </label>
               <label className="block">
                 <span className={labelClass}>Entrega comprometida</span>
                 <input type="date" className={fieldClass} value={fechaEntrega} onChange={(e) => setFechaEntrega(e.target.value)} />
