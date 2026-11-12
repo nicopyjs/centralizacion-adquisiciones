@@ -50,7 +50,11 @@ type PedidoResumen = {
 };
 
 type Estado = "pendiente" | "parcial" | "completo" | "cerrado" | "anulado";
-type Filtro = "porAtender" | "todos" | "urgentes" | "atrasados" | Estado;
+type Alerta = "urgentes" | "atrasados";
+type Filtro = "porAtender" | "todos" | Alerta | Estado;
+
+/** Estados que activa la vista rápida «Por atender» (y el filtro por defecto). */
+const ESTADOS_POR_ATENDER: Estado[] = ["pendiente", "parcial"];
 
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
   pendiente: {
@@ -269,7 +273,13 @@ export default function GestionPedidosPanel() {
   const [refrescando, setRefrescando] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState("");
-  const [filtro, setFiltro] = useState<Filtro>("porAtender");
+  // Filtros combinables: los estados suman (pendiente O parcial) y las alertas
+  // restringen (urgente Y atrasado). Sin ninguno marcado se ven todos.
+  const [estadosSel, setEstadosSel] = useState<Set<Estado>>(
+    () => new Set(ESTADOS_POR_ATENDER)
+  );
+  const [alertasSel, setAlertasSel] = useState<Set<Alerta>>(() => new Set());
+  const [orden, setOrden] = useState<"recientes" | "entrega">("recientes");
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
   const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [fSolicitante, setFSolicitante] = useState("");
@@ -510,11 +520,33 @@ export default function GestionPedidosPanel() {
   ].filter(Boolean).length;
 
   /** Cambia de pestaña y deja abierto el primer pedido de la nueva lista. */
-  function cambiarFiltro(f: Filtro) {
-    setFiltro(f);
+  function aplicarSeleccion(estados: Set<Estado>, alertas: Set<Alerta>) {
+    setEstadosSel(estados);
+    setAlertasSel(alertas);
     setSeleccionado(null);
     setSeleccionFilas(new Set());
   }
+
+  function cambiarFiltro(f: Filtro) {
+    if (f === "porAtender") {
+      aplicarSeleccion(new Set(ESTADOS_POR_ATENDER), new Set());
+    } else if (f === "todos") {
+      aplicarSeleccion(new Set(), new Set());
+    } else if (f === "urgentes" || f === "atrasados") {
+      const alertas = new Set(alertasSel);
+      if (!alertas.delete(f)) alertas.add(f);
+      aplicarSeleccion(estadosSel, alertas);
+    } else {
+      const estados = new Set(estadosSel);
+      if (!estados.delete(f)) estados.add(f);
+      aplicarSeleccion(estados, alertasSel);
+    }
+  }
+
+  const vistaPorAtender =
+    alertasSel.size === 0 &&
+    estadosSel.size === ESTADOS_POR_ATENDER.length &&
+    ESTADOS_POR_ATENDER.every((e) => estadosSel.has(e));
 
   function limpiarFiltros() {
     cambiarFiltro("porAtender");
@@ -527,67 +559,111 @@ export default function GestionPedidosPanel() {
     setFHasta("");
   }
 
-  const pedidosFiltrados = useMemo(() => {
+  // Búsqueda y filtros adicionales (todo salvo estado y alertas).
+  const pasaBase = useMemo(() => {
     const q = normalizar(busqueda.trim());
-    return pedidos
-      .filter((p) => {
-        if (fSolicitante && p.solicitante.trim() !== fSolicitante) return false;
-        if (fArea && p.area.trim() !== fArea) return false;
-        if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
-        if (fDespacho && p.despacho.trim() !== fDespacho) return false;
-        if (fDesde || fHasta) {
-          const dia = /^\d{4}-\d{2}-\d{2}/.test(p.fecha)
-            ? p.fecha.slice(0, 10)
-            : "";
-          if (!dia) return false;
-          if (fDesde && dia < fDesde) return false;
-          if (fHasta && dia > fHasta) return false;
-        }
-        // El pedido abierto se queda en la lista aunque, al guardarlo, deje de
-        // cumplir el filtro (p. ej. un pendiente que pasa a completo): así no
-        // desaparece de golpe mientras se trabaja en él.
-        const fijado = p.pedidoId === seleccionado;
-        if (fijado) {
-          // se mantiene sin importar la pestaña
-        } else if (filtro === "porAtender") {
-          if (!["pendiente", "parcial"].includes(estadoDe(p))) return false;
-        } else if (filtro === "urgentes") {
-          if (!esUrgentePendiente(p)) return false;
-        } else if (filtro === "atrasados") {
-          if (!esAtrasado(p)) return false;
-        } else if (filtro === "todos") {
-          // Los anulados solo se ven en su propia pestaña.
-          if (p.estadoManual === "anulado") return false;
-        } else if (estadoDe(p) !== filtro) {
-          return false;
-        }
-        if (!q) return true;
-        const texto = [
-          p.pedidoId,
-          p.solicitante,
-          p.area,
-          p.centroNegocio,
-          ...p.items.flatMap((it) => [it.nombre, it.codigo]),
-        ].join(" ");
-        return normalizar(texto).includes(q);
-      })
-      // Los urgentes pendientes van primero (el orden sigue siendo por fecha,
-      // del más reciente al más antiguo, dentro de cada grupo).
-      .sort(
-        (a, b) => Number(esUrgentePendiente(b)) - Number(esUrgentePendiente(a))
-      );
-  }, [
-    pedidos,
-    busqueda,
-    filtro,
-    seleccionado,
-    fSolicitante,
-    fArea,
-    fCentro,
-    fDespacho,
-    fDesde,
-    fHasta,
-  ]);
+    return (p: PedidoResumen): boolean => {
+      if (fSolicitante && p.solicitante.trim() !== fSolicitante) return false;
+      if (fArea && p.area.trim() !== fArea) return false;
+      if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
+      if (fDespacho && p.despacho.trim() !== fDespacho) return false;
+      if (fDesde || fHasta) {
+        const dia = /^\d{4}-\d{2}-\d{2}/.test(p.fecha)
+          ? p.fecha.slice(0, 10)
+          : "";
+        if (!dia) return false;
+        if (fDesde && dia < fDesde) return false;
+        if (fHasta && dia > fHasta) return false;
+      }
+      if (!q) return true;
+      const texto = [
+        p.pedidoId,
+        p.solicitante,
+        p.area,
+        p.centroNegocio,
+        ...p.items.flatMap((it) => [it.nombre, it.codigo]),
+      ].join(" ");
+      return normalizar(texto).includes(q);
+    };
+  }, [busqueda, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
+
+  /** ¿Cumple el estado marcado? Sin estados marcados, todos menos anulados. */
+  function pasaEstado(p: PedidoResumen): boolean {
+    return estadosSel.size > 0
+      ? estadosSel.has(estadoDe(p))
+      : p.estadoManual !== "anulado";
+  }
+
+  // Números de los chips: cuántos pedidos habría al marcar ese chip con el
+  // resto de la selección, la búsqueda y los filtros adicionales vigentes.
+  const conteoVista = useMemo(() => {
+    const c: Record<Filtro, number> = {
+      porAtender: 0,
+      todos: 0,
+      urgentes: 0,
+      atrasados: 0,
+      pendiente: 0,
+      parcial: 0,
+      completo: 0,
+      cerrado: 0,
+      anulado: 0,
+    };
+    for (const p of pedidos) {
+      if (!pasaBase(p)) continue;
+      const estado = estadoDe(p);
+      const urgente = esUrgentePendiente(p);
+      const atrasado = esAtrasado(p);
+      const okUrgente = !alertasSel.has("urgentes") || urgente;
+      const okAtrasado = !alertasSel.has("atrasados") || atrasado;
+      if (okUrgente && okAtrasado) {
+        c[estado] += 1;
+        if (ESTADOS_POR_ATENDER.includes(estado)) c.porAtender += 1;
+        if (estado !== "anulado") c.todos += 1;
+      }
+      const okEstado = estadosSel.size > 0 ? estadosSel.has(estado) : estado !== "anulado";
+      if (okEstado && okAtrasado && urgente) c.urgentes += 1;
+      if (okEstado && okUrgente && atrasado) c.atrasados += 1;
+    }
+    return c;
+  }, [pedidos, pasaBase, estadosSel, alertasSel]);
+
+  const pedidosFiltrados = useMemo(() => {
+    return (
+      pedidos
+        .filter((p) => {
+          if (!pasaBase(p)) return false;
+          // El pedido abierto se queda en la lista aunque, al guardarlo, deje de
+          // cumplir el filtro (p. ej. un pendiente que pasa a completo): así no
+          // desaparece de golpe mientras se trabaja en él.
+          if (p.pedidoId === seleccionado) return true;
+          if (!pasaEstado(p)) return false;
+          if (alertasSel.has("urgentes") && !esUrgentePendiente(p)) return false;
+          if (alertasSel.has("atrasados") && !esAtrasado(p)) return false;
+          return true;
+        })
+        // Los urgentes pendientes van primero (el orden sigue siendo por fecha,
+        // del más reciente al más antiguo, dentro de cada grupo).
+        .sort((a, b) => {
+          if (orden === "entrega") {
+            // Lo que aún falta atender primero; dentro de eso, la entrega más
+            // próxima (los vencidos quedan arriba) y sin fecha al final.
+            const aAtender = ESTADOS_POR_ATENDER.includes(estadoDe(a));
+            const bAtender = ESTADOS_POR_ATENDER.includes(estadoDe(b));
+            if (aAtender !== bAtender) return aAtender ? -1 : 1;
+            const fa = parseFechaEntrega(a.fechaEntrega);
+            const fb = parseFechaEntrega(b.fechaEntrega);
+            if (fa && fb) {
+              const dif = soloFecha(fa) - soloFecha(fb);
+              if (dif !== 0) return dif;
+            } else if (fa || fb) {
+              return fa ? -1 : 1;
+            }
+          }
+          return Number(esUrgentePendiente(b)) - Number(esUrgentePendiente(a));
+        })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidos, pasaBase, estadosSel, alertasSel, seleccionado, orden]);
 
   // Pedido abierto: el elegido si sigue en la lista; si no, el primero de ella.
   const idActual = pedidosFiltrados.some((p) => p.pedidoId === seleccionado)
@@ -1157,8 +1233,7 @@ export default function GestionPedidosPanel() {
 
   // Tres grupos: vistas generales, alertas (se cruzan con los estados) y estados.
   const filtros = [
-    { key: "porAtender", grupo: 0, label: "Por atender", tono: "bg-accent", ayuda: "Pendientes y parciales: lo que falta recibir o entregar" },
-    { key: "todos", grupo: 0, label: "Todos", tono: "bg-primary", ayuda: "Todos los pedidos, salvo los anulados" },
+    { key: "porAtender", grupo: 0, label: "Por atender", tono: "bg-accent", ayuda: "Pendientes y parciales: lo que falta recibir o entregar. Desmarca todo para ver todos los pedidos" },
     { key: "urgentes", grupo: 1, label: "Urgentes", tono: "bg-destructive", ayuda: "Urgentes que aún no se reciben por completo" },
     { key: "atrasados", grupo: 1, label: "Atrasados", tono: "bg-destructive/60", ayuda: "Con fecha de entrega vencida y sin completar" },
     { key: "pendiente", grupo: 2, label: "Pendientes", tono: ESTADOS.pendiente.dot, ayuda: "Nada recibido todavía" },
@@ -1170,7 +1245,7 @@ export default function GestionPedidosPanel() {
     (f) =>
       (f.key !== "cerrado" && f.key !== "anulado") ||
       conteo[f.key] > 0 ||
-      filtro === f.key
+      estadosSel.has(f.key as Estado)
   ) as { key: Filtro; grupo: number; label: string; tono: string; ayuda: string }[];
 
   const hayBarra = objetivo.length > 0 || totalCambios > 0;
@@ -1188,12 +1263,17 @@ export default function GestionPedidosPanel() {
           className="flex flex-wrap items-center gap-1"
         >
           {filtros.map((f, i) => {
-            const activo = filtro === f.key;
+            const activo =
+              f.key === "porAtender"
+                ? vistaPorAtender
+                : f.key === "urgentes" || f.key === "atrasados"
+                  ? alertasSel.has(f.key)
+                  : estadosSel.has(f.key as Estado);
             const nuevoGrupo = i > 0 && filtros[i - 1].grupo !== f.grupo;
             // «Urgentes» y «Atrasados» se marcan en rojo cuando hay alguno.
             const alerta =
               (f.key === "urgentes" || f.key === "atrasados") &&
-              conteo[f.key] > 0;
+              conteoVista[f.key] > 0;
             return (
               <Fragment key={f.key}>
                 {nuevoGrupo && (
@@ -1224,7 +1304,7 @@ export default function GestionPedidosPanel() {
                     activo ? "bg-white/20" : "bg-muted text-primary"
                   }`}
                 >
-                  {conteo[f.key]}
+                  {conteoVista[f.key]}
                 </span>
               </button>
               </Fragment>
@@ -1372,7 +1452,7 @@ export default function GestionPedidosPanel() {
           <button
             type="button"
             onClick={limpiarFiltros}
-            disabled={nFiltrosExtra === 0 && filtro === "porAtender" && !busqueda}
+            disabled={nFiltrosExtra === 0 && vistaPorAtender && !busqueda}
             className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
           >
             Limpiar filtros
@@ -1404,13 +1484,25 @@ export default function GestionPedidosPanel() {
             <h2 className="text-sm font-bold text-primary">Pedidos</h2>
             <span className="text-xs text-muted-foreground">
               {pedidosFiltrados.length} de{" "}
-              {filtro === "anulado" ? conteo.anulado : conteo.todos}
+              {estadosSel.has("anulado")
+                ? conteo.todos + conteo.anulado
+                : conteo.todos}
             </span>
+            <select
+              aria-label="Ordenar pedidos"
+              title="Ordenar la lista"
+              className="ml-auto h-7 max-w-[10.5rem] rounded-md border border-border bg-card px-1.5 text-xs font-semibold text-primary"
+              value={orden}
+              onChange={(e) => setOrden(e.target.value as "recientes" | "entrega")}
+            >
+              <option value="recientes">Más recientes</option>
+              <option value="entrega">Entrega más próxima</option>
+            </select>
             {pedidosMarcados.length > 0 && (
               <button
                 type="button"
                 onClick={limpiarSeleccion}
-                className="ml-auto text-xs font-semibold text-accent hover:underline"
+                className="text-xs font-semibold text-accent hover:underline"
               >
                 {pedidosMarcados.length} marcado
                 {pedidosMarcados.length === 1 ? "" : "s"} · quitar
@@ -1424,7 +1516,7 @@ export default function GestionPedidosPanel() {
                 <p className="text-sm text-muted-foreground">
                   Aún no hay pedidos registrados.
                 </p>
-              ) : filtro === "porAtender" && !busqueda && nFiltrosExtra === 0 ? (
+              ) : vistaPorAtender && !busqueda && nFiltrosExtra === 0 ? (
                 <>
                   <p className="text-sm font-bold text-success">
                     ✓ Todo al día
