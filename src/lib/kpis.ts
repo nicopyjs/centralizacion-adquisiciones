@@ -17,6 +17,7 @@ export type PedidoKpi = {
   estadoManual: "" | "cerrado" | "anulado";
   motivoEstado: string;
   items: {
+    nombre: string;
     cantidad: number;
     cantidadRecibida: number | null;
     /** "YYYY-MM-DD" o "". */
@@ -72,6 +73,10 @@ export type Derivado = {
   pedida: number;
   recibida: number;
   atrasado: boolean;
+  /** Fecha de entrega pedida, si se pudo interpretar. */
+  prometida: Date | null;
+  /** Días de atraso respecto de la fecha pedida (solo pedidos abiertos atrasados). */
+  diasAtraso: number | null;
   edadDias: number;
 };
 
@@ -103,6 +108,11 @@ export function derivar(p: PedidoKpi, hoy: Date = new Date()): Derivado | null {
     pedida: p.items.reduce((s, i) => s + i.cantidad, 0),
     recibida: p.items.reduce((s, i) => s + Math.min(i.cantidadRecibida ?? 0, i.cantidad), 0),
     atrasado: abierto && !!prometida && dia(prometida) < dia(hoy),
+    prometida,
+    diasAtraso:
+      abierto && prometida && dia(prometida) < dia(hoy)
+        ? Math.round((dia(hoy) - dia(prometida)) / DIA)
+        : null,
     edadDias: Math.max(0, Math.round((dia(hoy) - dia(creado)) / DIA)),
   };
 }
@@ -199,7 +209,9 @@ export type Backlog = {
   atrasados: number;
   urgentesAbiertos: number;
   /** Antigüedad (desde que se pidió) de los pedidos abiertos. */
-  edades: { label: string; n: number }[];
+  edades: { label: string; n: number; pedidos: Derivado[] }[];
+  /** Los pedidos detrás de cada número, para poder abrirlos. */
+  lista: { abiertos: Derivado[]; atrasados: Derivado[]; urgentes: Derivado[] };
 };
 
 export function backlog(ds: Derivado[]): Backlog {
@@ -210,11 +222,17 @@ export function backlog(ds: Derivado[]): Backlog {
     ["16–30 días", (e) => e >= 16 && e <= 30],
     ["Más de 30", (e) => e > 30],
   ];
+  const atrasados = ab.filter((d) => d.atrasado);
+  const urgentes = ab.filter((d) => d.p.urgente);
   return {
     abiertos: ab.length,
-    atrasados: ab.filter((d) => d.atrasado).length,
-    urgentesAbiertos: ab.filter((d) => d.p.urgente).length,
-    edades: tramos.map(([label, f]) => ({ label, n: ab.filter((d) => f(d.edadDias)).length })),
+    atrasados: atrasados.length,
+    urgentesAbiertos: urgentes.length,
+    edades: tramos.map(([label, f]) => {
+      const pedidos = ab.filter((d) => f(d.edadDias));
+      return { label, n: pedidos.length, pedidos };
+    }),
+    lista: { abiertos: ab, atrasados, urgentes },
   };
 }
 
@@ -245,6 +263,8 @@ export type FilaRanking = {
   nATiempo: number;
   abiertos: number;
   atrasados: number;
+  /** Todos los pedidos de la fila (para abrirlos al hacer clic). */
+  pedidos: Derivado[];
 };
 
 export function ranking(ds: Derivado[], clave: (d: Derivado) => string, top = 8): FilaRanking[] {
@@ -265,6 +285,7 @@ export function ranking(ds: Derivado[], clave: (d: Derivado) => string, top = 8)
         nATiempo: m.nATiempoBodega,
         abiertos: b.abiertos,
         atrasados: b.atrasados,
+        pedidos: v,
       };
     })
     .sort((a, b) => b.creados - a.creados || a.clave.localeCompare(b.clave))
