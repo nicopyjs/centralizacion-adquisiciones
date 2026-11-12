@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const TAB_GESTION = { href: "/gestion-pedidos", label: "Gestión de Pedidos" };
+const TAB_KPIS = { href: "/kpis", label: "KPIs" };
 const TAB_MIS_PEDIDOS = { href: "/mis-pedidos", label: "Pedidos del Área" };
 const TABS_BASE = [
   { href: "/enviar-pedido", label: "Enviar Pedido" },
@@ -36,13 +37,13 @@ export default function Navbar() {
     ...(perfil === null
       ? [TAB_GESTION, TAB_MIS_PEDIDOS]
       : admin
-        ? [TAB_GESTION, TAB_MIS_PEDIDOS]
+        ? [TAB_GESTION, TAB_KPIS, TAB_MIS_PEDIDOS]
         : perfil === "adquisiciones"
-          ? [TAB_GESTION]
+          ? [TAB_GESTION, TAB_KPIS]
         : [TAB_MIS_PEDIDOS]),
   ];
   // Gestión de Pedidos usa todo el ancho; el navbar acompaña ese mismo ancho.
-  const ancho = pathname.startsWith("/gestion-pedidos")
+  const ancho = pathname.startsWith("/gestion-pedidos") || pathname.startsWith("/kpis")
     ? "max-w-[1800px]"
     : "max-w-[1440px]";
 
