@@ -16,7 +16,7 @@ import type { Area, Perfil } from "@/lib/auth";
  */
 type Entrada = { perfil: "adquisiciones" } | { perfil: "supervisor"; areas: Area[] };
 
-const ADQUISICIONES = ["dsuazo"];
+const ADQUISICIONES = ["dsuazo", "pecheverria"];
 const ADMINS = ["npalma"];
 const TODAS_LAS_AREAS: Area[] = [
   "refacciones",

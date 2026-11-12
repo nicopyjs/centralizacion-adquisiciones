@@ -8,6 +8,7 @@ import {
   esPerfil,
   passwordCorrecta,
 } from "@/lib/auth";
+import { GOOGLE_COOKIE } from "@/lib/google-oauth";
 
 export async function POST(request: Request) {
   let body: { usuario?: unknown; area?: unknown; password?: unknown };
@@ -37,6 +38,15 @@ export async function POST(request: Request) {
   }
 
   const res = NextResponse.json({ ok: true });
+  // Entrar con contraseña no identifica a nadie: se suelta cualquier cuenta
+  // Google que haya quedado conectada en este navegador (de otra persona).
+  res.cookies.set(GOOGLE_COOKIE, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
   res.cookies.set(SESSION_COOKIE, crearToken(perfil, area), {
     httpOnly: true,
     sameSite: "lax",
