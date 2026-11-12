@@ -147,6 +147,11 @@ function parseFechaEntrega(s: string): Date | null {
     const fecha = new Date(2000 + Number(y), Number(mo) - 1, Number(d));
     return Number.isNaN(fecha.getTime()) ? null : fecha;
   }
+  // Sheets a veces la guarda como "AAAA-MM-DD" o como número de serie (días
+  // desde 1899-12-30); sin esto el número se leía como un año (01-01-46337).
+  const ymd = parseFechaYMD(s);
+  if (ymd) return ymd;
+  if (/^\d{5}$/.test(s.trim())) return new Date(1899, 11, 30 + Number(s));
   const fecha = new Date(s);
   return Number.isNaN(fecha.getTime()) ? null : fecha;
 }
@@ -267,7 +272,7 @@ function normalizar(s: string): string {
     .toLowerCase();
 }
 
-export default function GestionPedidosPanel() {
+export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?: string }) {
   const [noLeidos, refrescarNoLeidos] = useChatNoLeidos();
   const [pedidos, setPedidos] = useState<PedidoResumen[]>([]);
   const [loading, setLoading] = useState(true);
@@ -367,13 +372,26 @@ export default function GestionPedidosPanel() {
           minute: "2-digit",
         })
       );
-      // Deja abierto un pedido para no partir con la pantalla vacía: el primer
-      // urgente pendiente si hay, si no el más reciente.
+      // Deja abierto un pedido para no partir con la pantalla vacía: el que
+      // pidió la URL (?pedido=, desde KPIs) si existe; si no, el primer urgente
+      // pendiente, y si no el más reciente.
+      const pedidoDeUrl =
+        inicial && pedidoInicial && lista.some((p) => p.pedidoId === pedidoInicial)
+          ? pedidoInicial
+          : null;
       setSeleccionado((prev) =>
-        prev && lista.some((p) => p.pedidoId === prev)
+        pedidoDeUrl ??
+        (prev && lista.some((p) => p.pedidoId === prev)
           ? prev
-          : ((lista.find(esUrgentePendiente) ?? lista[0])?.pedidoId ?? null)
+          : ((lista.find(esUrgentePendiente) ?? lista[0])?.pedidoId ?? null))
       );
+      if (pedidoDeUrl) {
+        window.setTimeout(() => {
+          document.getElementById(`pedido-${pedidoDeUrl}`)?.scrollIntoView({ block: "nearest" });
+          // En pantallas angostas el detalle queda debajo de la lista.
+          if (window.innerWidth < 1024) detalleRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 300);
+      }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Error desconocido");
     } finally {

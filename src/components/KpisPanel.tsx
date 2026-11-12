@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   backlog,
   derivarTodos,
@@ -190,7 +191,185 @@ function BarrasMes({
   );
 }
 
-function TablaRanking({ titulo, filas }: { titulo: string; filas: FilaRanking[] }) {
+type Detalle = {
+  titulo: string;
+  sub?: string;
+  lista: Derivado[];
+  /** Qué se mira primero: lo más reciente, lo más antiguo o lo más atrasado. */
+  orden: "recientes" | "antiguos" | "atraso";
+};
+
+/** Número clicable: abre el detalle de los pedidos que lo componen. Con 0 queda como texto. */
+function Clic({
+  n,
+  onClick,
+  className = "",
+  children,
+}: {
+  n: number;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  if (n === 0) return <span className={className}>{children}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Ver los pedidos"
+      className={`cursor-pointer rounded px-1.5 py-0.5 underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:bg-brand/25 hover:decoration-primary ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+const ESTADO_CHIP: Record<Derivado["estado"], { label: string; clase: string }> = {
+  pendiente: { label: "Pendiente", clase: "bg-warning-surface text-warning" },
+  parcial: { label: "Parcial", clase: "bg-accent/10 text-accent" },
+  completo: { label: "Completo", clase: "bg-success-surface text-success" },
+  cerrado: { label: "Cerrado", clase: "bg-muted text-secondary" },
+  anulado: { label: "Anulado", clase: "bg-destructive/10 text-destructive" },
+};
+
+const fecha = (d: Date | null) =>
+  d ? d.toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
+
+/** Panel lateral con los pedidos detrás de un número; Escape o clic afuera lo cierra. */
+function PanelDetalle({ detalle, onCerrar }: { detalle: Detalle; onCerrar: () => void }) {
+  const cerrarRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cerrarRef.current?.focus();
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCerrar();
+    };
+    window.addEventListener("keydown", alTeclear);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", alTeclear);
+      document.body.style.overflow = overflow;
+    };
+  }, [onCerrar]);
+
+  const lista = useMemo(() => {
+    const l = [...detalle.lista];
+    if (detalle.orden === "atraso") l.sort((a, b) => (b.diasAtraso ?? 0) - (a.diasAtraso ?? 0));
+    else if (detalle.orden === "antiguos") l.sort((a, b) => a.creado.getTime() - b.creado.getTime());
+    else l.sort((a, b) => b.creado.getTime() - a.creado.getTime());
+    return l;
+  }, [detalle]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-primary/40" onClick={onCerrar}>
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={detalle.titulo}
+        onClick={(e) => e.stopPropagation()}
+        className="flex h-full w-full max-w-md flex-col border-l-4 border-l-brand bg-background shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-border bg-card px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-extrabold tracking-tight text-primary">{detalle.titulo}</h2>
+            <p className="text-xs text-muted-foreground">
+              {lista.length} {lista.length === 1 ? "pedido" : "pedidos"}
+              {detalle.sub ? ` · ${detalle.sub}` : ""}
+            </p>
+          </div>
+          <button
+            ref={cerrarRef}
+            type="button"
+            onClick={onCerrar}
+            aria-label="Cerrar"
+            className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-sm font-semibold text-secondary hover:bg-muted"
+          >
+            ✕
+          </button>
+        </header>
+
+        <ul className="flex-1 space-y-2.5 overflow-y-auto p-3">
+          {lista.map((d) => {
+            const chip = ESTADO_CHIP[d.estado];
+            return (
+              <li key={d.p.pedidoId} className="rounded-lg border border-border bg-card p-3 shadow-sm">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-extrabold text-primary">{d.p.pedidoId}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${chip.clase}`}>{chip.label}</span>
+                  {d.p.urgente && (
+                    <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-brand-foreground">
+                      Urgente
+                    </span>
+                  )}
+                  {d.diasAtraso !== null && (
+                    <span className="text-[11px] font-bold text-destructive">
+                      ⚠ {d.diasAtraso} {d.diasAtraso === 1 ? "día" : "días"} de atraso
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs font-medium text-card-foreground">
+                  {d.p.solicitante || "—"} · {d.p.area || "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">{d.p.centroNegocio || "—"}</div>
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                  <span>
+                    Pedido: <b className="text-card-foreground">{fecha(d.creado)}</b>
+                  </span>
+                  <span>
+                    Entrega pedida: <b className="text-card-foreground">{fecha(d.prometida)}</b>
+                  </span>
+                  <span>
+                    {d.edadDias} {d.edadDias === 1 ? "día" : "días"} desde que se pidió
+                  </span>
+                </div>
+                {d.p.motivoEstado && (
+                  <div className="mt-1 text-[11px] italic text-muted-foreground">Motivo: {d.p.motivoEstado}</div>
+                )}
+                <Link
+                  href={`/gestion-pedidos?pedido=${encodeURIComponent(d.p.pedidoId)}`}
+                  className="mt-2 inline-flex h-8 items-center rounded-lg bg-brand px-3 text-xs font-bold text-brand-foreground shadow-sm transition-colors hover:bg-brand-hover"
+                >
+                  Gestionar este pedido →
+                </Link>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs font-semibold text-accent">
+                    {d.p.items.length} {d.p.items.length === 1 ? "artículo" : "artículos"}
+                  </summary>
+                  <ul className="mt-1.5 space-y-1">
+                    {d.p.items.map((it, i) => {
+                      const rec = it.cantidadRecibida;
+                      const punto = rec === null ? "bg-warning" : rec >= it.cantidad ? "bg-success" : "bg-accent";
+                      return (
+                        <li key={i} className="flex items-start gap-2 text-xs">
+                          <span aria-hidden className={`mt-1 h-2 w-2 shrink-0 rounded-full ${punto}`} />
+                          <span className="min-w-0 flex-1 text-card-foreground">{it.nombre || "(sin nombre)"}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {rec === null ? `sin recibir de ${num(it.cantidad)}` : `${num(rec)} de ${num(it.cantidad)}`}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              </li>
+            );
+          })}
+        </ul>
+      </aside>
+    </div>
+  );
+}
+
+function TablaRanking({
+  titulo,
+  filas,
+  onAbrir,
+}: {
+  titulo: string;
+  filas: FilaRanking[];
+  onAbrir: (d: Detalle) => void;
+}) {
   const max = Math.max(1, ...filas.map((f) => f.creados));
   return (
     <div className="overflow-x-auto">
@@ -209,14 +388,30 @@ function TablaRanking({ titulo, filas }: { titulo: string; filas: FilaRanking[] 
           {filas.map((f) => (
             <tr key={f.clave} className="border-b border-border/60 last:border-0">
               <td className="max-w-[260px] py-1.5 pr-2">
-                <div className="truncate font-medium text-card-foreground" title={f.clave}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onAbrir({ titulo: f.clave, sub: "Todos sus pedidos del período", lista: f.pedidos, orden: "recientes" })
+                  }
+                  className="block max-w-full cursor-pointer truncate rounded text-left font-medium text-card-foreground transition-colors hover:bg-brand/20"
+                  title={`Ver los pedidos de ${f.clave}`}
+                >
                   {f.clave}
-                </div>
+                </button>
                 <div className="mt-0.5 h-1 rounded-full bg-muted">
                   <div className="h-1 rounded-full bg-primary/70" style={{ width: `${(f.creados / max) * 100}%` }} />
                 </div>
               </td>
-              <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{f.creados}</td>
+              <td className="px-2 py-1.5 text-right font-semibold tabular-nums">
+                <Clic
+                  n={f.creados}
+                  onClick={() =>
+                    onAbrir({ titulo: f.clave, sub: "Todos sus pedidos del período", lista: f.pedidos, orden: "recientes" })
+                  }
+                >
+                  {f.creados}
+                </Clic>
+              </td>
               <td className="px-2 py-1.5 text-right tabular-nums">{dias(f.diasBodegaMediana)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">
                 {porc(f.aTiempoBodega)}
@@ -226,11 +421,37 @@ function TablaRanking({ titulo, filas }: { titulo: string; filas: FilaRanking[] 
                   </span>
                 )}
               </td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{f.abiertos}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">
+                <Clic
+                  n={f.abiertos}
+                  onClick={() =>
+                    onAbrir({
+                      titulo: `Abiertos · ${f.clave}`,
+                      sub: "Pedidos sin recibir por completo",
+                      lista: f.pedidos.filter((d) => d.estado === "pendiente" || d.estado === "parcial"),
+                      orden: "antiguos",
+                    })
+                  }
+                >
+                  {f.abiertos}
+                </Clic>
+              </td>
               <td
                 className={`py-1.5 pl-2 text-right font-semibold tabular-nums ${f.atrasados > 0 ? "text-destructive" : "text-muted-foreground"}`}
               >
-                {f.atrasados}
+                <Clic
+                  n={f.atrasados}
+                  onClick={() =>
+                    onAbrir({
+                      titulo: `Atrasados · ${f.clave}`,
+                      sub: "Abiertos con la fecha de entrega pedida ya vencida",
+                      lista: f.pedidos.filter((d) => d.atrasado),
+                      orden: "atraso",
+                    })
+                  }
+                >
+                  {f.atrasados}
+                </Clic>
               </td>
             </tr>
           ))}
@@ -245,6 +466,8 @@ export default function KpisPanel() {
   const [error, setError] = useState("");
   const [periodo, setPeriodo] = useState<PeriodoClave>("mes");
   const [area, setArea] = useState("");
+  const [detalle, setDetalle] = useState<Detalle | null>(null);
+  const cerrar = useCallback(() => setDetalle(null), []);
 
   useEffect(() => {
     let cancelado = false;
@@ -480,14 +703,31 @@ export default function KpisPanel() {
           className="lg:col-span-2"
         >
           <div className="mb-4 grid grid-cols-3 gap-3">
-            {[
-              ["Abiertos", bk.abiertos, "text-primary"],
-              ["Atrasados", bk.atrasados, bk.atrasados > 0 ? "text-destructive" : "text-primary"],
-              ["Urgentes", bk.urgentesAbiertos, "text-primary"],
-            ].map(([t, v, c]) => (
-              <div key={t as string}>
-                <div className={`text-2xl font-extrabold ${c}`}>{v as number}</div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t as string}</div>
+            {(
+              [
+                ["Abiertos", bk.lista.abiertos, "text-primary", "antiguos"],
+                ["Atrasados", bk.lista.atrasados, bk.atrasados > 0 ? "text-destructive" : "text-primary", "atraso"],
+                ["Urgentes", bk.lista.urgentes, "text-primary", "antiguos"],
+              ] as const
+            ).map(([t, lista, c, orden]) => (
+              <div key={t}>
+                <div className="text-2xl font-extrabold">
+                  <Clic
+                    n={lista.length}
+                    className={c}
+                    onClick={() =>
+                      setDetalle({
+                        titulo: `${t} hoy`,
+                        sub: "Pedidos sin recibir por completo",
+                        lista,
+                        orden,
+                      })
+                    }
+                  >
+                    {lista.length}
+                  </Clic>
+                </div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t}</div>
               </div>
             ))}
           </div>
@@ -496,12 +736,27 @@ export default function KpisPanel() {
           </div>
           <ul className="mt-1.5 space-y-1.5">
             {bk.edades.map((e) => (
-              <li key={e.label} className="flex items-center gap-2 text-xs" title={`${e.n} pedidos abiertos`}>
-                <span className="w-20 shrink-0 text-muted-foreground">{e.label}</span>
-                <div className="h-3 flex-1 rounded bg-muted">
-                  <div className="h-3 rounded bg-primary/70" style={{ width: `${(e.n / maxEdad) * 100}%` }} />
-                </div>
-                <span className="w-6 text-right font-semibold tabular-nums">{e.n}</span>
+              <li key={e.label}>
+                <button
+                  type="button"
+                  disabled={e.n === 0}
+                  onClick={() =>
+                    setDetalle({
+                      titulo: `Abiertos de ${e.label}`,
+                      sub: "Pedidos sin recibir por completo, según los días desde que se pidieron",
+                      lista: e.pedidos,
+                      orden: "antiguos",
+                    })
+                  }
+                  title={`${e.n} pedidos abiertos`}
+                  className="flex w-full items-center gap-2 rounded text-left text-xs transition-colors enabled:cursor-pointer enabled:hover:bg-brand/20"
+                >
+                  <span className="w-20 shrink-0 text-muted-foreground">{e.label}</span>
+                  <div className="h-3 flex-1 rounded bg-muted">
+                    <div className="h-3 rounded bg-primary/70" style={{ width: `${(e.n / maxEdad) * 100}%` }} />
+                  </div>
+                  <span className="w-6 text-right font-semibold tabular-nums">{e.n}</span>
+                </button>
               </li>
             ))}
           </ul>
@@ -510,7 +765,20 @@ export default function KpisPanel() {
         {/* Anulaciones */}
         <Seccion titulo="Anulaciones" nota="Pedidos anulados dentro del período.">
           <div className="mb-3 flex items-baseline gap-2">
-            <span className="text-2xl font-extrabold text-primary">{m.anulados}</span>
+            <Clic
+              n={m.anulados}
+              className="text-2xl font-extrabold text-primary"
+              onClick={() =>
+                setDetalle({
+                  titulo: "Pedidos anulados",
+                  sub: "Dentro del período seleccionado",
+                  lista: actual.filter((d) => d.estado === "anulado"),
+                  orden: "recientes",
+                })
+              }
+            >
+              {m.anulados}
+            </Clic>
             <span className="text-xs text-muted-foreground">{pctAnulados !== null ? `${num(pctAnulados, 1)}% de los creados` : ""}</span>
           </div>
           {motivos.length === 0 ? (
@@ -565,14 +833,14 @@ export default function KpisPanel() {
 
       {/* Rankings */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Seccion titulo="Por área" nota="Ordenado por cantidad de pedidos del período.">
-          <TablaRanking titulo="Área" filas={porArea} />
+        <Seccion titulo="Por área" nota="Ordenado por cantidad de pedidos del período. Haz clic en un número para ver los pedidos.">
+          <TablaRanking titulo="Área" filas={porArea} onAbrir={setDetalle} />
         </Seccion>
         <Seccion titulo="Por centro de negocio" nota="Los 8 con más pedidos.">
-          <TablaRanking titulo="Centro" filas={porCentro} />
+          <TablaRanking titulo="Centro" filas={porCentro} onAbrir={setDetalle} />
         </Seccion>
         <Seccion titulo="Por solicitante" nota="Los 8 con más pedidos.">
-          <TablaRanking titulo="Solicitante" filas={porSolicitante} />
+          <TablaRanking titulo="Solicitante" filas={porSolicitante} onAbrir={setDetalle} />
         </Seccion>
         <Seccion titulo="Cómo leer estos números">
           <ul className="list-disc space-y-1.5 pl-4 text-xs text-muted-foreground">
@@ -584,6 +852,8 @@ export default function KpisPanel() {
           </ul>
         </Seccion>
       </div>
+
+      {detalle && <PanelDetalle detalle={detalle} onCerrar={cerrar} />}
     </div>
   );
 }

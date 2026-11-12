@@ -15,7 +15,14 @@ export const metadata = {
 // Depende de la cookie de sesión, así que nunca se sirve prerenderizada.
 export const dynamic = "force-dynamic";
 
-export default async function GestionPedidosPage() {
+export default async function GestionPedidosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  // `?pedido=INT-27` abre el panel con ese pedido seleccionado (desde KPIs).
+  const { pedido } = await searchParams;
+  const pedidoInicial = (Array.isArray(pedido) ? pedido[0] : pedido)?.trim() || undefined;
   const perfil = await getPerfil();
   if (!perfil) {
     return (
@@ -51,7 +58,7 @@ export default async function GestionPedidosPage() {
           <CerrarSesionButton />
         </div>
       </header>
-      <GestionPedidosPanel />
+      <GestionPedidosPanel pedidoInicial={pedidoInicial} />
     </div>
   );
 }
