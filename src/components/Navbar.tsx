@@ -72,6 +72,7 @@ export default function Navbar() {
           <span className="sr-only sm:hidden">Adquisiciones</span>
         </Link>
 
+        {!pathname.startsWith("/acceso") && (
         <nav
           className="-mx-4 flex w-[calc(100%+2rem)] items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-t border-border px-2 sm:mx-0 sm:w-auto sm:border-t-0 sm:px-0 sm:gap-1"
           aria-label="Secciones"
@@ -95,6 +96,7 @@ export default function Navbar() {
             );
           })}
         </nav>
+        )}
       </div>
     </header>
   );

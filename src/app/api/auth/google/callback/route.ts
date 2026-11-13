@@ -26,7 +26,11 @@ export async function GET(request: Request) {
   const volver = rutaSegura(volverRaw);
 
   function terminar(motivo?: string) {
-    const destino = new URL(volver, request.url);
+    // Un fallo antes de tener sesión no puede volver a la página protegida
+    // (el proxy lo mandaría a /acceso sin el motivo): va directo a /acceso.
+    const aAcceso = motivo !== undefined && motivo !== "sin-acceso";
+    const destino = new URL(aAcceso ? "/acceso" : volver, request.url);
+    if (aAcceso) destino.searchParams.set("volver", volver);
     destino.searchParams.set("google", motivo ? "error" : "ok");
     if (motivo) destino.searchParams.set("motivo", motivo);
     const res = NextResponse.redirect(destino);

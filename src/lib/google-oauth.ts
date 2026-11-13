@@ -1,14 +1,16 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  randomBytes,
-  timingSafeEqual,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { OAuth2Client } from "google-auth-library";
 import { db } from "@/lib/chat";
+import {
+  GOOGLE_COOKIE,
+  GOOGLE_SESSION_SECONDS,
+  clave,
+  crearTokenSesion,
+  emailDeToken,
+} from "@/lib/google-cookie";
+
+export { GOOGLE_COOKIE, GOOGLE_SESSION_SECONDS, crearTokenSesion };
 
 /**
  * Login con Google (OAuth "interno" de Workspace) para enviar correos como la
@@ -36,28 +38,8 @@ export const SCOPES = [
 ];
 const SCOPE_ENVIAR = "https://www.googleapis.com/auth/gmail.send";
 
-export const GOOGLE_COOKIE = "google_session";
 export const GOOGLE_STATE_COOKIE = "google_oauth_state";
-export const GOOGLE_SESSION_SECONDS = 60 * 60 * 24 * 30; // 30 días
 
-function clave(): Buffer {
-  const base =
-    process.env.GOOGLE_TOKEN_SECRET ||
-    process.env.GOOGLE_OAUTH_CLIENT_SECRET ||
-    "";
-  if (!base) throw new Error("Falta GOOGLE_OAUTH_CLIENT_SECRET.");
-  return createHash("sha256").update(`neb-google:${base}`).digest();
-}
-
-function firmar(payload: string): string {
-  return createHmac("sha256", clave()).update(payload).digest("hex");
-}
-
-function iguales(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ba.length === bb.length && timingSafeEqual(ba, bb);
-}
 
 export function oauthConfigurado(): boolean {
   return Boolean(
@@ -83,22 +65,6 @@ export function rutaSegura(v: unknown, porDefecto = "/enviar-pedido"): string {
 }
 
 // --- Sesión (cookie firmada) -------------------------------------------------
-
-export function crearTokenSesion(email: string): string {
-  const payload = `${Buffer.from(email).toString("base64url")}.${
-    Date.now() + GOOGLE_SESSION_SECONDS * 1000
-  }`;
-  return `${payload}.${firmar(payload)}`;
-}
-
-function emailDeToken(token: string | undefined): string | null {
-  if (!token) return null;
-  const [b64, exp, firma] = token.split(".");
-  if (!b64 || !exp || !firma) return null;
-  if (!iguales(firma, firmar(`${b64}.${exp}`))) return null;
-  if (Number(exp) <= Date.now()) return null;
-  return Buffer.from(b64, "base64url").toString();
-}
 
 /** Email de la cuenta Google conectada, o null. */
 export async function getGoogleEmail(): Promise<string | null> {
