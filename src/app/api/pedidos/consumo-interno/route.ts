@@ -28,7 +28,7 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : String(v ?? "").
  * Flujo de inventario en Defontana para artículos ya recibidos de un pedido;
  * deja los folios en la columna «Consumo interno».
  *
- * Body: { pedidoId, bodega, accion, oc, lineas: [{ fila, cantidad, costoUnitario }] }
+ * Body: { pedidoId, bodega, accion, oc, factura (solo pe_cd), lineas: [{ fila, cantidad, costoUnitario }] }
  *  - rec_ci : recepciona la OC (total o parcial; genera el parte de entrada) y
  *             enseguida hace el consumo interno de lo recepcionado. Exige OC.
  *  - rec    : solo recepciona la OC (el material queda en stock). Exige OC.
@@ -53,6 +53,7 @@ export async function POST(request: Request) {
     bodega?: unknown;
     accion?: unknown;
     oc?: unknown;
+    factura?: unknown;
     lineas?: unknown;
   };
   try {
@@ -81,6 +82,17 @@ export async function POST(request: Request) {
   ) {
     return NextResponse.json(
       { error: "El N° de OC debe ser un número entero." },
+      { status: 400 }
+    );
+  }
+  const facturaTexto = str(body.factura);
+  const facturaNumero = facturaTexto === "" || !conEntradaDirecta ? undefined : Number(facturaTexto);
+  if (
+    facturaNumero !== undefined &&
+    (!Number.isInteger(facturaNumero) || facturaNumero <= 0 || facturaNumero > 99_999_999)
+  ) {
+    return NextResponse.json(
+      { error: "El N° de factura debe ser un número entero." },
       { status: 400 }
     );
   }
@@ -302,6 +314,7 @@ export async function POST(request: Request) {
           clasificador1,
           clasificador2,
           ...(oc ? { providerId: oc.proveedorRut, ocNumero: oc.numero } : {}),
+          facturaNumero,
           lineas: detalle.map((d) => ({
             articleId: d.codigo,
             cantidad: d.cantidad,
@@ -313,7 +326,7 @@ export async function POST(request: Request) {
         const message = err instanceof Error ? err.message : "Error desconocido";
         return NextResponse.json({ error: message }, { status: 502 });
       }
-      const etiqueta = `PECD-${folioEntrada}${oc ? `/OC-${oc.numero}` : ""}`;
+      const etiqueta = `PECD-${folioEntrada}${oc ? `/OC-${oc.numero}` : ""}${facturaNumero ? `/FC-${facturaNumero}` : ""}`;
       anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega})`);
       // Se anota ya: si luego falla el consumo, el ingreso queda registrado.
       try {

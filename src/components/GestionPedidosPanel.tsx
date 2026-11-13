@@ -2338,6 +2338,7 @@ function DialogoConsumo({
   const [ambiente, setAmbiente] = useState("");
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
+  const [factura, setFactura] = useState("");
   const [accion, setAccion] = useState<Accion>("rec_ci");
   // «Entra stock» por OC (rec*) o por ingreso directo sin OC (pe_cd, con
   // costo escrito a mano); solo "ci" consume stock que ya existía. pe_cd es
@@ -2546,6 +2547,7 @@ function DialogoConsumo({
           bodega,
           accion,
           oc: oc.trim(),
+          ...(conEntradaDirecta ? { factura: factura.trim() } : {}),
           lineas,
         }),
       });
@@ -2619,7 +2621,7 @@ function DialogoConsumo({
             <option value="rec_ci">Recepcionar OC + consumo interno</option>
             <option value="rec">Solo recepcionar OC (queda en stock)</option>
             <option value="ci">Solo consumo interno (ya hay stock)</option>
-            <option value="pe_cd">Ingresar sin OC (costo directo)</option>
+            <option value="pe_cd">Parte de entrada (costo directo)</option>
           </select>
           <span className="mt-1 block text-xs text-muted-foreground">
             {accion === "rec_ci" &&
@@ -2686,6 +2688,28 @@ function DialogoConsumo({
             </p>
           )}
         </label>
+
+        {conEntradaDirecta && (
+          <label className="mt-4 block">
+            <span className={labelClass}>
+              N° de factura electrónica de compra (opcional)
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={factura}
+              disabled={enviando}
+              onChange={(e) => setFactura(e.target.value.replace(/\D/g, ""))}
+              placeholder="Ej.: 555"
+              className={inputClass}
+            />
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Queda como documento de referencia del parte («Factura Electrónica
+              Compra» + este número). Si la indicas, reemplaza a la OC como
+              referencia (el documento admite una sola).
+            </span>
+          </label>
+        )}
 
         {ambiente === "pruebas" && conEntradaDirecta && (
           <p className="mt-2 text-xs text-muted-foreground">
