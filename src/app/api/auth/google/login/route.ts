@@ -16,7 +16,10 @@ export async function GET(request: Request) {
   const volver = rutaSegura(new URL(request.url).searchParams.get("volver"));
   if (!oauthConfigurado()) {
     return NextResponse.redirect(
-      new URL(`${volver}?google=error&motivo=config`, request.url)
+      new URL(
+        `/acceso?volver=${encodeURIComponent(volver)}&google=error&motivo=config`,
+        request.url
+      )
     );
   }
 

@@ -12,8 +12,10 @@ const MOTIVOS: Record<string, string> = {
 };
 
 export default function LoginGestion() {
-  const volver = usePathname();
+  const pathname = usePathname();
   const q = useSearchParams();
+  // En /acceso la página a la que volver viene en la URL.
+  const volver = pathname === "/acceso" ? (q.get("volver") ?? "/") : pathname;
   const error =
     q.get("google") === "error"
       ? (MOTIVOS[q.get("motivo") ?? ""] ??
