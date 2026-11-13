@@ -124,7 +124,7 @@ export async function POST(request: Request) {
 
   try {
     const sheetId = articulosSheetId();
-    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Y`);
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Z`);
     const delPedido = rows.filter((r) => str(r[0]) === pedidoId);
     if (delPedido.length === 0) {
       return NextResponse.json({ error: "Pedido no encontrado." }, { status: 404 });

@@ -16,6 +16,9 @@ type PedidoItem = {
   fechaRecepcionBodega: string;
   fechaEntregaSolicitante: string;
   comentarioArticulo: string;
+  /** Artículo anulado por Adquisiciones (no cuenta en el avance del pedido). */
+  anulado?: boolean;
+  motivoAnulacion?: string;
 };
 
 type Pedido = {
@@ -57,11 +60,13 @@ const labelClass =
   "mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground";
 
 function estadoLinea(it: PedidoItem): Estado {
+  if (it.anulado) return "anulado";
   if (it.cantidadRecibida === null) return "pendiente";
   return it.cantidadRecibida >= it.cantidad ? "completo" : "parcial";
 }
 
-function estadoPedido(items: PedidoItem[]): Estado {
+function estadoPedido(todos: PedidoItem[]): Estado {
+  const items = todos.filter((it) => !it.anulado);
   if (items.length === 0 || items.every((it) => it.cantidadRecibida === null))
     return "pendiente";
   return items.every((it) => estadoLinea(it) === "completo")
@@ -712,8 +717,9 @@ export default function MisPedidosPanel() {
           const recibidos = p.items.filter(
             (it) => estadoLinea(it) === "completo"
           ).length;
-          const pct = p.items.length
-            ? Math.round((recibidos / p.items.length) * 100)
+          const vigentes = p.items.filter((it) => !it.anulado);
+          const pct = vigentes.length
+            ? Math.round((recibidos / vigentes.length) * 100)
             : 0;
           const tarde = estaAtrasado(p, hoy);
           return (
@@ -782,7 +788,7 @@ export default function MisPedidosPanel() {
                         style={{ width: `${pct}%` }}
                       />
                     </span>
-                    {recibidos}/{p.items.length} art.
+                    {recibidos}/{vigentes.length} art.
                   </span>
                 </span>
                 </button>
@@ -843,7 +849,7 @@ export default function MisPedidosPanel() {
                     sinLeer={noLeidos[p.pedidoId] ?? 0}
                     onActividad={refrescarNoLeidos}
                   />
-                  <ReportarCorreo folio={p.pedidoId} items={p.items} />
+                  <ReportarCorreo folio={p.pedidoId} items={vigentes} />
 
                   <ul className="mt-4 space-y-2 md:hidden">
                     {p.items.map((it, i) => {
@@ -854,7 +860,11 @@ export default function MisPedidosPanel() {
                           className="rounded-lg border border-border bg-background p-3 text-sm"
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 font-semibold text-card-foreground">
+                            <span
+                              className={`min-w-0 font-semibold text-card-foreground ${
+                                it.anulado ? "line-through opacity-60" : ""
+                              }`}
+                            >
                               {it.nombre}
                             </span>
                             <span
@@ -912,7 +922,14 @@ export default function MisPedidosPanel() {
                               className="border-t border-border align-top"
                             >
                               <td className="py-2 pr-3">
-                                {it.nombre}
+                                <span className={it.anulado ? "line-through opacity-60" : ""}>
+                                  {it.nombre}
+                                </span>
+                                {it.anulado && it.motivoAnulacion && (
+                                  <span className="block text-xs text-destructive">
+                                    Motivo: {it.motivoAnulacion}
+                                  </span>
+                                )}
                                 {it.comentarioArticulo && (
                                   <span className="block text-xs text-muted-foreground">
                                     {it.comentarioArticulo}

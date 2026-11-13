@@ -39,11 +39,12 @@ const HEADERS = [
   "Comentario artículo",
   "Estado pedido",
   "Motivo estado",
+  "Motivo anulación artículo",
 ];
-// Última columna de encabezados (25 columnas -> A..Y).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:Y1`;
+// Última columna de encabezados (26 columnas -> A..Z).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:Z1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:Y`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:Z`;
 
 // Prefijos de centro de negocio -> prefijo del folio del pedido (igual al
 // prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
@@ -237,6 +238,7 @@ export async function POST(request: Request) {
       it.comentario, // Comentario artículo
       "", // Estado pedido (Cerrado / Anulado)
       "", // Motivo estado
+      "", // Motivo anulación artículo (vacío = artículo vigente)
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
@@ -264,6 +266,9 @@ export type PedidoItem = {
   fechaEntregaSolicitante: string;
   /** Comentario/detalle propio de este artículo, escrito al armar el pedido. */
   comentarioArticulo: string;
+  /** Artículo anulado por Adquisiciones: no cuenta como pedido ni se recibe. */
+  anulado: boolean;
+  motivoAnulacion: string;
 };
 
 export type EstadoManual = "" | "cerrado" | "anulado";
@@ -364,6 +369,8 @@ export async function GET() {
         fechaRecepcionBodega: str(row[20]),
         fechaEntregaSolicitante: str(row[21]),
         comentarioArticulo: str(row[22]),
+        anulado: str(row[25]) !== "",
+        motivoAnulacion: str(row[25]),
       });
     });
 

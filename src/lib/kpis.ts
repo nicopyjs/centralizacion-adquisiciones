@@ -23,6 +23,8 @@ export type PedidoKpi = {
     /** "YYYY-MM-DD" o "". */
     fechaRecepcionBodega: string;
     fechaEntregaSolicitante: string;
+    /** Artículo anulado: no cuenta en cantidades, estado ni fechas. */
+    anulado?: boolean;
   }[];
 };
 
@@ -88,7 +90,11 @@ function estadoDe(p: PedidoKpi): EstadoKpi {
     : "parcial";
 }
 
-export function derivar(p: PedidoKpi, hoy: Date = new Date()): Derivado | null {
+export function derivar(pedido: PedidoKpi, hoy: Date = new Date()): Derivado | null {
+  // Los artículos anulados se ignoran por completo.
+  const p: PedidoKpi = pedido.items.some((i) => i.anulado)
+    ? { ...pedido, items: pedido.items.filter((i) => !i.anulado) }
+    : pedido;
   const f = new Date(p.fecha);
   if (Number.isNaN(f.getTime())) return null;
   const creado = new Date(f.getFullYear(), f.getMonth(), f.getDate());
