@@ -46,6 +46,8 @@ const fmt = (n: number) => n.toLocaleString("es-CL");
  * Modificación de un pedido ya enviado, solo Adquisiciones (p. ej. el
  * supervisor se equivocó y avisó). Body según `accion`:
  *  - "linea":    `{ pedidoId, fila, codigoActual, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
+ *  - "anularLinea" / "reactivarLinea": `{ pedidoId, fila, codigoActual, motivo? }`
+ *                (anular conserva la fila con el motivo en la columna Z; exige motivo)
  *  - "agregar":  `{ pedidoId, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
  *  - "cabecera": `{ pedidoId, fechaEntrega, despacho, comentario, solicitante,
  *                  centroNegocio, centroCodigo, clasificador1, clasificador2, urgente }`
@@ -67,7 +69,7 @@ export async function POST(request: Request) {
 
   const sheetId = articulosSheetId();
   try {
-    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Y`);
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Z`);
     const delPedido = rows
       .map((r, i) => ({ r, fila: i + 2 }))
       .filter((x) => str(x.r[0]) === pedidoId);
@@ -118,6 +120,45 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    if (accion === "anularLinea" || accion === "reactivarLinea") {
+      const fila = Number(body.fila);
+      const objetivo = delPedido.find((x) => x.fila === fila);
+      if (!objetivo || str(objetivo.r[11]) !== str(body.codigoActual)) {
+        return error("El pedido cambió. Recarga la lista e inténtalo de nuevo.", 409);
+      }
+      const nombre = str(objetivo.r[12]);
+      const yaAnulada = str(objetivo.r[25]) !== "";
+
+      if (accion === "reactivarLinea") {
+        if (!yaAnulada) return NextResponse.json({ ok: true });
+        await batchWriteRanges(sheetId, [
+          { range: `${PEDIDOS_SHEET}!Z${fila}`, values: [[""]] },
+        ]);
+        await avisarEnChat(pedidoId, area, `se reactivó «${nombre}».`);
+        return NextResponse.json({ ok: true });
+      }
+
+      const motivo = str(body.motivo);
+      if (!motivo) return error("Indica el motivo de la anulación del artículo.");
+      if (yaAnulada) return error("Ese artículo ya está anulado.", 409);
+      if ((Number(objetivo.r[16]) || 0) > 0 || str(objetivo.r[17])) {
+        return error(
+          "Este artículo ya tiene recepción o consumo registrado: no se puede anular."
+        );
+      }
+      const vigentes = delPedido.filter((x) => str(x.r[25]) === "");
+      if (vigentes.length <= 1) {
+        return error(
+          "No se puede anular el único artículo vigente del pedido. Usa «Anular» para el pedido completo."
+        );
+      }
+      await batchWriteRanges(sheetId, [
+        { range: `${PEDIDOS_SHEET}!Z${fila}`, values: [[motivo]] },
+      ]);
+      await avisarEnChat(pedidoId, area, `se anuló «${nombre}» (${motivo}).`);
+      return NextResponse.json({ ok: true });
+    }
+
     if (accion === "agregar") {
       const codigo = str(body.codigo);
       const nombre = str(body.nombre);
@@ -143,7 +184,7 @@ export async function POST(request: Request) {
           str(base[19]),
           "", "",
           str(body.comentarioArticulo),
-          "", "",
+          "", "", "",
         ],
       ]);
       await avisarEnChat(pedidoId, area, `se agregó «${nombre} × ${fmt(cantidad)}».`);

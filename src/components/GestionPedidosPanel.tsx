@@ -30,6 +30,9 @@ type PedidoItem = {
   fechaEntregaSolicitante: string;
   /** Comentario/detalle propio de este artículo, escrito al armar el pedido. */
   comentarioArticulo: string;
+  /** Artículo anulado por Adquisiciones: no cuenta como pedido ni se recibe. */
+  anulado: boolean;
+  motivoAnulacion: string;
 };
 
 type PedidoResumen = {
@@ -122,7 +125,9 @@ function estadoLinea(it: PedidoItem): Estado {
   return it.cantidadRecibida >= it.cantidad ? "completo" : "parcial";
 }
 
-function estadoPedido(items: PedidoItem[]): Estado {
+function estadoPedido(todos: PedidoItem[]): Estado {
+  // Los artículos anulados no cuentan: el pedido se completa con los vigentes.
+  const items = todos.filter((it) => !it.anulado);
   if (items.length === 0 || items.every((it) => it.cantidadRecibida === null))
     return "pendiente";
   return items.every((it) => estadoLinea(it) === "completo")
@@ -189,14 +194,18 @@ function esAtrasado(p: PedidoResumen): boolean {
  * solicitante, o el pedido es anterior a que existiera este campo).
  */
 function fechaRecepcionPedido(p: PedidoResumen): Date | null {
-  const fechas = p.items.map((it) => parseFechaYMD(it.fechaEntregaSolicitante));
+  const fechas = p.items
+    .filter((it) => !it.anulado)
+    .map((it) => parseFechaYMD(it.fechaEntregaSolicitante));
   if (fechas.some((d) => d === null)) return null;
   return new Date(Math.max(...(fechas as Date[]).map((d) => d.getTime())));
 }
 
 /** La más tardía entre las fechas de llegada a bodega de las líneas del pedido. */
 function fechaBodegaPedido(p: PedidoResumen): Date | null {
-  const fechas = p.items.map((it) => parseFechaYMD(it.fechaRecepcionBodega));
+  const fechas = p.items
+    .filter((it) => !it.anulado)
+    .map((it) => parseFechaYMD(it.fechaRecepcionBodega));
   if (fechas.some((d) => d === null)) return null;
   return new Date(Math.max(...(fechas as Date[]).map((d) => d.getTime())));
 }
@@ -340,6 +349,16 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
   } | null>(null);
   const [enviandoEliminar, setEnviandoEliminar] = useState(false);
   const [errorEliminar, setErrorEliminar] = useState<string | null>(null);
+
+  // Anular un artículo (queda en la planilla, marcado, con su motivo).
+  const [anulandoLinea, setAnulandoLinea] = useState<{
+    pedidoId: string;
+    fila: number;
+    codigo: string;
+    nombre: string;
+  } | null>(null);
+  const [enviandoAnularLinea, setEnviandoAnularLinea] = useState(false);
+  const [errorAnularLinea, setErrorAnularLinea] = useState<string | null>(null);
 
   // Modificar un pedido ya enviado (corregir artículo/cantidad, agregar, datos).
   const [modificando, setModificando] = useState<
@@ -724,11 +743,11 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     const m = new Map<number, PedidoItem>();
     for (const p of pedidosMarcados) {
       if (p.estadoManual) continue;
-      for (const it of p.items) m.set(it.fila, it);
+      for (const it of p.items) if (!it.anulado) m.set(it.fila, it);
     }
     if (pedidoActual && !pedidoActual.estadoManual) {
       for (const it of pedidoActual.items) {
-        if (seleccionFilas.has(it.fila)) m.set(it.fila, it);
+        if (!it.anulado && seleccionFilas.has(it.fila)) m.set(it.fila, it);
       }
     }
     return Array.from(m.values());
@@ -1164,6 +1183,46 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     }
   }
 
+  /** Anula (con `motivo`) o reactiva (sin motivo) un artículo del pedido. */
+  async function cambiarAnulacionLinea(
+    l: { pedidoId: string; fila: number; codigo: string },
+    motivo: string | null
+  ): Promise<string | null> {
+    try {
+      const res = await fetch("/api/pedidos/modificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: motivo === null ? "reactivarLinea" : "anularLinea",
+          pedidoId: l.pedidoId,
+          fila: l.fila,
+          codigoActual: l.codigo,
+          motivo: motivo ?? "",
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return null;
+      }
+      const data = await res.json();
+      if (!res.ok) return data.error || "No se pudo guardar el cambio.";
+      await cargarPedidos();
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "Error de red.";
+    }
+  }
+
+  async function confirmarAnularLinea(motivo: string) {
+    if (!anulandoLinea) return;
+    setEnviandoAnularLinea(true);
+    setErrorAnularLinea(null);
+    const err = await cambiarAnulacionLinea(anulandoLinea, motivo);
+    setEnviandoAnularLinea(false);
+    if (err) setErrorAnularLinea(err);
+    else setAnulandoLinea(null);
+  }
+
   async function guardarTodo() {
     if (guardandoTodo) return;
     setGuardandoTodo(true);
@@ -1573,11 +1632,12 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
                 const estado = ESTADOS[estadoDe(p)];
                 const activo = p.pedidoId === idActual;
                 const marcado = selPedidos.has(p.pedidoId);
-                const totalPedido = p.items.reduce(
+                const vigentes = p.items.filter((it) => !it.anulado);
+                const totalPedido = vigentes.reduce(
                   (sum, it) => sum + it.cantidad,
                   0
                 );
-                const totalRecibido = p.items.reduce(
+                const totalRecibido = vigentes.reduce(
                   (sum, it) => sum + (it.cantidadRecibida ?? 0),
                   0
                 );
@@ -1780,6 +1840,22 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
                   nombre: it.nombre,
                 });
               }}
+              onAnularLinea={(it) => {
+                setErrorAnularLinea(null);
+                setAnulandoLinea({
+                  pedidoId: pedidoActual.pedidoId,
+                  fila: it.fila,
+                  codigo: it.codigo,
+                  nombre: it.nombre,
+                });
+              }}
+              onReactivarLinea={async (it) => {
+                const err = await cambiarAnulacionLinea(
+                  { pedidoId: pedidoActual.pedidoId, fila: it.fila, codigo: it.codigo },
+                  null
+                );
+                if (err) setErrores((prev) => ({ ...prev, [it.fila]: err }));
+              }}
             />
           )}
         </section>
@@ -1805,6 +1881,17 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
           enviando={enviandoEliminar}
           onCancelar={() => setEliminando(null)}
           onConfirmar={() => void confirmarEliminar()}
+        />
+      )}
+
+      {anulandoLinea && (
+        <DialogoAnularLinea
+          nombre={anulandoLinea.nombre}
+          pedidoId={anulandoLinea.pedidoId}
+          error={errorAnularLinea}
+          enviando={enviandoAnularLinea}
+          onCancelar={() => setAnulandoLinea(null)}
+          onConfirmar={(motivo) => void confirmarAnularLinea(motivo)}
         />
       )}
 
@@ -3207,6 +3294,90 @@ function DialogoEliminar({
   );
 }
 
+function DialogoAnularLinea({
+  nombre,
+  pedidoId,
+  error,
+  enviando,
+  onCancelar,
+  onConfirmar,
+}: {
+  nombre: string;
+  pedidoId: string;
+  error: string | null;
+  enviando: boolean;
+  onCancelar: () => void;
+  onConfirmar: (motivo: string) => void;
+}) {
+  const caja = useRef<HTMLDivElement>(null);
+  const [motivo, setMotivo] = useState("");
+  useEffect(() => {
+    caja.current?.focus();
+  }, []);
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCancelar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) onCancelar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Anular artículo del pedido"
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold text-primary">
+          Anular artículo del pedido {folioCorto(pedidoId)}
+        </h3>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          <strong className="text-card-foreground">{nombre}</strong> dejará de
+          contar en el pedido y no se podrá recibir. Queda en la planilla,
+          marcado como anulado, y puedes reactivarlo si fue un error.
+        </p>
+        <label className="mt-3 block">
+          <span className={labelClass}>Motivo (quién lo pidió y por qué)</span>
+          <textarea
+            className={`${fieldClass} h-20 resize-none py-2`}
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            disabled={enviando}
+            placeholder="Ej.: el supervisor ya no lo necesita"
+          />
+        </label>
+        {error && (
+          <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancelar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirmar(motivo.trim())}
+            disabled={enviando || !motivo.trim()}
+            className="inline-flex h-9 items-center rounded-lg bg-destructive px-4 text-sm font-bold text-destructive-foreground shadow-sm hover:opacity-90 disabled:opacity-60"
+          >
+            {enviando ? "Anulando…" : "Anular artículo"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <kbd className="rounded border border-border bg-card px-1 font-sans text-[10px] font-semibold text-secondary">
@@ -3243,6 +3414,8 @@ function Detalle({
   hayCambiosPendientes,
   onModificar,
   onEliminar,
+  onAnularLinea,
+  onReactivarLinea,
 }: {
   pedido: PedidoResumen;
   ediciones: Record<number, LineaEdit>;
@@ -3275,6 +3448,8 @@ function Detalle({
   /** Hay filas editadas sin guardar en algún pedido: no se puede eliminar. */
   hayCambiosPendientes: boolean;
   onEliminar: (it: PedidoItem) => void;
+  onAnularLinea: (it: PedidoItem) => void;
+  onReactivarLinea: (it: PedidoItem) => Promise<void>;
   onModificar: (
     m: { tipo: "linea"; item: PedidoItem } | { tipo: "agregar" } | { tipo: "cabecera" }
   ) => void;
@@ -3288,8 +3463,9 @@ function Detalle({
   const [todosBodega, setTodosBodega] = useState("");
   const [todosEntrega, setTodosEntrega] = useState("");
   const hayDatosTodos = Boolean(todosPersona.trim() || todosBodega || todosEntrega);
-  const totalUnid = pedido.items.reduce((a, it) => a + it.cantidad, 0);
-  const recibUnid = pedido.items.reduce((a, it) => {
+  const vigentes = pedido.items.filter((it) => !it.anulado);
+  const totalUnid = vigentes.reduce((a, it) => a + it.cantidad, 0);
+  const recibUnid = vigentes.reduce((a, it) => {
     const ed = ediciones[it.fila];
     const v =
       ed && ed.cantidadRecibida.trim() !== ""
@@ -3302,11 +3478,10 @@ function Detalle({
     estadoDe(pedido)
   );
   const todasSeleccionadas =
-    pedido.items.length > 0 &&
-    pedido.items.every((it) => seleccionFilas.has(it.fila));
+    vigentes.length > 0 && vigentes.every((it) => seleccionFilas.has(it.fila));
 
   const estado = ESTADOS[estadoDe(pedido)];
-  const faltantes = pedido.items.filter((it) => {
+  const faltantes = vigentes.filter((it) => {
     const ed = ediciones[it.fila];
     const rec =
       ed && ed.cantidadRecibida.trim() !== ""
@@ -3416,8 +3591,11 @@ function Detalle({
               {estado.label}
             </span>
             <span className="text-sm text-muted-foreground">
-              {pedido.items.length}{" "}
-              {pedido.items.length === 1 ? "artículo" : "artículos"} · pedido el{" "}
+              {vigentes.length}{" "}
+              {vigentes.length === 1 ? "artículo" : "artículos"}
+              {vigentes.length < pedido.items.length &&
+                ` (+${pedido.items.length - vigentes.length} anulado${pedido.items.length - vigentes.length === 1 ? "" : "s"})`}{" "}
+              · pedido el{" "}
               {formatFecha(pedido.fecha)}
             </span>
           </div>
@@ -3648,10 +3826,10 @@ function Detalle({
         )}
       </div>
 
-      {!bloqueado && pedido.items.length > 1 && (
+      {!bloqueado && vigentes.length > 1 && (
         <div className="flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-border bg-accent/[0.03] px-4 py-2.5">
           <p className="mr-1 w-full text-xs font-bold text-accent sm:w-auto sm:pb-2.5">
-            Aplicar a los {pedido.items.length} artículos
+            Aplicar a los {vigentes.length} artículos
           </p>
           <label className="block w-52">
             <span className={labelClass}>Recepcionado por</span>
@@ -3688,7 +3866,7 @@ function Detalle({
             type="button"
             disabled={!hayDatosTodos}
             onClick={() => {
-              onAplicarATodos(pedido.items, {
+              onAplicarATodos(vigentes, {
                 recepcionadoPor: todosPersona.trim(),
                 fechaRecepcionBodega: todosBodega,
                 fechaEntregaSolicitante: todosEntrega,
@@ -3711,7 +3889,7 @@ function Detalle({
           sinLeer={sinLeer}
           onActividad={onActividad}
         />
-        <ReportarCorreo folio={pedido.pedidoId} items={pedido.items} />
+        <ReportarCorreo folio={pedido.pedidoId} items={vigentes} />
       </div>
 
       <div className="overflow-x-auto">
@@ -3725,7 +3903,7 @@ function Detalle({
                   aria-label="Seleccionar todos los artículos"
                   disabled={bloqueado}
                   checked={todasSeleccionadas}
-                  onChange={() => onAlternarTodasLasFilas(pedido.items)}
+                  onChange={() => onAlternarTodasLasFilas(vigentes)}
                 />
               </th>
               <th scope="col" className="py-2 pr-3 font-semibold">Artículo</th>
@@ -3759,12 +3937,14 @@ function Detalle({
               };
               const seleccionada = seleccionFilas.has(it.fila);
               const hoy = hoyYMD();
-              const lock = bloqueado;
+              const lock = bloqueado || it.anulado;
               return (
                 <tr
                   key={it.fila}
                   className={`border-b border-border/70 align-top last:border-0 max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 ${
-                    seleccionada
+                    it.anulado
+                      ? "bg-muted/60 opacity-60"
+                      : seleccionada
                       ? "bg-accent/10"
                       : sucia
                         ? "bg-accent/5"
@@ -3800,7 +3980,11 @@ function Detalle({
                               : "border-l-transparent"
                     }`}
                   >
-                    <div className="font-medium leading-snug text-card-foreground">
+                    <div
+                      className={`font-medium leading-snug text-card-foreground ${
+                        it.anulado ? "line-through" : ""
+                      }`}
+                    >
                       {it.nombre}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -3808,16 +3992,23 @@ function Detalle({
                       {it.categoria && <span>· {it.categoria}</span>}
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-px text-[11px] font-semibold ${
-                          estadoLinea(it) === "parcial"
-                            ? "bg-warning-surface text-warning ring-1 ring-warning/40"
-                            : `${estadoIt.chip} ${
-                                estadoLinea(it) === "completo" ? "ring-1 ring-success/40" : ""
-                              }`
+                          it.anulado
+                            ? ESTADOS.anulado.chip
+                            : estadoLinea(it) === "parcial"
+                              ? "bg-warning-surface text-warning ring-1 ring-warning/40"
+                              : `${estadoIt.chip} ${
+                                  estadoLinea(it) === "completo" ? "ring-1 ring-success/40" : ""
+                                }`
                         }`}
                       >
-                        {estadoIt.label}
+                        {it.anulado ? ESTADOS.anulado.label : estadoIt.label}
                       </span>
                     </div>
+                    {it.anulado && it.motivoAnulacion && (
+                      <p className="mt-1 max-w-[260px] text-xs font-medium text-destructive max-lg:max-w-none">
+                        Motivo: {it.motivoAnulacion}
+                      </p>
+                    )}
                     {it.comentarioArticulo && (
                       <p className="mt-1 max-w-[260px] text-xs italic max-lg:max-w-none text-muted-foreground">
                         {it.comentarioArticulo}
@@ -3993,7 +4184,53 @@ function Detalle({
                         <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" />
                       </svg>
                     </button>
-                    {pedido.items.length > 1 && (
+                    {it.anulado && !bloqueado && (
+                      <button
+                        type="button"
+                        onClick={() => void onReactivarLinea(it)}
+                        title="Reactivar este artículo"
+                        aria-label={`Reactivar ${it.nombre}`}
+                        className="ml-1 inline-flex h-9 items-center rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-secondary transition-colors hover:bg-muted"
+                      >
+                        Reactivar
+                      </button>
+                    )}
+                    {!it.anulado && vigentes.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => onAnularLinea(it)}
+                        disabled={
+                          lock ||
+                          hayCambiosPendientes ||
+                          (it.cantidadRecibida ?? 0) > 0 ||
+                          Boolean(it.consumoInterno)
+                        }
+                        title={
+                          hayCambiosPendientes
+                            ? "Guarda o descarta los cambios pendientes para poder anular"
+                            : (it.cantidadRecibida ?? 0) > 0 || it.consumoInterno
+                              ? "Ya tiene recepción o consumo registrado: no se puede anular"
+                              : "Anular este artículo (queda registrado con su motivo)"
+                        }
+                        aria-label={`Anular ${it.nombre}`}
+                        className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden
+                        >
+                          <circle cx="12" cy="12" r="9" />
+                          <path d="M5.6 5.6l12.8 12.8" />
+                        </svg>
+                      </button>
+                    )}
+                    {pedido.items.length > 1 && !it.anulado && (
                       <button
                         type="button"
                         onClick={() => onEliminar(it)}
