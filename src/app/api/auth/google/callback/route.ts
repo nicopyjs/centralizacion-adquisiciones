@@ -69,8 +69,21 @@ export async function GET(request: Request) {
       maxAge: GOOGLE_SESSION_SECONDS,
     });
 
-    // Si la cuenta tiene perfil asignado, entra directo sin contraseña.
+    // El perfil sale del correo: es la única forma de entrar a las vistas
+    // restringidas. Sin perfil, Google queda conectado (sirve para enviar
+    // correos desde Enviar Pedido) pero no se abre ninguna sesión.
     const usuario = perfilDeEmail(email);
+    if (!usuario && /^\/(gestion-pedidos|mis-pedidos|kpis)(\/|$)/.test(volver)) {
+      const sinAcceso = terminar("sin-acceso");
+      sinAcceso.cookies.set(GOOGLE_COOKIE, crearTokenSesion(email), {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: GOOGLE_SESSION_SECONDS,
+      });
+      return sinAcceso;
+    }
     if (usuario) {
       res.cookies.set(
         SESSION_COOKIE,

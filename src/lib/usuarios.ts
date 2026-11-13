@@ -1,8 +1,9 @@
 import type { Area, Perfil } from "@/lib/auth";
 
 /**
- * Perfil que recibe cada cuenta @nebchile.cl al entrar con Google, sin pedir
- * contraseña. Las contraseñas de /api/auth/login siguen funcionando.
+ * Perfil que recibe cada cuenta @nebchile.cl al entrar con Google. Es la
+ * única forma de entrar a las vistas restringidas; una cuenta que no está en
+ * esta lista no tiene acceso.
  *
  *  - adquisiciones : gestiona todos los pedidos.
  *  - admin         : Adquisiciones + supervisor de todas las áreas; cambia de

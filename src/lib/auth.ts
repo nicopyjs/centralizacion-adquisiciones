@@ -2,8 +2,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 
 /**
- * Acceso por perfil, con una contraseña fija por perfil. La sesión es una
- * cookie httpOnly firmada con HMAC que lleva el perfil.
+ * Acceso por perfil. El perfil sale del correo @nebchile.cl con que se inicia
+ * sesión en Google (ver `src/lib/usuarios.ts`); no hay contraseñas. La sesión
+ * es una cookie httpOnly firmada con HMAC que lleva el perfil.
  *
  * Perfiles:
  *  - adquisiciones : gestiona los pedidos (Gestión de Pedidos, con edición)
@@ -14,13 +15,9 @@ import { cookies } from "next/headers";
  * Servicio Técnico, Instalaciones, Transición y Postventa) y solo ven los
  * pedidos de esa área; el filtro se aplica en el servidor.
  *
- * Variables de entorno (opcionales):
- *  - GESTION_PASSWORD        : contraseña de Adquisiciones (por defecto "adq2026")
- *  - SUPERVISOR_PASSWORD     : contraseña de Supervisor (por defecto "sup2026")
- *  - MAESTRO_PASSWORD        : contraseña de Maestro (por defecto "mae2026")
- *  - GESTION_SESSION_SECRET  : secreto para firmar la cookie (por defecto se
- *                              deriva de la contraseña de Adquisiciones; al
- *                              cambiarla, las sesiones abiertas dejan de valer)
+ * Variable de entorno:
+ *  - GESTION_SESSION_SECRET  : secreto para firmar la cookie. Al cambiarlo, las
+ *                              sesiones abiertas dejan de valer.
  */
 
 export type Perfil = "adquisiciones" | "supervisor" | "maestro";
@@ -73,22 +70,10 @@ export function esPerfil(v: unknown): v is Perfil {
   return PERFILES.some((p) => p.id === v);
 }
 
-function passwordDe(perfil: Perfil): string {
-  switch (perfil) {
-    case "adquisiciones":
-      return process.env.GESTION_PASSWORD || "adq2026";
-    case "supervisor":
-      return process.env.SUPERVISOR_PASSWORD || "sup2026";
-    case "maestro":
-      return process.env.MAESTRO_PASSWORD || "mae2026";
-  }
-}
-
 function secret(): string {
-  return (
-    process.env.GESTION_SESSION_SECRET ||
-    `gestion:${process.env.GESTION_PASSWORD || "adq2026"}`
-  );
+  // Mismo valor por defecto que antes (así no se cierran las sesiones abiertas);
+  // en producción conviene definir GESTION_SESSION_SECRET.
+  return process.env.GESTION_SESSION_SECRET || "gestion:adq2026";
 }
 
 function firmar(payload: string): string {
@@ -99,10 +84,6 @@ function iguales(a: string, b: string): boolean {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
   return ba.length === bb.length && timingSafeEqual(ba, bb);
-}
-
-export function passwordCorrecta(perfil: Perfil, intento: unknown): boolean {
-  return typeof intento === "string" && iguales(intento, passwordDe(perfil));
 }
 
 /** Token con vencimiento: `<perfil>.<área o "-">.<expira en ms>.<firma>`. */
