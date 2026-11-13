@@ -224,6 +224,12 @@ export type ParteEntradaCostoDirectoInput = {
   providerId?: string;
   /** N° de OC de referencia (opcional): solo trazabilidad, NO la marca como recepcionada. */
   ocNumero?: number;
+  /**
+   * N° de la factura electrónica de compra (opcional). Si viene, es el
+   * documento de referencia del parte (como al recepcionar en el ERP) y
+   * reemplaza a la OC en esa referencia: el documento admite una sola.
+   */
+  facturaNumero?: number;
   lineas: { articleId: string; cantidad: number; costoUnitario: number; comentario?: string }[];
 };
 
@@ -258,6 +264,10 @@ export type ParteEntradaCostoDirectoInput = {
  * por esta vía (`Inventory/Insert`), que NO actualiza el `receivedQuantity`
  * de la OC en Defontana (la OC seguirá viéndose pendiente ahí).
  *
+ * `facturaNumero` se manda como referencia con tipo `FCA` (verificado en
+ * `replapi` el 2026-11-13: Defontana lo guarda en `referenceDocumentType`/
+ * `referenceDocumentFolio`; con `Cpra_FCA` responde error).
+ *
  * `clasificador1`/`clasificador2` se mandan en `analysis` como `clasifier1`/
  * `clasifier2` (verificado en `replapi` el 2026-11-11, folio PE_CD-99:
  * Defontana los guarda tal cual a nivel cabecera y línea) — son los mismos
@@ -288,9 +298,11 @@ export async function crearParteEntradaCostoDirecto(
       date: input.fecha,
       externalDocumentID: input.externalId,
       ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.ocNumero
-        ? { referenceDocumentFolio: input.ocNumero, referenceDocumentType: "OC_ABA" }
-        : {}),
+      ...(input.facturaNumero
+        ? { referenceDocumentFolio: input.facturaNumero, referenceDocumentType: "FCA" }
+        : input.ocNumero
+          ? { referenceDocumentFolio: input.ocNumero, referenceDocumentType: "OC_ABA" }
+          : {}),
       analysis,
       details: input.lineas.map((l) => ({
         articleId: l.articleId,
