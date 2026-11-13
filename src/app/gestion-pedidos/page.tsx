@@ -27,7 +27,7 @@ export default async function GestionPedidosPage({
   if (!perfil) {
     return (
       <div className="py-8">
-        <LoginGestion areaInicial="adquisiciones" />
+        <LoginGestion />
       </div>
     );
   }

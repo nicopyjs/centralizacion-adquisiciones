@@ -20,7 +20,7 @@ export default async function MisPedidosPage() {
   if (!sesion) {
     return (
       <div className="py-8">
-        <LoginGestion areaInicial="refacciones" />
+        <LoginGestion />
       </div>
     );
   }
