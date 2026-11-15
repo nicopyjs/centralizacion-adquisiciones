@@ -246,6 +246,7 @@ function ConfirmarEnvioDialog({
   resumen,
   enviando,
   porApi,
+  maestro,
   onCancelar,
   onConfirmar,
 }: {
@@ -253,12 +254,16 @@ function ConfirmarEnvioDialog({
   enviando: boolean;
   /** true si el correo sale solo por la Gmail API (cuenta Google conectada). */
   porApi: boolean;
+  /** true si no hay cuenta @nebchile.cl: el pedido espera la aprobación de un supervisor. */
+  maestro: boolean;
   onCancelar: () => void;
   onConfirmar: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const volverRef = useRef<HTMLButtonElement>(null);
-  const [vista, setVista] = useState<"correo" | "resumen">("correo");
+  const [vista, setVista] = useState<"correo" | "resumen">(
+    maestro ? "resumen" : "correo"
+  );
   const propsRef = useRef({ enviando, onCancelar });
   useEffect(() => {
     propsRef.current = { enviando, onCancelar };
@@ -342,7 +347,9 @@ function ConfirmarEnvioDialog({
               id="confirmar-desc"
               className="mt-1 text-sm text-muted-foreground"
             >
-              {porApi
+              {maestro
+                ? "Al confirmar, el pedido queda pendiente de aprobación: un supervisor de tu área lo revisa y recién ahí pasa a Adquisiciones. No podrás editarlo."
+                : porApi
                 ? "Al confirmar se registra en la planilla y el correo se envía de inmediato a Adquisiciones desde tu cuenta. No podrás editarlo ni agregar archivos después."
                 : "Al confirmar se registra en la planilla y se abre el correo listo para enviar. No podrás editarlo: tendrás que enviarlo sí o sí."}
             </p>
@@ -365,7 +372,9 @@ function ConfirmarEnvioDialog({
                 ["correo", "Correo a enviar"],
                 ["resumen", "Resumen"],
               ] as const
-            ).map(([id, label]) => (
+            )
+              .filter(([id]) => !maestro || id === "resumen")
+              .map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -690,6 +699,10 @@ export default function EnviarPedidoForm({
   const [confirmando, setConfirmando] = useState(false);
   // Cuenta Google conectada (envío por la Gmail API). null = no conectada.
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
+  // Sin cuenta @nebchile.cl (los maestros): el pedido queda pendiente de que
+  // un supervisor lo apruebe y no se manda correo. Solo se sabe cuando /me respondió.
+  const [sesionCargada, setSesionCargada] = useState(false);
+  const modoMaestro = sesionCargada && !googleEmail;
   const [avisoGoogle, setAvisoGoogle] = useState<string | null>(null);
   // Archivos para adjuntar al correo (solo con la cuenta Google conectada).
   const [adjuntos, setAdjuntos] = useState<File[]>([]);
@@ -711,7 +724,10 @@ export default function EnviarPedidoForm({
       .then((d) => {
         if (!cancelado) setGoogleEmail(d?.googleEmail ?? null);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelado) setSesionCargada(true);
+      });
     // Regreso del login de Google: ?google=ok | ?google=error&motivo=...
     const q = new URLSearchParams(window.location.search);
     const g = q.get("google");
@@ -1326,8 +1342,9 @@ export default function EnviarPedidoForm({
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
     // bloquea la apertura automática) y abre el correo.
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    // Si no salió por la API, se abre Gmail como siempre.
-    if (!enviadoPorApi) abrirGmail(correoFinal);
+    // Si no salió por la API, se abre Gmail como siempre (los maestros no
+    // mandan correo: su pedido espera la aprobación del supervisor).
+    if (!enviadoPorApi && !modoMaestro) abrirGmail(correoFinal);
   }
 
   const hayAlgoQueGuardar =
@@ -1599,6 +1616,17 @@ export default function EnviarPedidoForm({
             </ul>
           </section>
         )}
+        {modoMaestro ? (
+          <div
+            role="note"
+            className="rounded-xl border border-accent/30 bg-accent/10 p-3 text-sm text-card-foreground/90 sm:px-4"
+          >
+            <strong className="text-primary">Tu pedido necesita aprobación.</strong>{" "}
+            Al enviarlo le llega a los supervisores de tu área; cuando uno lo
+            apruebe pasa a Adquisiciones. Anota el folio que te aparece al
+            terminar.
+          </div>
+        ) : (
         <div
           role="status"
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3 text-sm shadow-sm sm:px-4"
@@ -1644,6 +1672,7 @@ export default function EnviarPedidoForm({
             </a>
           )}
         </div>
+        )}
         {googleEmail && !registro && (
           <div
             role="note"
@@ -1699,12 +1728,18 @@ export default function EnviarPedidoForm({
                   }`}
                 >
                   {registro.ok
-                    ? `Pedido registrado · folio ${registro.folio}`
+                    ? modoMaestro
+                      ? `Pedido enviado · folio ${registro.folio}`
+                      : `Pedido registrado · folio ${registro.folio}`
                     : "No se pudo registrar el pedido en la planilla"}
                 </p>
                 <p className="mt-0.5 text-sm text-card-foreground/80">
                   {!registro.ok
-                    ? `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`
+                    ? modoMaestro
+                      ? registro.error
+                      : `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`
+                    : modoMaestro
+                      ? "Quedó pendiente de aprobación: un supervisor de tu área debe aprobarlo y recién ahí pasa a Adquisiciones. Si es urgente, avísale."
                     : correoEnviado?.ok
                       ? `Correo enviado a Adquisiciones desde ${correoEnviado.desde}.`
                       : correoEnviado
@@ -1712,7 +1747,7 @@ export default function EnviarPedidoForm({
                         : "Si Gmail no se abrió solo, toca «Abrir Gmail». Revisa el correo y presiona Enviar."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {!correoEnviado?.ok && (
+                  {!correoEnviado?.ok && !modoMaestro && (
                     <button
                       type="button"
                       onClick={() =>
@@ -2011,6 +2046,11 @@ export default function EnviarPedidoForm({
                   </p>
                 )}
               </>
+            ) : modoMaestro ? (
+              <p className="text-xs text-muted-foreground">
+                Los pedidos de maestros no llevan archivos adjuntos: si
+                necesitas mandar uno, pásaselo a tu supervisor.
+              </p>
             ) : (
               <p className="text-xs text-muted-foreground">
                 Conecta tu cuenta de Google (arriba) para adjuntar archivos al
@@ -2343,9 +2383,11 @@ export default function EnviarPedidoForm({
             <IconMail />
             {registrando
               ? "Registrando…"
-              : googleEmail
-                ? "Revisar y enviar pedido"
-                : "Revisar y enviar por Gmail"}
+              : modoMaestro
+                ? "Enviar pedido para aprobación"
+                : googleEmail
+                  ? "Revisar y enviar pedido"
+                  : "Revisar y enviar por Gmail"}
           </button>
 
           <button
@@ -2368,13 +2410,16 @@ export default function EnviarPedidoForm({
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
             <span className="font-bold text-warning">Importante:</span> al
             confirmar no podrás editar el pedido
-            {googleEmail
-              ? ` y el correo se enviará de inmediato desde ${googleEmail}.`
-              : " y tendrás que enviar el correo sí o sí."}
+            {modoMaestro
+              ? " y quedará pendiente de aprobación de tu supervisor."
+              : googleEmail
+                ? ` y el correo se enviará de inmediato desde ${googleEmail}.`
+                : " y tendrás que enviar el correo sí o sí."}
           </p>
         </section>
 
         <section
+          hidden={modoMaestro}
           id="vista-previa"
           className="scroll-mt-24 rounded-xl border border-border bg-card p-4 shadow-sm"
         >
@@ -2419,9 +2464,11 @@ export default function EnviarPedidoForm({
           <IconMail />
           {registrando
               ? "Registrando…"
-              : googleEmail
-                ? "Revisar y enviar pedido"
-                : "Revisar y enviar por Gmail"}
+              : modoMaestro
+                ? "Enviar pedido para aprobación"
+                : googleEmail
+                  ? "Revisar y enviar pedido"
+                  : "Revisar y enviar por Gmail"}
         </button>
         <div className="mt-1 flex items-center justify-center gap-4 text-xs font-semibold">
           <button
@@ -2432,9 +2479,11 @@ export default function EnviarPedidoForm({
           >
             {borradorId ? "Actualizar borrador" : "Guardar borrador"}
           </button>
-          <a href="#vista-previa" className="text-accent hover:underline">
-            Ver vista previa del correo
-          </a>
+          {!modoMaestro && (
+            <a href="#vista-previa" className="text-accent hover:underline">
+              Ver vista previa del correo
+            </a>
+          )}
         </div>
         {avisoBorrador && (
           <p role="status" className="mt-1 text-center text-xs text-muted-foreground">
@@ -2448,6 +2497,7 @@ export default function EnviarPedidoForm({
           resumen={resumenEnvio}
           enviando={registrando}
           porApi={googleEmail !== null}
+          maestro={modoMaestro}
           onCancelar={() => setConfirmando(false)}
           onConfirmar={registrarYAbrir}
         />

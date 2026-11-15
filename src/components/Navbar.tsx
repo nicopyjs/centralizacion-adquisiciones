@@ -18,6 +18,8 @@ export default function Navbar() {
   // Cada perfil ve solo su sección; sin sesión aparecen ambas.
   const [perfil, setPerfil] = useState<string | null>(null);
   const [admin, setAdmin] = useState(false);
+  // Pedidos de maestros esperando la aprobación de este supervisor.
+  const [porAprobar, setPorAprobar] = useState(0);
   useEffect(() => {
     let cancelado = false;
     fetch("/api/auth/me", { cache: "no-store" })
@@ -26,6 +28,16 @@ export default function Navbar() {
         if (cancelado) return;
         setPerfil(d?.perfil ?? null);
         setAdmin(Boolean(d?.admin));
+        if (d?.perfil && d.perfil !== "adquisiciones") {
+          fetch("/api/pedidos/aprobacion?contar=1", { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((c) => {
+              if (!cancelado) setPorAprobar(c?.pendientes ?? 0);
+            })
+            .catch(() => {});
+        } else {
+          setPorAprobar(0);
+        }
       })
       .catch(() => {});
     return () => {
@@ -92,6 +104,14 @@ export default function Navbar() {
                 }`}
               >
                 {tab.label}
+                {tab.href === TAB_MIS_PEDIDOS.href && porAprobar > 0 && (
+                  <span
+                    className="ml-1.5 rounded-full bg-warning px-1.5 py-0.5 text-[11px] font-bold text-accent-foreground"
+                    title="Pedidos por aprobar"
+                  >
+                    {porAprobar}
+                  </span>
+                )}
               </Link>
             );
           })}

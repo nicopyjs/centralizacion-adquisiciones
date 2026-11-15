@@ -5,12 +5,21 @@ import { GOOGLE_COOKIE, emailDeToken } from "@/lib/google-cookie";
 /**
  * Toda la app exige haber iniciado sesión con Google con una cuenta
  * @nebchile.cl. Sin sesión: las páginas redirigen a /acceso y la API responde
- * 401. Solo quedan públicas la pantalla de acceso y el flujo de login.
+ * 401. Quedan públicos la pantalla de acceso, el flujo de login y el formulario
+ * de pedido de los maestros (con lo mínimo que necesita: catálogo, centros,
+ * nómina y el POST del pedido).
  * (Los perfiles de Gestión de Pedidos / Pedidos del Área / KPIs siguen
  * validándose en cada página y ruta, encima de esto.)
  */
 
 const PUBLICAS = [
+  // Los maestros (sin cuenta @nebchile.cl) arman pedidos aquí; sus pedidos
+  // quedan pendientes hasta que un supervisor los apruebe.
+  "/enviar-pedido",
+  "/api/articulos",
+  "/api/centros",
+  "/api/solicitantes",
+  "/api/auth/me",
   "/acceso",
   "/api/auth/google/login",
   "/api/auth/google/callback",
@@ -20,6 +29,10 @@ const PUBLICAS = [
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   if (PUBLICAS.some((p) => pathname === p)) return NextResponse.next();
+  // Registrar un pedido es público; leer/modificar pedidos exige sesión.
+  if (request.method === "POST" && pathname === "/api/pedidos") {
+    return NextResponse.next();
+  }
 
   if (emailDeToken(request.cookies.get(GOOGLE_COOKIE)?.value)) {
     return NextResponse.next();
