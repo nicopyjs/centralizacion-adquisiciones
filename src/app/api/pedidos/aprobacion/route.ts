@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   RECHAZADO,
+  avisarAprobacion,
+  type LineaAprobada,
   estadoAprobacion,
   norm,
   type EstadoAprobacion,
@@ -173,6 +175,8 @@ export async function POST(request: Request) {
 
     const data: { range: string; values: (string | number)[][] }[] = [];
     const cambios: string[] = [];
+    // Artículos que quedan aprobados (con las cantidades ya ajustadas).
+    const lineasFinales: LineaAprobada[] = [];
 
     if (accion === "aprobar") {
       const ediciones = new Map<number, { cantidad: number; quitar: boolean }>();
@@ -203,6 +207,15 @@ export async function POST(request: Request) {
           cambios.push(`${nombre}: ${Number(x.r[14]) || 0} → ${e.cantidad}`);
         }
       }
+      for (const x of quedan) {
+        const e = ediciones.get(x.fila);
+        lineasFinales.push({
+          nombre: str(x.r[12]),
+          cantidad: e && !e.quitar ? e.cantidad : Number(x.r[14]) || 0,
+          unidad: str(x.r[13]),
+          comentario: str(x.r[22]),
+        });
+      }
     }
 
     for (const x of lineasPedido) {
@@ -231,7 +244,33 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ ok: true, estado: accion === "aprobar" ? "aprobado" : "rechazado" });
+    // Aviso a Adquisiciones (con el área en copia): ya no hay otro correo del pedido.
+    let correoEnviado = false;
+    if (accion === "aprobar") {
+      const cab = lineasPedido[0].r;
+      correoEnviado = await avisarAprobacion({
+        pedidoId,
+        area,
+        centro: str(cab[4]),
+        solicitante: str(cab[2]),
+        aprobador: perm.email,
+        clasificador1: str(cab[7]),
+        clasificador2: str(cab[8]),
+        despacho: str(cab[9]),
+        fechaEntrega: str(cab[6]),
+        comentario: str(cab[15]),
+        urgente: ["si", "sí", "s", "1", "true", "urgente"].includes(str(cab[19]).toLowerCase()),
+        lineas: lineasFinales,
+        cambios,
+        origen: new URL(request.url).origin,
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      estado: accion === "aprobar" ? "aprobado" : "rechazado",
+      correoEnviado,
+    });
   } catch (err) {
     return error(err instanceof Error ? err.message : "Error desconocido", 500);
   }
