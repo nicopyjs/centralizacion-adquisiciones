@@ -261,7 +261,9 @@ function ConfirmarEnvioDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const volverRef = useRef<HTMLButtonElement>(null);
-  const [vista, setVista] = useState<"correo" | "resumen">("correo");
+  const [vista, setVista] = useState<"correo" | "resumen">(
+    maestro ? "resumen" : "correo"
+  );
   const propsRef = useRef({ enviando, onCancelar });
   useEffect(() => {
     propsRef.current = { enviando, onCancelar };
@@ -346,7 +348,7 @@ function ConfirmarEnvioDialog({
               className="mt-1 text-sm text-muted-foreground"
             >
               {maestro
-                ? "Al confirmar, el pedido queda pendiente de aprobación y se abre Gmail con el aviso para los supervisores de tu área: tienes que enviarlo tú. No podrás editarlo."
+                ? "Al confirmar, el pedido queda pendiente de aprobación: un supervisor de tu área lo revisa y recién ahí pasa a Adquisiciones. No podrás editarlo."
                 : porApi
                 ? "Al confirmar se registra en la planilla y el correo se envía de inmediato a Adquisiciones desde tu cuenta. No podrás editarlo ni agregar archivos después."
                 : "Al confirmar se registra en la planilla y se abre el correo listo para enviar. No podrás editarlo: tendrás que enviarlo sí o sí."}
@@ -370,7 +372,9 @@ function ConfirmarEnvioDialog({
                 ["correo", "Correo a enviar"],
                 ["resumen", "Resumen"],
               ] as const
-            ).map(([id, label]) => (
+            )
+              .filter(([id]) => !maestro || id === "resumen")
+              .map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -1105,9 +1109,7 @@ export default function EnviarPedidoForm({
   ];
 
   const asuntoTexto = asuntoExtra.replace(/\s+/g, " ").trim();
-  // Los maestros avisan a los supervisores de su área, no a Adquisiciones.
-  const destinoAsunto = modoMaestro ? "Pedido por aprobar" : "Adquisiciones";
-  const asunto = `NEB Chile // ${destinoAsunto} // ${centroDesc}${
+  const asunto = `NEB Chile // Adquisiciones // ${centroDesc}${
     asuntoTexto ? ` // ${asuntoTexto}` : ""
   }`;
 
@@ -1133,9 +1135,7 @@ export default function EnviarPedidoForm({
       saludo,
       ...(comentario.trim() ? ["", comentario.trim()] : []),
       "",
-      modoMaestro
-        ? "Junto con saludar, solicito la aprobación del siguiente pedido:"
-        : "Junto con saludar, solicito gestión del siguiente pedido:",
+      "Junto con saludar, solicito gestión del siguiente pedido:",
       ...(urgente ? ["", "*** PEDIDO URGENTE ***"] : []),
       "",
       `Área: ${areaActual.label}`.trimEnd(),
@@ -1149,12 +1149,6 @@ export default function EnviarPedidoForm({
       elementos,
     ];
 
-    if (modoMaestro) {
-      partes.push(
-        "",
-        `Cuando lo apruebes pasa a Adquisiciones. Apruébalo o recházalo en: ${window.location.origin}/mis-pedidos`
-      );
-    }
     partes.push("", "Saludos,", solicitante.trim() || "Nombre");
 
     return partes.join("\n");
@@ -1169,32 +1163,27 @@ export default function EnviarPedidoForm({
     urgente,
     lineasCompletas,
     solicitante,
-    modoMaestro,
   ]);
 
-  // Directo a Adquisiciones con el área en copia. Los maestros escriben al
-  // grupo del área (sus supervisores), desde su propio correo.
-  const para = modoMaestro ? areaDestino : DESTINATARIO_PRINCIPAL;
-  const cc = modoMaestro ? "" : areaDestino;
+  // Directo a Adquisiciones; el área va en copia.
+  const para = DESTINATARIO_PRINCIPAL;
+  const cc = areaDestino;
 
   // /a/nebchile.cl/ fuerza la cuenta Workspace de NEB aunque el navegador
   // tenga una cuenta personal como principal (/u/0/).
   function construirCorreo(folio?: string): CorreoGmail {
     // El folio distingue en la bandeja pedidos con asuntos idénticos.
     const asuntoFinal = folio
-      ? asunto.replace(`${destinoAsunto} //`, `${destinoAsunto} // Pedido ${folio} //`)
+      ? asunto.replace("Adquisiciones //", `Adquisiciones // Pedido ${folio} //`)
       : asunto;
     const cuerpoFinal = folio
       ? cuerpoCorreo.replace(
-          "del siguiente pedido:",
-          `del siguiente pedido (folio ${folio}):`
+          "solicito gestión del siguiente pedido:",
+          `solicito gestión del siguiente pedido (folio ${folio}):`
         )
       : cuerpoCorreo;
-    // Los maestros usan su propio Gmail: no se fuerza la cuenta de NEB.
     const url =
-      (modoMaestro
-        ? "https://mail.google.com/mail/?view=cm&fs=1"
-        : "https://mail.google.com/a/nebchile.cl/mail/?view=cm&fs=1") +
+      "https://mail.google.com/a/nebchile.cl/mail/?view=cm&fs=1" +
       `&to=${encodeURIComponent(para)}` +
       `&cc=${encodeURIComponent(cc)}` +
       `&su=${encodeURIComponent(asuntoFinal)}` +
@@ -1353,9 +1342,9 @@ export default function EnviarPedidoForm({
     // Deja visible el aviso de resultado (con «Abrir Gmail» por si el sistema
     // bloquea la apertura automática) y abre el correo.
     bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    // Si no salió por la API (los maestros nunca la usan), se abre Gmail con
-    // su propia cuenta para que envíen el aviso.
-    if (!enviadoPorApi) abrirGmail(correoFinal);
+    // Si no salió por la API, se abre Gmail como siempre (los maestros no
+    // mandan correo: su pedido espera la aprobación del supervisor).
+    if (!enviadoPorApi && !modoMaestro) abrirGmail(correoFinal);
   }
 
   const hayAlgoQueGuardar =
@@ -1633,9 +1622,9 @@ export default function EnviarPedidoForm({
             className="rounded-xl border border-accent/30 bg-accent/10 p-3 text-sm text-card-foreground/90 sm:px-4"
           >
             <strong className="text-primary">Tu pedido necesita aprobación.</strong>{" "}
-            Al confirmar se abre Gmail con un correo para los supervisores de tu
-            área, desde tu propia cuenta: <strong>tienes que presionar Enviar</strong>.
-            Cuando uno lo apruebe pasa a Adquisiciones.
+            Al enviarlo le llega a los supervisores de tu área; cuando uno lo
+            apruebe pasa a Adquisiciones. Anota el folio que te aparece al
+            terminar.
           </div>
         ) : (
         <div
@@ -1746,9 +1735,11 @@ export default function EnviarPedidoForm({
                 </p>
                 <p className="mt-0.5 text-sm text-card-foreground/80">
                   {!registro.ok
-                    ? `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`
+                    ? modoMaestro
+                      ? registro.error
+                      : `${registro.error} El correo se abrió igual; si no lo ves, toca «Abrir Gmail».`
                     : modoMaestro
-                      ? "Quedó pendiente de aprobación. Se abrió Gmail con el aviso para los supervisores de tu área: presiona Enviar (si no se abrió, toca «Abrir Gmail»). Recién cuando uno lo apruebe pasa a Adquisiciones."
+                      ? "Quedó pendiente de aprobación: un supervisor de tu área debe aprobarlo y recién ahí pasa a Adquisiciones. Si es urgente, avísale."
                     : correoEnviado?.ok
                       ? `Correo enviado a Adquisiciones desde ${correoEnviado.desde}.`
                       : correoEnviado
@@ -1756,7 +1747,7 @@ export default function EnviarPedidoForm({
                         : "Si Gmail no se abrió solo, toca «Abrir Gmail». Revisa el correo y presiona Enviar."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {!correoEnviado?.ok && (
+                  {!correoEnviado?.ok && !modoMaestro && (
                     <button
                       type="button"
                       onClick={() =>
@@ -2057,8 +2048,8 @@ export default function EnviarPedidoForm({
               </>
             ) : modoMaestro ? (
               <p className="text-xs text-muted-foreground">
-                Si necesitas adjuntar archivos, agrégalos en el correo de Gmail
-                que se abre al confirmar el pedido.
+                Los pedidos de maestros no llevan archivos adjuntos: si
+                necesitas mandar uno, pásaselo a tu supervisor.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -2420,7 +2411,7 @@ export default function EnviarPedidoForm({
             <span className="font-bold text-warning">Importante:</span> al
             confirmar no podrás editar el pedido
             {modoMaestro
-              ? " y tendrás que enviar el aviso a tus supervisores desde tu Gmail."
+              ? " y quedará pendiente de aprobación de tu supervisor."
               : googleEmail
                 ? ` y el correo se enviará de inmediato desde ${googleEmail}.`
                 : " y tendrás que enviar el correo sí o sí."}
@@ -2428,6 +2419,7 @@ export default function EnviarPedidoForm({
         </section>
 
         <section
+          hidden={modoMaestro}
           id="vista-previa"
           className="scroll-mt-24 rounded-xl border border-border bg-card p-4 shadow-sm"
         >
@@ -2487,9 +2479,11 @@ export default function EnviarPedidoForm({
           >
             {borradorId ? "Actualizar borrador" : "Guardar borrador"}
           </button>
-          <a href="#vista-previa" className="text-accent hover:underline">
-            Ver vista previa del correo
-          </a>
+          {!modoMaestro && (
+            <a href="#vista-previa" className="text-accent hover:underline">
+              Ver vista previa del correo
+            </a>
+          )}
         </div>
         {avisoBorrador && (
           <p role="status" className="mt-1 text-center text-xs text-muted-foreground">

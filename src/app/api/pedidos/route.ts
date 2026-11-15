@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   PENDIENTE_APROBACION,
+  avisarSupervisores,
   estadoAprobacion,
   norm,
 } from "@/lib/aprobacion";
@@ -302,6 +303,18 @@ export async function POST(request: Request) {
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
+
+    if (pendiente) {
+      await avisarSupervisores({
+        pedidoId,
+        area,
+        solicitante,
+        centro: centroDescripcion,
+        lineas: rows.length,
+        urgente: esUrgente,
+        origen: new URL(request.url).origin,
+      });
+    }
 
     return NextResponse.json({ ok: true, pedidoId, lineas: rows.length, pendiente });
   } catch (err) {
