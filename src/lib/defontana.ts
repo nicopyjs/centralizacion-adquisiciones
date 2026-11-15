@@ -208,6 +208,16 @@ export async function crearConsumoInterno(
   return { folio: r.number, tipo: r.documentType ?? "CI" };
 }
 
+/**
+ * Los clasificadores del pedido se guardan como "05 INT - Instalaciones";
+ * Defontana guarda solo el código ("05"). Mandar el texto completo hace fallar
+ * el guardado del encabezado ("An error occurred while saving the entity
+ * changes"): reproducido en `replapi` el 2026-11-13 con el pedido INT-34.
+ */
+export function codigoClasificador(valor: string | undefined): string {
+  return (valor ?? "").trim().split(/\s+/)[0] ?? "";
+}
+
 export type ParteEntradaCostoDirectoInput = {
   /** ID externo para ubicar el documento (folio del pedido + sufijo). */
   externalId: string;
@@ -277,10 +287,12 @@ export type ParteEntradaCostoDirectoInput = {
 export async function crearParteEntradaCostoDirecto(
   input: ParteEntradaCostoDirectoInput
 ): Promise<{ folio: number; tipo: string }> {
+  const c1 = codigoClasificador(input.clasificador1);
+  const c2 = codigoClasificador(input.clasificador2);
   const analysis = {
     businessCenter: input.centroNegocio,
-    ...(input.clasificador1 ? { clasifier1: input.clasificador1 } : {}),
-    ...(input.clasificador2 ? { clasifier2: input.clasificador2 } : {}),
+    ...(c1 ? { clasifier1: c1 } : {}),
+    ...(c2 ? { clasifier2: c2 } : {}),
   };
   const r = await llamar<{
     number?: number;
@@ -315,7 +327,8 @@ export async function crearParteEntradaCostoDirecto(
   });
   if (!r.success || !r.number) {
     throw new Error(
-      r.exceptionMessage || r.message || "Defontana rechazó el parte de entrada."
+      `${r.exceptionMessage || r.message || "Defontana rechazó el parte de entrada."} ` +
+        `(centro ${input.centroNegocio}, clasificadores ${c1 || "-"}/${c2 || "-"}, bodega ${input.bodega})`
     );
   }
   return { folio: r.number, tipo: r.documentType ?? "PE_CD" };
