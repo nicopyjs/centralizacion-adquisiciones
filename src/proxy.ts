@@ -6,16 +6,16 @@ import { GOOGLE_COOKIE, emailDeToken } from "@/lib/google-cookie";
  * Toda la app exige haber iniciado sesión con Google con una cuenta
  * @nebchile.cl. Sin sesión: las páginas redirigen a /acceso y la API responde
  * 401. Quedan públicos la pantalla de acceso, el flujo de login y el formulario
- * de pedido de los maestros (con lo mínimo que necesita: catálogo, centros,
+ * de Materiales Menores para los maestros (con lo mínimo que necesita: catálogo, centros,
  * nómina y el POST del pedido).
  * (Los perfiles de Gestión de Pedidos / Pedidos del Área / KPIs siguen
  * validándose en cada página y ruta, encima de esto.)
  */
 
 const PUBLICAS = [
-  // Los maestros (sin cuenta @nebchile.cl) arman pedidos aquí; sus pedidos
-  // quedan pendientes hasta que un supervisor los apruebe.
-  "/enviar-pedido",
+  // Los maestros (sin cuenta @nebchile.cl) arman pedidos en Materiales Menores;
+  // sus pedidos quedan pendientes hasta que un supervisor los apruebe.
+  "/materiales-menores",
   "/api/articulos",
   "/api/centros",
   "/api/solicitantes",

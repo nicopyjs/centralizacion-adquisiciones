@@ -18,6 +18,8 @@ export default function Navbar() {
   // Cada perfil ve solo su sección; sin sesión aparecen ambas.
   const [perfil, setPerfil] = useState<string | null>(null);
   const [admin, setAdmin] = useState(false);
+  // Sin cuenta @nebchile.cl (maestros): solo ven Materiales Menores.
+  const [anonimo, setAnonimo] = useState(false);
   // Pedidos de maestros esperando la aprobación de este supervisor.
   const [porAprobar, setPorAprobar] = useState(0);
   useEffect(() => {
@@ -28,6 +30,7 @@ export default function Navbar() {
         if (cancelado) return;
         setPerfil(d?.perfil ?? null);
         setAdmin(Boolean(d?.admin));
+        setAnonimo(Boolean(d) && !d.googleEmail);
         if (d?.perfil && d.perfil !== "adquisiciones") {
           fetch("/api/pedidos/aprobacion?contar=1", { cache: "no-store" })
             .then((r) => (r.ok ? r.json() : null))
@@ -44,20 +47,23 @@ export default function Navbar() {
       cancelado = true;
     };
   }, [pathname]);
-  const TABS = [
-    ...TABS_BASE,
-    ...(perfil === null
-      ? [TAB_GESTION, TAB_MIS_PEDIDOS]
-      : admin
-        ? [TAB_GESTION, TAB_KPIS, TAB_MIS_PEDIDOS]
-        : perfil === "adquisiciones"
-          ? [TAB_GESTION, TAB_KPIS]
-        : [TAB_MIS_PEDIDOS]),
-  ];
+  const TABS = anonimo
+    ? [TABS_BASE[1]]
+    : [
+        ...TABS_BASE,
+        ...(perfil === null
+          ? [TAB_GESTION, TAB_MIS_PEDIDOS]
+          : admin
+            ? [TAB_GESTION, TAB_KPIS, TAB_MIS_PEDIDOS]
+            : perfil === "adquisiciones"
+              ? [TAB_GESTION, TAB_KPIS]
+              : [TAB_MIS_PEDIDOS]),
+      ];
   // Gestión de Pedidos usa todo el ancho; el navbar acompaña ese mismo ancho.
-  const ancho = pathname.startsWith("/gestion-pedidos") || pathname.startsWith("/kpis")
-    ? "max-w-[1800px]"
-    : "max-w-[1440px]";
+  const ancho =
+    pathname.startsWith("/gestion-pedidos") || pathname.startsWith("/kpis")
+      ? "max-w-[1800px]"
+      : "max-w-[1440px]";
 
   return (
     <header className="sticky top-0 z-40 border-b border-border border-t-[3px] border-t-brand bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
@@ -76,46 +82,43 @@ export default function Navbar() {
             priority
             className="h-8 w-auto"
           />
-          <span
-            aria-hidden
-            className="hidden h-6 w-px bg-border sm:block"
-          />
+          <span aria-hidden className="hidden h-6 w-px bg-border sm:block" />
           <span className="hidden sm:inline">Centralización Adquisiciones</span>
           <span className="sr-only sm:hidden">Adquisiciones</span>
         </Link>
 
         {!pathname.startsWith("/acceso") && (
-        <nav
-          className="-mx-4 flex w-[calc(100%+2rem)] items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-t border-border px-2 sm:mx-0 sm:w-auto sm:border-t-0 sm:px-0 sm:gap-1"
-          aria-label="Secciones"
-        >
-          {TABS.map((tab) => {
-            const active =
-              pathname === tab.href || pathname.startsWith(tab.href + "/");
-            return (
-              <Link
-                key={tab.href}
-                href={tab.href}
-                aria-current={active ? "page" : undefined}
-                className={`-mb-px whitespace-nowrap border-b-[3px] px-3 py-3 text-[13px] sm:py-4 font-semibold transition-colors sm:px-3 sm:text-sm ${
-                  active
-                    ? "border-brand text-primary"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-primary"
-                }`}
-              >
-                {tab.label}
-                {tab.href === TAB_MIS_PEDIDOS.href && porAprobar > 0 && (
-                  <span
-                    className="ml-1.5 rounded-full bg-warning px-1.5 py-0.5 text-[11px] font-bold text-accent-foreground"
-                    title="Pedidos por aprobar"
-                  >
-                    {porAprobar}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
+          <nav
+            className="-mx-4 flex w-[calc(100%+2rem)] items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-t border-border px-2 sm:mx-0 sm:w-auto sm:border-t-0 sm:px-0 sm:gap-1"
+            aria-label="Secciones"
+          >
+            {TABS.map((tab) => {
+              const active =
+                pathname === tab.href || pathname.startsWith(tab.href + "/");
+              return (
+                <Link
+                  key={tab.href}
+                  href={tab.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`-mb-px whitespace-nowrap border-b-[3px] px-3 py-3 text-[13px] sm:py-4 font-semibold transition-colors sm:px-3 sm:text-sm ${
+                    active
+                      ? "border-brand text-primary"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-primary"
+                  }`}
+                >
+                  {tab.label}
+                  {tab.href === TAB_MIS_PEDIDOS.href && porAprobar > 0 && (
+                    <span
+                      className="ml-1.5 rounded-full bg-warning px-1.5 py-0.5 text-[11px] font-bold text-accent-foreground"
+                      title="Pedidos por aprobar"
+                    >
+                      {porAprobar}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </nav>
         )}
       </div>
     </header>

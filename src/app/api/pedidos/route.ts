@@ -7,6 +7,8 @@ import {
 } from "@/lib/aprobacion";
 import { AREAS, areaLabel, getSesion, haySesion } from "@/lib/auth";
 import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
+import { getCategoriasConArticulos } from "@/lib/articulos";
+import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
 import { getGoogleEmail } from "@/lib/google-oauth";
 import { getSolicitantes } from "@/lib/solicitantes";
 import {
@@ -226,12 +228,32 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    // Solo Materiales Menores: se valida cada artículo contra el catálogo del
+    // servidor (no se confía en la categoría que manda el navegador).
     let nomina: string[];
     try {
+      const permitidas = new Set(CATEGORIAS_MATERIALES_MENORES.map(norm));
+      const categoriaDe = new Map<string, string>();
+      for (const c of await getCategoriasConArticulos()) {
+        for (const a of c.articulos) categoriaDe.set(a.codigo, c.categoria);
+      }
+      const fuera = items.find((it) => {
+        const cat = categoriaDe.get(it.codigo);
+        return !cat || !permitidas.has(norm(cat));
+      });
+      if (fuera) {
+        return NextResponse.json(
+          {
+            error: `El artículo ${fuera.codigo} no es de Materiales Menores. Pídelo a tu supervisor.`,
+          },
+          { status: 403 }
+        );
+      }
+      for (const it of items) it.categoria = categoriaDe.get(it.codigo) ?? it.categoria;
       nomina = await getSolicitantes();
     } catch {
       return NextResponse.json(
-        { error: "No se pudo verificar tu nombre. Inténtalo de nuevo en un momento." },
+        { error: "No se pudo verificar tu pedido. Inténtalo de nuevo en un momento." },
         { status: 503 }
       );
     }

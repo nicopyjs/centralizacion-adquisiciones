@@ -1,19 +1,9 @@
 import EnviarPedidoForm from "@/components/EnviarPedidoForm";
+import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
 
 export const metadata = {
   title: "Materiales Menores | Centralización Adquisiciones",
 };
-
-// Categorías de artículos disponibles en este flujo reducido.
-const CATEGORIAS_MATERIALES_MENORES = [
-  "INSUMOS GENERICO",
-  "FIJACIONES GENERICO",
-  "EPP GENERICO",
-  "EPP ROPA",
-  "HERRAMIENTAS ELECTRICA",
-  "HERRAMIENTAS MANUALES",
-  "ELECTRICO TABLERO",
-];
 
 export default function MaterialesMenoresPage() {
   return (
@@ -24,8 +14,9 @@ export default function MaterialesMenoresPage() {
         </h1>
         <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           Elige el área y su centro de negocio, arma la lista de artículos y
-          registra el pedido: se guarda en la planilla y se abre Gmail con el
-          correo de solicitud ya redactado para revisarlo y enviarlo.
+          registra el pedido. Los maestros no necesitan cuenta: su pedido queda
+          pendiente hasta que un supervisor de su área lo apruebe. Con cuenta
+          @nebchile.cl se envía directo a Adquisiciones por correo.
         </p>
       </header>
       <EnviarPedidoForm categoriasPermitidas={CATEGORIAS_MATERIALES_MENORES} />
