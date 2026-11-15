@@ -78,6 +78,12 @@ function estadoDe(p: Pedido): Estado {
   return p.estadoManual || estadoPedido(p.items);
 }
 
+/** Urgente que sigue abierto: un pedido cerrado o anulado ya no es urgente. */
+function esUrgenteAbierto(p: Pedido): boolean {
+  const e = estadoDe(p);
+  return p.urgente && e !== "cerrado" && e !== "anulado";
+}
+
 function hoyYMD(): string {
   const d = new Date();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -359,7 +365,7 @@ export default function MisPedidosPanel() {
     for (const p of base) {
       c[estadoDe(p)] += 1;
       if (estaAtrasado(p, hoy)) c.atrasados += 1;
-      if (p.urgente) c.urgentes += 1;
+      if (esUrgenteAbierto(p)) c.urgentes += 1;
     }
     return c;
   }, [base, hoy]);
@@ -368,7 +374,7 @@ export default function MisPedidosPanel() {
     const filtrada = base.filter((p) => {
       if (vista === "todos") return true;
       if (vista === "atrasados") return estaAtrasado(p, hoy);
-      if (vista === "urgentes") return p.urgente;
+      if (vista === "urgentes") return esUrgenteAbierto(p);
       return estadoDe(p) === vista;
     });
     const porFecha = (a: Pedido, b: Pedido) => b.fecha.localeCompare(a.fecha);
@@ -381,7 +387,7 @@ export default function MisPedidosPanel() {
         return ea.localeCompare(eb) || porFecha(a, b);
       }
       if (orden === "urgentes")
-        return Number(b.urgente) - Number(a.urgente) || porFecha(a, b);
+        return Number(esUrgenteAbierto(b)) - Number(esUrgenteAbierto(a)) || porFecha(a, b);
       return porFecha(a, b);
     });
   }, [base, vista, orden, hoy]);
@@ -754,7 +760,7 @@ export default function MisPedidosPanel() {
                   >
                     {estado.label}
                   </span>
-                  {p.urgente && (
+                  {esUrgenteAbierto(p) && (
                     <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
                       Urgente
                     </span>
