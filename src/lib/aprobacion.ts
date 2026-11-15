@@ -74,3 +74,70 @@ export async function avisarSupervisores(p: {
     if (!(err instanceof GoogleAuthError)) console.error("Aviso de aprobación:", err);
   }
 }
+
+export type LineaAprobada = { nombre: string; cantidad: number; unidad: string; comentario: string };
+
+/**
+ * Al aprobar un pedido de maestros, avisa a Adquisiciones (con el grupo del
+ * área en copia) con el mismo formato del correo de solicitud de siempre.
+ * Sale desde `NOTIFICACIONES_REMITENTE`; devuelve false si no se pudo enviar
+ * (el pedido ya está aprobado y visible en Gestión de Pedidos igual).
+ */
+export async function avisarAprobacion(p: {
+  pedidoId: string;
+  area: string;
+  centro: string;
+  solicitante: string;
+  aprobador: string;
+  clasificador1: string;
+  clasificador2: string;
+  despacho: string;
+  fechaEntrega: string;
+  comentario: string;
+  urgente: boolean;
+  lineas: LineaAprobada[];
+  cambios: string[];
+  origen: string;
+}): Promise<boolean> {
+  const remitente = process.env.NOTIFICACIONES_REMITENTE?.trim().toLowerCase();
+  if (!remitente) return false;
+  const cc = emailDeArea(p.area);
+  const elementos = p.lineas
+    .map((l) => {
+      const base = `- ${l.cantidad.toLocaleString("es-CL")} ${l.unidad ? `${l.unidad} ` : ""}${l.nombre}`;
+      return l.comentario ? `${base} (Comentario: ${l.comentario})` : base;
+    })
+    .join("\n");
+  try {
+    await enviarCorreo(remitente, {
+      para: ["adquisiciones@nebchile.cl"],
+      cc: cc ? [cc] : [],
+      asunto: `NEB Chile // Adquisiciones // ${p.centro} // Pedido ${p.pedidoId}`,
+      texto: [
+        "Junto con saludar, se aprobó el siguiente pedido de un maestro; solicito su gestión:",
+        ...(p.urgente ? ["", "*** PEDIDO URGENTE ***"] : []),
+        "",
+        `Pedido: ${p.pedidoId}`,
+        `Solicitante: ${p.solicitante}`,
+        `Aprobado por: ${p.aprobador}`,
+        `Área: ${p.area}`,
+        `Centro de Costo: ${p.centro}`,
+        `Clasificador 1: ${p.clasificador1}`,
+        `Clasificador 2: ${p.clasificador2}`,
+        `Despacho: ${p.despacho}`,
+        `Fecha de entrega: ${p.fechaEntrega}${p.urgente ? " (PEDIDO URGENTE)" : ""}`,
+        ...(p.comentario ? ["", p.comentario] : []),
+        "",
+        "Elementos a solicitar:",
+        elementos,
+        ...(p.cambios.length ? ["", `El supervisor ajustó el pedido: ${p.cambios.join("; ")}.`] : []),
+        "",
+        `Gestiónalo en: ${p.origen}/gestion-pedidos`,
+      ].join("\n"),
+    });
+    return true;
+  } catch (err) {
+    if (!(err instanceof GoogleAuthError)) console.error("Aviso de aprobación:", err);
+    return false;
+  }
+}
