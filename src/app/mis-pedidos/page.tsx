@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import AprobacionPedidos from "@/components/AprobacionPedidos";
 import CambiarAreaSelect from "@/components/CambiarAreaSelect";
 import CambiarVistaAdmin from "@/components/CambiarVistaAdmin";
 import CerrarSesionButton from "@/components/CerrarSesionButton";
@@ -53,6 +54,7 @@ export default async function MisPedidosPage() {
           <CerrarSesionButton />
         </div>
       </header>
+      <AprobacionPedidos />
       <MisPedidosPanel />
     </div>
   );

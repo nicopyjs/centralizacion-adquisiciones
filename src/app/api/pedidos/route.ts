@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
-import { areaLabel, getSesion, haySesion } from "@/lib/auth";
+import {
+  PENDIENTE_APROBACION,
+  avisarSupervisores,
+  estadoAprobacion,
+  norm,
+} from "@/lib/aprobacion";
+import { AREAS, areaLabel, getSesion, haySesion } from "@/lib/auth";
 import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
+import { getCategoriasConArticulos } from "@/lib/articulos";
+import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
+import { getGoogleEmail } from "@/lib/google-oauth";
+import { getSolicitantes } from "@/lib/solicitantes";
 import {
   appendRows,
   articulosSheetId,
@@ -204,6 +214,57 @@ export async function POST(request: Request) {
     );
   }
 
+  // Sin cuenta @nebchile.cl (los maestros) el pedido queda «Pendiente
+  // aprobación» hasta que un supervisor del área lo apruebe. Como esta ruta es
+  // pública para ellos, se exige un solicitante de la nómina y un área válida.
+  const pendiente = !(await getGoogleEmail());
+  if (pendiente) {
+    if (!AREAS.some((a) => norm(a.label) === norm(area))) {
+      return NextResponse.json({ error: "Área inválida." }, { status: 400 });
+    }
+    if (items.length > 100) {
+      return NextResponse.json(
+        { error: "Demasiados artículos en un solo pedido (máximo 100)." },
+        { status: 400 }
+      );
+    }
+    // Solo Materiales Menores: se valida cada artículo contra el catálogo del
+    // servidor (no se confía en la categoría que manda el navegador).
+    let nomina: string[];
+    try {
+      const permitidas = new Set(CATEGORIAS_MATERIALES_MENORES.map(norm));
+      const categoriaDe = new Map<string, string>();
+      for (const c of await getCategoriasConArticulos()) {
+        for (const a of c.articulos) categoriaDe.set(a.codigo, c.categoria);
+      }
+      const fuera = items.find((it) => {
+        const cat = categoriaDe.get(it.codigo);
+        return !cat || !permitidas.has(norm(cat));
+      });
+      if (fuera) {
+        return NextResponse.json(
+          {
+            error: `El artículo ${fuera.codigo} no es de Materiales Menores. Pídelo a tu supervisor.`,
+          },
+          { status: 403 }
+        );
+      }
+      for (const it of items) it.categoria = categoriaDe.get(it.codigo) ?? it.categoria;
+      nomina = await getSolicitantes();
+    } catch {
+      return NextResponse.json(
+        { error: "No se pudo verificar tu pedido. Inténtalo de nuevo en un momento." },
+        { status: 503 }
+      );
+    }
+    if (!nomina.some((n) => norm(n) === norm(solicitante))) {
+      return NextResponse.json(
+        { error: "Elige tu nombre de la lista de solicitantes." },
+        { status: 403 }
+      );
+    }
+  }
+
   const sheetId = articulosSheetId();
 
   try {
@@ -236,14 +297,26 @@ export async function POST(request: Request) {
       "", // Fecha recepción bodega
       "", // Fecha entrega solicitante
       it.comentario, // Comentario artículo
-      "", // Estado pedido (Cerrado / Anulado)
+      pendiente ? PENDIENTE_APROBACION : "", // Estado pedido (Cerrado / Anulado / pendiente de aprobación)
       "", // Motivo estado
       "", // Motivo anulación artículo (vacío = artículo vigente)
     ]);
 
     await appendRows(sheetId, PEDIDOS_SHEET, rows);
 
-    return NextResponse.json({ ok: true, pedidoId, lineas: rows.length });
+    if (pendiente) {
+      await avisarSupervisores({
+        pedidoId,
+        area,
+        solicitante,
+        centro: centroDescripcion,
+        lineas: rows.length,
+        urgente: esUrgente,
+        origen: new URL(request.url).origin,
+      });
+    }
+
+    return NextResponse.json({ ok: true, pedidoId, lineas: rows.length, pendiente });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -324,6 +397,9 @@ export async function GET() {
     rows.forEach((row, i) => {
       const pedidoId = str(row[0]);
       if (!pedidoId) return;
+      // Los pedidos por aprobar o rechazados no llegan a esta lista: se
+      // gestionan en /api/pedidos/aprobacion.
+      if (estadoAprobacion(str(row[23]))) return;
       const fila = i + 2; // +2: encabezado en fila 1, datos desde fila 2.
 
       let pedido = porPedido.get(pedidoId);
