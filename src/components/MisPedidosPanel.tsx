@@ -78,10 +78,14 @@ function estadoDe(p: Pedido): Estado {
   return p.estadoManual || estadoPedido(p.items);
 }
 
-/** Urgente que sigue abierto: un pedido cerrado o anulado ya no es urgente. */
+/**
+ * Urgente que sigue esperando mercadería (pendiente o parcial). Un pedido
+ * completo, cerrado o anulado ya no es urgente; los completos urgentes siguen
+ * apareciendo al elegir «Completos».
+ */
 function esUrgenteAbierto(p: Pedido): boolean {
   const e = estadoDe(p);
-  return p.urgente && e !== "cerrado" && e !== "anulado";
+  return p.urgente && (e === "pendiente" || e === "parcial");
 }
 
 function hoyYMD(): string {
