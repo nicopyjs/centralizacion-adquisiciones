@@ -163,7 +163,7 @@ const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 const MAX_ADJUNTOS = 3;
 const MAX_BYTES_ADJUNTOS = 4 * 1024 * 1024;
-const EXT_ADJUNTOS = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g)$/i;
+const EXT_ADJUNTOS = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g|dwg|dxf|zip)$/i;
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 // Como fieldClass, pero sin w-full: se usa en inputs dentro de un flex row
@@ -1453,7 +1453,7 @@ export default function EnviarPedidoForm({
     } else if (
       sig.some((f) => !EXT_ADJUNTOS.test(f.name))
     ) {
-      setErrorAdjuntos("Solo PDF, Excel, Word, CSV o imágenes (PNG/JPG).");
+      setErrorAdjuntos("Solo PDF, Excel, Word, CSV, imágenes (PNG/JPG), planos (DWG/DXF) o ZIP.");
     } else {
       setErrorAdjuntos(null);
       setAdjuntos(sig);
@@ -1996,7 +1996,7 @@ export default function EnviarPedidoForm({
                   ref={inputAdjuntos}
                   type="file"
                   multiple
-                  accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg"
+                  accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg,.dwg,.dxf,.zip"
                   className="hidden"
                   onChange={(e) => elegirAdjuntos(e.target.files)}
                 />
@@ -2010,7 +2010,7 @@ export default function EnviarPedidoForm({
                     Adjuntar archivo
                   </button>
                   <span className="text-xs text-muted-foreground">
-                    PDF, Excel, Word, CSV o imagen · máx. {MAX_ADJUNTOS}{" "}
+                    PDF, Excel, Word, CSV, imagen, DWG/DXF o ZIP · máx. {MAX_ADJUNTOS}{" "}
                     archivos y 4 MB en total.
                   </span>
                 </div>
