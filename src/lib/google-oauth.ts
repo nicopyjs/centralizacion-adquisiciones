@@ -141,6 +141,10 @@ export type CorreoSaliente = {
   cc: string[];
   asunto: string;
   texto: string;
+  /** Versión HTML del cuerpo (el `texto` queda como respaldo). */
+  html?: string;
+  /** Imágenes incrustadas en el HTML, referenciadas con `cid:<cid>`. */
+  imagenes?: { cid: string; mime: string; datos: Buffer }[];
   adjuntos?: AdjuntoSaliente[];
   /** Para responder: cadena en el buzón de quien envía + cabeceras RFC 822. */
   threadId?: string;
@@ -155,6 +159,17 @@ function cabeceraMime(texto: string): string {
 function base64Lineas(datos: string | Buffer): string {
   const buf = typeof datos === "string" ? Buffer.from(datos, "utf8") : datos;
   return (buf.toString("base64").match(/.{1,76}/g) ?? []).join("\r\n");
+}
+
+/** Cuerpo multipart: devuelve el Content-Type, una línea en blanco y las partes. */
+function multipart(subtipo: string, partes: string[][]): string[] {
+  const limite = `neb_${randomBytes(12).toString("hex")}`;
+  return [
+    `Content-Type: multipart/${subtipo}; boundary="${limite}"`,
+    "",
+    ...partes.flatMap((p) => [`--${limite}`, ...p]),
+    `--${limite}--`,
+  ];
 }
 
 function construirMime(c: CorreoSaliente): string {
@@ -174,30 +189,47 @@ function construirMime(c: CorreoSaliente): string {
     base64Lineas(c.texto),
   ];
 
-  if (!c.adjuntos?.length) {
-    return [...comunes, ...cuerpoTexto].join("\r\n");
+  let cuerpo = cuerpoTexto;
+  if (c.html) {
+    // Texto plano + HTML; el cliente muestra el HTML y deja el texto de respaldo.
+    const parteHtml = [
+      'Content-Type: text/html; charset="UTF-8"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      base64Lineas(c.html),
+    ];
+    const alternativo = multipart("alternative", [cuerpoTexto, parteHtml]);
+    cuerpo = c.imagenes?.length
+      ? multipart("related", [
+          alternativo,
+          ...c.imagenes.map((i) => [
+            `Content-Type: ${i.mime}; name="${i.cid}"`,
+            "Content-Transfer-Encoding: base64",
+            `Content-ID: <${i.cid}>`,
+            `Content-Disposition: inline; filename="${i.cid}"`,
+            "",
+            base64Lineas(i.datos),
+          ]),
+        ])
+      : alternativo;
   }
 
-  const limite = `neb_${randomBytes(12).toString("hex")}`;
-  const partes = [`--${limite}`, ...cuerpoTexto];
-  for (const a of c.adjuntos) {
-    const nombre = cabeceraMime(a.nombre);
-    partes.push(
-      `--${limite}`,
-      `Content-Type: ${a.mime}; name="${nombre}"`,
-      "Content-Transfer-Encoding: base64",
-      `Content-Disposition: attachment; filename="${nombre}"`,
-      "",
-      base64Lineas(a.datos)
-    );
+  if (c.adjuntos?.length) {
+    cuerpo = multipart("mixed", [
+      cuerpo,
+      ...c.adjuntos.map((a) => {
+        const nombre = cabeceraMime(a.nombre);
+        return [
+          `Content-Type: ${a.mime}; name="${nombre}"`,
+          "Content-Transfer-Encoding: base64",
+          `Content-Disposition: attachment; filename="${nombre}"`,
+          "",
+          base64Lineas(a.datos),
+        ];
+      }),
+    ]);
   }
-  partes.push(`--${limite}--`);
-  return [
-    ...comunes,
-    `Content-Type: multipart/mixed; boundary="${limite}"`,
-    "",
-    ...partes,
-  ].join("\r\n");
+  return [...comunes, ...cuerpo].join("\r\n");
 }
 
 export type CorreoEnviado = { id: string; threadId: string };

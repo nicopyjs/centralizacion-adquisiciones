@@ -1,4 +1,5 @@
 import { emailDeArea } from "@/lib/correos";
+import { correoHtml, logoIncrustado } from "@/lib/correo-html";
 import { GoogleAuthError, enviarCorreo } from "@/lib/google-oauth";
 
 /**
@@ -58,6 +59,20 @@ export async function avisarSupervisores(p: {
       para: [para],
       cc: [],
       asunto: `${p.urgente ? "[URGENTE] " : ""}Pedido ${p.pedidoId} por aprobar · ${p.area}`,
+      imagenes: [logoIncrustado()],
+      html: correoHtml({
+        etiqueta: "Pedido por aprobar",
+        titulo: `${p.solicitante} hizo un pedido`,
+        alerta: p.urgente ? "Pedido urgente" : undefined,
+        filas: [
+          ["Pedido", p.pedidoId],
+          ["Área", p.area],
+          ["Centro de negocio", p.centro],
+          ["Artículos", String(p.lineas)],
+        ],
+        parrafos: ["Revísalo y apruébalo en la aplicación. Hasta que un supervisor lo apruebe, Adquisiciones no lo ve."],
+        boton: { texto: "Revisar pedido", url: `${p.origen}/mis-pedidos` },
+      }),
       texto: [
         `${p.solicitante} hizo un pedido que espera tu aprobación.`,
         "",
@@ -113,6 +128,32 @@ export async function avisarAprobacion(p: {
       para: ["adquisiciones@nebchile.cl"],
       cc: cc ? [cc] : [],
       asunto: `NEB Chile // Adquisiciones // ${p.centro} // Pedido ${p.pedidoId}`,
+      imagenes: [logoIncrustado()],
+      html: correoHtml({
+        etiqueta: "Pedido aprobado",
+        titulo: `Pedido ${p.pedidoId} listo para gestionar`,
+        alerta: p.urgente ? "PEDIDO URGENTE" : undefined,
+        filas: [
+          ["Solicitante", p.solicitante],
+          ["Aprobado por", p.aprobador],
+          ["Área", p.area],
+          ["Centro de Costo", p.centro],
+          ["Clasificador 1", p.clasificador1],
+          ["Clasificador 2", p.clasificador2],
+          ["Despacho", p.despacho],
+          ["Fecha de entrega", `${p.fechaEntrega}${p.urgente ? " (urgente)" : ""}`],
+        ],
+        parrafos: [
+          ...(p.comentario ? [p.comentario] : []),
+          ...(p.cambios.length ? [`El supervisor ajustó el pedido: ${p.cambios.join("; ")}.`] : []),
+        ],
+        articulos: p.lineas.map((l) => ({
+          cantidad: `${l.cantidad.toLocaleString("es-CL")}${l.unidad ? ` ${l.unidad}` : ""}`,
+          nombre: l.nombre,
+          comentario: l.comentario || undefined,
+        })),
+        boton: { texto: "Gestionar pedido", url: `${p.origen}/gestion-pedidos` },
+      }),
       texto: [
         "Junto con saludar, se aprobó el siguiente pedido de un maestro; solicito su gestión:",
         ...(p.urgente ? ["", "*** PEDIDO URGENTE ***"] : []),
