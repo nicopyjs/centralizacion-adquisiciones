@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 const MAX_ADJUNTOS = 3;
 const MAX_BYTES = 4 * 1024 * 1024;
-const EXT = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g)$/i;
+const EXT = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g|dwg|dxf|zip)$/i;
 
 type Linea = {
   nombre: string;
@@ -102,7 +102,7 @@ export default function ReportarCorreo({
     else if (sig.reduce((s, f) => s + f.size, 0) > MAX_BYTES)
       setErrorAdjuntos("Los archivos superan el máximo de 4 MB en total.");
     else if (sig.some((f) => !EXT.test(f.name)))
-      setErrorAdjuntos("Solo PDF, Excel, Word, CSV o imágenes (PNG/JPG).");
+      setErrorAdjuntos("Solo PDF, Excel, Word, CSV, imágenes (PNG/JPG), planos (DWG/DXF) o ZIP.");
     else {
       setErrorAdjuntos(null);
       setAdjuntos(sig);
@@ -288,7 +288,7 @@ export default function ReportarCorreo({
                       ref={inputArchivo}
                       type="file"
                       multiple
-                      accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg"
+                      accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg,.dwg,.dxf,.zip"
                       className="hidden"
                       onChange={(e) => elegirArchivos(e.target.files)}
                     />

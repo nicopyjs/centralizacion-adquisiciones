@@ -14,6 +14,9 @@ const MIMES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
+  dwg: "application/octet-stream",
+  dxf: "application/octet-stream",
+  zip: "application/zip",
 };
 
 export type ResultadoAdjuntos =
@@ -42,7 +45,7 @@ export async function leerAdjuntos(form: FormData): Promise<ResultadoAdjuntos> {
     if (!mime) {
       return {
         ok: false,
-        error: `«${f.name}»: solo se pueden adjuntar PDF, Excel, Word, CSV o imágenes.`,
+        error: `«${f.name}»: solo se pueden adjuntar PDF, Excel, Word, CSV, imágenes, planos (DWG/DXF) o ZIP.`,
         status: 400,
       };
     }
