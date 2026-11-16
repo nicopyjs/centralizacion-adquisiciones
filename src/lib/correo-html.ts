@@ -187,6 +187,11 @@ export function htmlDeSolicitud(
     enlaces: items.length
       ? { titulo: "Archivos (se abren con tu sesión en la aplicación)", items }
       : undefined,
-    boton: { texto: "Gestionar pedido", url: `${origen}/gestion-pedidos` },
+    boton: {
+      texto: "Gestionar pedido",
+      url: folio
+        ? `${origen}/gestion-pedidos?pedido=${encodeURIComponent(folio)}`
+        : `${origen}/gestion-pedidos`,
+    },
   });
 }

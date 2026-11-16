@@ -16,7 +16,14 @@ export const metadata = {
 // Depende de la cookie de sesión, así que nunca se sirve prerenderizada.
 export const dynamic = "force-dynamic";
 
-export default async function MisPedidosPage() {
+export default async function MisPedidosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  // `?pedido=INT-27` (enlace del correo) lleva al pedido por aprobar.
+  const { pedido } = await searchParams;
+  const pedidoInicial = (Array.isArray(pedido) ? pedido[0] : pedido)?.trim() || undefined;
   const sesion = await getSesion();
   if (!sesion) {
     return (
@@ -54,7 +61,7 @@ export default async function MisPedidosPage() {
           <CerrarSesionButton />
         </div>
       </header>
-      <AprobacionPedidos />
+      <AprobacionPedidos pedidoInicial={pedidoInicial} />
       <MisPedidosPanel />
     </div>
   );
