@@ -1378,6 +1378,17 @@ export default function EnviarPedidoForm({
         form.set("cc", correoFinal.cc);
         form.set("asunto", correoFinal.asunto);
         form.set("cuerpo", correoFinal.cuerpoCorreo);
+        form.set(
+          "items",
+          JSON.stringify(
+            lineasCompletas.map((l) => ({
+              cantidad: l.cantidad,
+              unidad: l.unidad,
+              nombre: l.nombre,
+              comentario: l.comentario.trim(),
+            }))
+          )
+        );
         for (const f of porCorreo) form.append("archivo", f);
         const res = await fetch("/api/pedidos/correo", {
           method: "POST",
