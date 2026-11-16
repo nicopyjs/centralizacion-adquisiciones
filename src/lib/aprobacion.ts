@@ -71,7 +71,7 @@ export async function avisarSupervisores(p: {
           ["Artículos", String(p.lineas)],
         ],
         parrafos: ["Revísalo y apruébalo en la aplicación. Hasta que un supervisor lo apruebe, Adquisiciones no lo ve."],
-        boton: { texto: "Revisar pedido", url: `${p.origen}/mis-pedidos` },
+        boton: { texto: "Revisar pedido", url: `${p.origen}/mis-pedidos?pedido=${encodeURIComponent(p.pedidoId)}` },
       }),
       texto: [
         `${p.solicitante} hizo un pedido que espera tu aprobación.`,
@@ -81,7 +81,7 @@ export async function avisarSupervisores(p: {
         `Centro de negocio: ${p.centro}`,
         `Artículos: ${p.lineas}`,
         "",
-        `Revísalo y apruébalo en: ${p.origen}/mis-pedidos`,
+        `Revísalo y apruébalo en: ${p.origen}/mis-pedidos?pedido=${encodeURIComponent(p.pedidoId)}`,
         "Hasta que un supervisor lo apruebe, Adquisiciones no lo ve.",
       ].join("\n"),
     });
@@ -152,7 +152,7 @@ export async function avisarAprobacion(p: {
           nombre: l.nombre,
           comentario: l.comentario || undefined,
         })),
-        boton: { texto: "Gestionar pedido", url: `${p.origen}/gestion-pedidos` },
+        boton: { texto: "Gestionar pedido", url: `${p.origen}/gestion-pedidos?pedido=${encodeURIComponent(p.pedidoId)}` },
       }),
       texto: [
         "Junto con saludar, se aprobó el siguiente pedido de un maestro; solicito su gestión:",
@@ -173,7 +173,7 @@ export async function avisarAprobacion(p: {
         elementos,
         ...(p.cambios.length ? ["", `El supervisor ajustó el pedido: ${p.cambios.join("; ")}.`] : []),
         "",
-        `Gestiónalo en: ${p.origen}/gestion-pedidos`,
+        `Gestiónalo en: ${p.origen}/gestion-pedidos?pedido=${encodeURIComponent(p.pedidoId)}`,
       ].join("\n"),
     });
     return true;

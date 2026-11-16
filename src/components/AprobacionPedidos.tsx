@@ -21,9 +21,11 @@ type Edicion = { cantidad: string; quitar: boolean };
 function Tarjeta({
   pedido,
   onResuelto,
+  destacado,
 }: {
   pedido: PedidoPorAprobar;
   onResuelto: (aprobado: boolean) => void;
+  destacado: boolean;
 }) {
   const [ediciones, setEdiciones] = useState<Record<number, Edicion>>(() =>
     Object.fromEntries(
@@ -76,7 +78,12 @@ function Tarjeta({
   }
 
   return (
-    <article className="rounded-xl border border-border bg-card p-4 shadow-sm">
+    <article
+      id={`aprobacion-${pedido.pedidoId}`}
+      className={`scroll-mt-4 rounded-xl border bg-card p-4 shadow-sm ${
+        destacado ? "border-primary ring-2 ring-primary/40" : "border-border"
+      }`}
+    >
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-base font-extrabold text-primary">
@@ -263,7 +270,7 @@ function Tarjeta({
  * se rechazaron, por si hay que reconsiderarlos). Aprobar los deja visibles
  * para Adquisiciones. Sin pedidos por revisar no muestra nada.
  */
-export default function AprobacionPedidos() {
+export default function AprobacionPedidos({ pedidoInicial }: { pedidoInicial?: string }) {
   const [pedidos, setPedidos] = useState<PedidoPorAprobar[]>([]);
 
   const cargar = useCallback(() => {
@@ -276,6 +283,14 @@ export default function AprobacionPedidos() {
   useEffect(() => {
     cargar();
   }, [cargar]);
+
+  // Desde el correo (?pedido=): lleva a la tarjeta de ese pedido.
+  useEffect(() => {
+    if (!pedidoInicial || !pedidos.some((p) => p.pedidoId === pedidoInicial)) return;
+    document
+      .getElementById(`aprobacion-${pedidoInicial}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [pedidoInicial, pedidos]);
 
   const pendientes = pedidos.filter((p) => p.estado === "pendiente");
   const rechazados = pedidos.filter((p) => p.estado === "rechazado");
@@ -302,7 +317,7 @@ export default function AprobacionPedidos() {
             </p>
           </div>
           {pendientes.map((p) => (
-            <Tarjeta key={p.pedidoId} pedido={p} onResuelto={resuelto} />
+            <Tarjeta key={p.pedidoId} pedido={p} onResuelto={resuelto} destacado={p.pedidoId === pedidoInicial} />
           ))}
         </>
       )}
@@ -313,7 +328,7 @@ export default function AprobacionPedidos() {
           </summary>
           <div className="mt-3 space-y-3">
             {rechazados.map((p) => (
-              <Tarjeta key={p.pedidoId} pedido={p} onResuelto={resuelto} />
+              <Tarjeta key={p.pedidoId} pedido={p} onResuelto={resuelto} destacado={p.pedidoId === pedidoInicial} />
             ))}
           </div>
         </details>
