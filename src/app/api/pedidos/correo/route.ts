@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { leerAdjuntos } from "@/lib/adjuntos";
+import { htmlDeSolicitud, logoIncrustado } from "@/lib/correo-html";
 import { articulosSheetId, readRange } from "@/lib/google-sheets";
 import {
   DOMINIO,
@@ -74,12 +75,28 @@ export async function POST(request: Request) {
     return error("El correo de este pedido ya fue enviado.", 409);
   }
 
+  // Versión HTML con el logo de NEB; el texto plano queda de respaldo.
+  let html: string | null = null;
+  try {
+    const crudos: unknown = JSON.parse(campo("items") || "[]");
+    const articulos = (Array.isArray(crudos) ? crudos : []).slice(0, 100).map((a) => ({
+      cantidad: Number(a?.cantidad) || 0,
+      unidad: String(a?.unidad ?? "").slice(0, 30),
+      nombre: String(a?.nombre ?? "").slice(0, 300),
+      comentario: String(a?.comentario ?? "").slice(0, 500),
+    }));
+    html = htmlDeSolicitud(cuerpo, articulos, new URL(request.url).origin);
+  } catch {
+    // Sin HTML el correo sale igual, en texto plano.
+  }
+
   try {
     const enviado = await enviarCorreo(email, {
       para: [DESTINATARIO],
       cc,
       asunto,
       texto: cuerpo,
+      ...(html ? { html, imagenes: [logoIncrustado()] } : {}),
       adjuntos,
     });
     // El Message-ID permite responder después en la cadena desde otro buzón.

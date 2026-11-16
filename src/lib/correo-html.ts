@@ -40,10 +40,14 @@ export type PlantillaCorreo = {
   titulo: string;
   /** Aviso destacado (p. ej. pedido urgente). */
   alerta?: string;
+  /** Texto libre antes de los datos (p. ej. el comentario del solicitante). */
+  introduccion?: string;
   filas?: [string, string][];
   parrafos?: string[];
   /** Tabla de artículos: cantidad + unidad, nombre y comentario opcional. */
   articulos?: { cantidad: string; nombre: string; comentario?: string }[];
+  /** Enlaces a archivos (Drive), con su título. */
+  enlaces?: { titulo: string; items: { texto: string; url: string }[] };
   boton?: { texto: string; url: string };
 };
 
@@ -78,10 +82,22 @@ export function correoHtml(p: PlantillaCorreo): string {
         `<p style="margin:16px 0 0;font-size:15px;line-height:1.55;color:${TEXTO}">${parrafoHtml(t)}</p>`
     )
     .join("");
+  const enlaces = p.enlaces?.items.length
+    ? `<p style="margin:24px 0 8px;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:${GRIS}">${esc(p.enlaces.titulo)}</p>` +
+      p.enlaces.items
+        .map(
+          (e) =>
+            `<p style="margin:0 0 6px;font-size:14px"><a href="${esc(e.url)}" style="color:#0369a1;text-decoration:underline">${esc(e.texto)}</a></p>`
+        )
+        .join("")
+    : "";
   const boton = p.boton
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:28px"><tr>` +
       `<td style="background:${AMARILLO};border-radius:6px"><a href="${esc(p.boton.url)}" style="display:inline-block;padding:13px 26px;font-family:${FUENTE};font-size:15px;font-weight:bold;color:${NEGRO};text-decoration:none">${esc(p.boton.texto)}</a></td>` +
       `</tr></table>`
+    : "";
+  const intro = p.introduccion
+    ? `<p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:${TEXTO}">${parrafoHtml(p.introduccion)}</p>`
     : "";
   const alerta = p.alerta
     ? `<p style="margin:0 0 16px;padding:10px 14px;background:#fef3c7;border-left:4px solid ${AMARILLO};font-size:14px;font-weight:bold;color:${NEGRO}">${esc(p.alerta)}</p>`
@@ -98,9 +114,79 @@ export function correoHtml(p: PlantillaCorreo): string {
 <h1 style="margin:0;font-size:26px;line-height:1.25;color:#ffffff">${esc(p.titulo)}</h1>
 </td></tr>
 <tr><td style="padding:24px 32px 32px;font-family:${FUENTE}">
-${alerta}${filas ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">${filas}</table>` : ""}
-${articulos}${parrafos}${boton}
+${alerta}${intro}${filas ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">${filas}</table>` : ""}
+${articulos}${enlaces}${parrafos}${boton}
 </td></tr>
 <tr><td style="padding:16px 32px;background:#f9fafb;border-top:1px solid ${LINEA};font-size:12px;color:${GRIS}">Mensaje automático de Centralización de Adquisiciones · NEB Chile</td></tr>
 </table></td></tr></table></body></html>`;
+}
+
+export type ArticuloSolicitud = {
+  cantidad: number;
+  unidad: string;
+  nombre: string;
+  comentario: string;
+};
+
+const CAMPOS_SOLICITUD = [
+  "Área",
+  "Centro de Costo",
+  "Clasificador 1",
+  "Clasificador 2",
+  "Despacho",
+  "Fecha de entrega",
+];
+
+/**
+ * HTML del correo de solicitud de pedido a partir de su texto (el que arma el
+ * formulario) y de los artículos. Devuelve null si el texto no tiene la forma
+ * esperada: en ese caso el correo sale solo en texto plano.
+ */
+export function htmlDeSolicitud(
+  cuerpo: string,
+  articulos: ArticuloSolicitud[],
+  origen: string
+): string | null {
+  const lineas = cuerpo.replace(/\r\n/g, "\n").split("\n");
+  const iIntro = lineas.findIndex((l) => l.startsWith("Junto con saludar"));
+  if (iIntro < 0) return null;
+  const folio = /\(folio ([A-Z]{3}-\d+)\)/.exec(lineas[iIntro])?.[1] ?? "";
+  const comentario = lineas.slice(1, iIntro).join("\n").trim();
+  const urgente = lineas.some((l) => l.trim() === "*** PEDIDO URGENTE ***");
+
+  const filas: [string, string][] = [];
+  for (const campo of CAMPOS_SOLICITUD) {
+    const l = lineas.slice(iIntro).find((x) => x.startsWith(`${campo}: `));
+    if (l) filas.push([campo, l.slice(campo.length + 2).trim()]);
+  }
+  if (filas.length === 0) return null;
+
+  const iSaludos = lineas.lastIndexOf("Saludos,");
+  const solicitante = iSaludos >= 0 ? (lineas[iSaludos + 1] ?? "").trim() : "";
+  if (solicitante) filas.unshift(["Solicitante", solicitante]);
+
+  // Enlaces a archivos subidos a Drive: «- nombre: https://…».
+  const items = lineas
+    .map((l) => /^- (.+): (https?:\/\/\S+)$/.exec(l))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => ({ texto: m[1], url: m[2] }));
+  const fallidos = lineas.find((l) => l.startsWith("No se pudieron subir:"));
+
+  return correoHtml({
+    etiqueta: urgente ? "Nuevo pedido · urgente" : "Nuevo pedido",
+    titulo: folio ? `Solicitud de pedido ${folio}` : "Solicitud de pedido",
+    alerta: urgente ? "PEDIDO URGENTE" : undefined,
+    filas,
+    introduccion: comentario || undefined,
+    parrafos: fallidos ? [fallidos] : [],
+    articulos: articulos.map((a) => ({
+      cantidad: `${a.cantidad.toLocaleString("es-CL")}${a.unidad ? ` ${a.unidad}` : ""}`,
+      nombre: a.nombre,
+      comentario: a.comentario || undefined,
+    })),
+    enlaces: items.length
+      ? { titulo: "Archivos (se abren con tu sesión en la aplicación)", items }
+      : undefined,
+    boton: { texto: "Gestionar pedido", url: `${origen}/gestion-pedidos` },
+  });
 }
