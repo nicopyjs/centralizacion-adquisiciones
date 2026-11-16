@@ -161,9 +161,47 @@ function fechaEntregaPorDefecto(): string {
 
 const fieldClass =
   "h-11 w-full rounded-lg border border-border bg-card px-3 text-base sm:text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
-const MAX_ADJUNTOS = 3;
-const MAX_BYTES_ADJUNTOS = 4 * 1024 * 1024;
+const MAX_ADJUNTOS = 10;
+const MAX_BYTES_ARCHIVO = 100 * 1024 * 1024;
+// Lo que cabe en el correo (Vercel limita el cuerpo a ~4,5 MB); el resto se
+// sube a Drive y va como enlace.
+const MAX_ARCHIVOS_CORREO = 3;
+const MAX_BYTES_CORREO = 3.5 * 1024 * 1024;
 const EXT_ADJUNTOS = /\.(pdf|xlsx|xls|csv|docx|doc|png|jpe?g|dwg|dxf|zip)$/i;
+
+function repartirAdjuntos(archivos: File[]): { correo: File[]; drive: File[] } {
+  const correo: File[] = [];
+  const drive: File[] = [];
+  let total = 0;
+  for (const f of archivos) {
+    if (correo.length < MAX_ARCHIVOS_CORREO && total + f.size <= MAX_BYTES_CORREO) {
+      correo.push(f);
+      total += f.size;
+    } else {
+      drive.push(f);
+    }
+  }
+  return { correo, drive };
+}
+
+/** Sube un archivo directo a la carpeta Drive del pedido; devuelve su id. */
+async function subirADrive(folio: string, f: File): Promise<string> {
+  const mime = f.type || "application/octet-stream";
+  const ini = await fetch("/api/pedidos/archivos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folio, nombre: f.name, mime, size: f.size }),
+  });
+  const datos = await ini.json();
+  if (!ini.ok) throw new Error(datos.error || "No se pudo preparar la subida.");
+  const subida = await fetch(datos.url as string, {
+    method: "PUT",
+    headers: { "Content-Type": mime },
+    body: f,
+  });
+  if (!subida.ok) throw new Error(`Drive respondió ${subida.status}.`);
+  return ((await subida.json()) as { id: string }).id;
+}
 const labelClass =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 // Como fieldClass, pero sin w-full: se usa en inputs dentro de un flex row
@@ -1291,12 +1329,45 @@ export default function EnviarPedidoForm({
     setRegistrando(true);
     setRegistro(null);
     const resultado = await registrarPedido();
+    let correoFinal = resultado.ok
+      ? construirCorreo(resultado.folio)
+      : correoActual;
+    // Los archivos que no caben en el correo se suben a Drive y van como enlace.
+    const { correo: porCorreo, drive: porDrive } = repartirAdjuntos(adjuntos);
+    if (resultado.ok && googleEmail && porDrive.length) {
+      const enlaces: string[] = [];
+      const fallidos: string[] = [];
+      for (const f of porDrive) {
+        try {
+          const id = await subirADrive(resultado.folio, f);
+          enlaces.push(
+            `- ${f.name}: ${window.location.origin}/api/pedidos/chat/archivo?folio=${resultado.folio}&id=${id}`
+          );
+        } catch {
+          fallidos.push(f.name);
+        }
+      }
+      const bloque = [
+        ...(enlaces.length
+          ? ["Archivos grandes (se abren con tu sesión en la aplicación):", ...enlaces]
+          : []),
+        ...(fallidos.length
+          ? [`No se pudieron subir: ${fallidos.join(", ")}. Se enviarán por separado.`]
+          : []),
+      ].join("\n");
+      const cuerpo = correoFinal.cuerpoCorreo;
+      const i = cuerpo.lastIndexOf("\n\nSaludos,");
+      correoFinal = {
+        ...correoFinal,
+        cuerpoCorreo:
+          i >= 0
+            ? `${cuerpo.slice(0, i)}\n\n${bloque}${cuerpo.slice(i)}`
+            : `${cuerpo}\n\n${bloque}`,
+      };
+    }
     setRegistro(resultado);
     setRegistrando(false);
     setConfirmando(false);
-    const correoFinal = resultado.ok
-      ? construirCorreo(resultado.folio)
-      : correoActual;
     // Con la cuenta Google conectada, el correo sale por la Gmail API.
     let enviadoPorApi = false;
     setCorreoEnviado(null);
@@ -1307,7 +1378,7 @@ export default function EnviarPedidoForm({
         form.set("cc", correoFinal.cc);
         form.set("asunto", correoFinal.asunto);
         form.set("cuerpo", correoFinal.cuerpoCorreo);
-        for (const f of adjuntos) form.append("archivo", f);
+        for (const f of porCorreo) form.append("archivo", f);
         const res = await fetch("/api/pedidos/correo", {
           method: "POST",
           body: form,
@@ -1448,8 +1519,8 @@ export default function EnviarPedidoForm({
     const sig = [...adjuntos, ...Array.from(lista)];
     if (sig.length > MAX_ADJUNTOS) {
       setErrorAdjuntos(`Máximo ${MAX_ADJUNTOS} archivos.`);
-    } else if (sig.reduce((s, f) => s + f.size, 0) > MAX_BYTES_ADJUNTOS) {
-      setErrorAdjuntos("Los archivos superan el máximo de 4 MB en total.");
+    } else if (sig.some((f) => f.size > MAX_BYTES_ARCHIVO)) {
+      setErrorAdjuntos("Cada archivo puede pesar hasta 100 MB.");
     } else if (
       sig.some((f) => !EXT_ADJUNTOS.test(f.name))
     ) {
@@ -2011,7 +2082,8 @@ export default function EnviarPedidoForm({
                   </button>
                   <span className="text-xs text-muted-foreground">
                     PDF, Excel, Word, CSV, imagen, DWG/DXF o ZIP · máx. {MAX_ADJUNTOS}{" "}
-                    archivos y 4 MB en total.
+                    archivos de hasta 100 MB. Los que no caben en el correo se
+                    suben a Drive y van como enlace.
                   </span>
                 </div>
                 {adjuntos.length > 0 && (

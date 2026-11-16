@@ -79,6 +79,34 @@ export async function subirArchivo(
   return ((await res.json()) as { id: string }).id;
 }
 
+/**
+ * Abre una sesión de subida reanudable y devuelve su URL: el navegador sube el
+ * archivo directo a Drive (sin pasar por Vercel, que limita el cuerpo a ~4,5 MB).
+ * `origen` se reenvía para que Drive acepte la subida desde esa página (CORS).
+ */
+export async function iniciarSubidaReanudable(
+  carpetaId: string,
+  nombre: string,
+  mime: string,
+  size: number,
+  origen: string
+): Promise<string> {
+  const res = await fetch(`${UPLOAD}?uploadType=resumable&fields=id&supportsAllDrives=true`, {
+    method: "POST",
+    headers: {
+      ...(await authHeaders()),
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": mime,
+      "X-Upload-Content-Length": String(size),
+      Origin: origen,
+    },
+    body: JSON.stringify({ name: nombre, parents: [carpetaId] }),
+  });
+  const url = res.headers.get("location");
+  if (!res.ok || !url) throw new Error(`Drive (iniciar subida) HTTP ${res.status}`);
+  return url;
+}
+
 /** Descarga el contenido de un archivo de Drive (respuesta en streaming). */
 export async function descargarArchivo(id: string): Promise<Response> {
   const res = await fetch(`${FILES}/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, {
