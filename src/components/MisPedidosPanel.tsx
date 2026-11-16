@@ -79,13 +79,23 @@ function estadoDe(p: Pedido): Estado {
 }
 
 /**
- * Urgente que sigue esperando mercadería (pendiente o parcial). Un pedido
- * completo, cerrado o anulado ya no es urgente; los completos urgentes siguen
- * apareciendo al elegir «Completos».
+ * Urgente que sigue esperando mercadería (pendiente o parcial): es lo que
+ * cuenta y filtra la tarjeta «Urgentes». Un pedido completo, cerrado o anulado
+ * ya no cuenta ahí.
  */
 function esUrgenteAbierto(p: Pedido): boolean {
   const e = estadoDe(p);
   return p.urgente && (e === "pendiente" || e === "parcial");
+}
+
+/**
+ * La etiqueta «Urgente» de la fila se ve también en los completos (para saber
+ * cuáles lo eran al filtrar por «Completos»); solo se oculta en cerrados y
+ * anulados.
+ */
+function muestraEtiquetaUrgente(p: Pedido): boolean {
+  const e = estadoDe(p);
+  return p.urgente && e !== "cerrado" && e !== "anulado";
 }
 
 function hoyYMD(): string {
@@ -764,7 +774,7 @@ export default function MisPedidosPanel() {
                   >
                     {estado.label}
                   </span>
-                  {esUrgenteAbierto(p) && (
+                  {muestraEtiquetaUrgente(p) && (
                     <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
                       Urgente
                     </span>
