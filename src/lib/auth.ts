@@ -56,7 +56,7 @@ export function areaLabel(area: Area): string {
 export type Sesion = { perfil: Perfil; area: Area | null };
 
 export const SESSION_COOKIE = "gestion_session";
-export const SESSION_SECONDS = 60 * 60 * 12; // 12 horas
+export const SESSION_SECONDS = 60 * 60 * 24 * 30; // 30 días, como la cuenta Google conectada
 
 export function perfilLabel(perfil: Perfil): string {
   return PERFILES.find((p) => p.id === perfil)?.label ?? perfil;
