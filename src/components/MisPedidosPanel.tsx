@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
 import ReportarCorreo from "@/components/ReportarCorreo";
+import { fechaEntregaAYMD } from "@/lib/fechas";
 
 type PedidoItem = {
   categoria: string;
@@ -41,7 +42,6 @@ type Pedido = {
 };
 
 type Estado = "pendiente" | "parcial" | "completo" | "cerrado" | "anulado";
-type Vista = "todos" | Estado | "atrasados" | "urgentes";
 type Orden = "recientes" | "antiguos" | "entrega" | "urgentes";
 
 const ESTADOS: Record<Estado, { label: string; chip: string }> = {
@@ -53,6 +53,23 @@ const ESTADOS: Record<Estado, { label: string; chip: string }> = {
 };
 
 const POR_PAGINA = 40;
+
+/** Lo que el supervisor tiene que revisar: la vista con la que se abre el panel. */
+const ESTADOS_POR_ATENDER: Estado[] = ["pendiente", "parcial"];
+
+const TABS_ESTADO: { id: Estado; label: string; tono: string }[] = [
+  { id: "pendiente", label: "Pendientes", tono: "text-warning" },
+  { id: "parcial", label: "Parciales", tono: "text-accent" },
+  { id: "completo", label: "Completos", tono: "text-success" },
+  { id: "cerrado", label: "Cerrados", tono: "text-secondary" },
+  { id: "anulado", label: "Anulados", tono: "text-secondary" },
+];
+
+function sumaDias(ymd: string, dias: number): string {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() + dias);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const fieldClass =
   "h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-card-foreground shadow-sm outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40";
@@ -270,7 +287,14 @@ export default function MisPedidosPanel() {
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
-  const [vista, setVista] = useState<Vista>("todos");
+  // Los estados se suman (pendiente O parcial); urgentes y atrasados restringen
+  // (urgente Y atrasado). Sin ningún estado marcado se ven todos.
+  const [estadosSel, setEstadosSel] = useState<Set<Estado>>(
+    () => new Set(ESTADOS_POR_ATENDER)
+  );
+  const [soloUrgentes, setSoloUrgentes] = useState(false);
+  const [soloAtrasados, setSoloAtrasados] = useState(false);
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [busqueda, setBusqueda] = useState("");
   const [fSolicitante, setFSolicitante] = useState("");
   const [fCentro, setFCentro] = useState("");
@@ -298,7 +322,14 @@ export default function MisPedidosPanel() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Error al cargar pedidos");
         if (!cancelado) {
-          setPedidos(data.pedidos ?? []);
+          // La entrega llega como la guardó la planilla ("20-11-26"…): se pasa a
+          // AAAA-MM-DD para mostrarla bien y poder detectar los atrasos.
+          setPedidos(
+            ((data.pedidos ?? []) as Pedido[]).map((p) => ({
+              ...p,
+              fechaEntrega: fechaEntregaAYMD(p.fechaEntrega ?? "") || p.fechaEntrega,
+            }))
+          );
           setError(null);
         }
       })
@@ -366,8 +397,7 @@ export default function MisPedidosPanel() {
   }, [pedidos, busqueda, fSolicitante, fCentro, fEtiqueta, desde, hasta]);
 
   const conteo = useMemo(() => {
-    const c: Record<Vista, number> = {
-      todos: base.length,
+    const c: Record<Estado | "atrasados" | "urgentes", number> = {
       pendiente: 0,
       parcial: 0,
       completo: 0,
@@ -386,10 +416,10 @@ export default function MisPedidosPanel() {
 
   const lista = useMemo(() => {
     const filtrada = base.filter((p) => {
-      if (vista === "todos") return true;
-      if (vista === "atrasados") return estaAtrasado(p, hoy);
-      if (vista === "urgentes") return esUrgenteAbierto(p);
-      return estadoDe(p) === vista;
+      if (estadosSel.size > 0 && !estadosSel.has(estadoDe(p))) return false;
+      if (soloUrgentes && !esUrgenteAbierto(p)) return false;
+      if (soloAtrasados && !estaAtrasado(p, hoy)) return false;
+      return true;
     });
     const porFecha = (a: Pedido, b: Pedido) => b.fecha.localeCompare(a.fecha);
     return filtrada.sort((a, b) => {
@@ -404,19 +434,35 @@ export default function MisPedidosPanel() {
         return Number(esUrgenteAbierto(b)) - Number(esUrgenteAbierto(a)) || porFecha(a, b);
       return porFecha(a, b);
     });
-  }, [base, vista, orden, hoy]);
+  }, [base, estadosSel, soloUrgentes, soloAtrasados, orden, hoy]);
 
+  // Filtros del panel plegable (el contador del botón «Filtros»).
+  const nFiltrosExtra = [fSolicitante, fCentro, fEtiqueta].filter(Boolean).length +
+    (desde || hasta ? 1 : 0);
+  const estadosPorDefecto =
+    estadosSel.size === ESTADOS_POR_ATENDER.length &&
+    ESTADOS_POR_ATENDER.every((e) => estadosSel.has(e));
   const hayFiltros =
-    vista !== "todos" ||
+    !estadosPorDefecto ||
+    soloUrgentes ||
+    soloAtrasados ||
     busqueda !== "" ||
-    fSolicitante !== "" ||
-    fCentro !== "" ||
-    fEtiqueta !== "" ||
-    desde !== "" ||
-    hasta !== "";
+    nFiltrosExtra > 0;
+
+  function alternarEstado(e: Estado) {
+    setEstadosSel((prev) => {
+      const sig = new Set(prev);
+      if (sig.has(e)) sig.delete(e);
+      else sig.add(e);
+      return sig;
+    });
+    setVisibles(POR_PAGINA);
+  }
 
   function limpiar() {
-    setVista("todos");
+    setEstadosSel(new Set(ESTADOS_POR_ATENDER));
+    setSoloUrgentes(false);
+    setSoloAtrasados(false);
     setBusqueda("");
     setFSolicitante("");
     setFCentro("");
@@ -505,65 +551,91 @@ export default function MisPedidosPanel() {
   const todosAbiertos =
     mostrados.length > 0 && mostrados.every((p) => abiertos.has(p.pedidoId));
 
-  const TABS: { id: Vista; label: string; tono: string }[] = [
-    { id: "todos", label: "Todos", tono: "" },
-    { id: "pendiente", label: "Pendientes", tono: "text-warning" },
-    { id: "parcial", label: "Parciales", tono: "text-accent" },
-    { id: "completo", label: "Completos", tono: "text-success" },
-    { id: "atrasados", label: "Atrasados", tono: "text-destructive" },
-    { id: "urgentes", label: "Urgentes", tono: "text-destructive" },
-    { id: "cerrado", label: "Cerrados", tono: "text-secondary" },
-    { id: "anulado", label: "Anulados", tono: "text-secondary" },
-  ];
+  const chipBase =
+    "shrink-0 rounded-xl border px-4 py-2.5 text-left shadow-sm transition-colors";
+  const chipClase = (activo: boolean) =>
+    `${chipBase} ${
+      activo
+        ? "border-brand bg-brand/15 ring-1 ring-brand"
+        : "border-border bg-card hover:bg-muted"
+    }`;
 
   return (
     <div className="space-y-4">
-      {/* Resumen por estado: cada tarjeta filtra la lista. */}
-      <div
-        role="tablist"
-        aria-label="Filtrar por estado"
-        className="flex gap-2 overflow-x-auto pb-1"
-      >
-        {TABS.filter(
-          (t) =>
-            conteo[t.id] > 0 ||
-            t.id === vista ||
-            ["todos", "pendiente", "parcial", "completo"].includes(t.id)
-        ).map((t) => {
-          const activo = vista === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={activo}
-              onClick={() => {
-                setVista(t.id);
-                setVisibles(POR_PAGINA);
-              }}
-              className={`min-w-[104px] shrink-0 rounded-xl border px-4 py-2.5 text-left shadow-sm transition-colors ${
-                activo
-                  ? "border-brand bg-brand/15 ring-1 ring-brand"
-                  : "border-border bg-card hover:bg-muted"
-              }`}
-            >
-              <span
-                className={`block text-2xl font-extrabold leading-none ${t.tono || "text-primary"}`}
+      {/* Estado, búsqueda y orden: quedan a la vista al bajar por la lista. */}
+      <div className="space-y-3 bg-background pb-2 lg:sticky lg:top-[76px] lg:z-30">
+        <div
+          role="group"
+          aria-label="Filtrar por estado"
+          className="flex gap-2 overflow-x-auto pb-1"
+        >
+          {TABS_ESTADO.filter(
+            (t) =>
+              conteo[t.id] > 0 ||
+              estadosSel.has(t.id) ||
+              ESTADOS_POR_ATENDER.includes(t.id)
+          ).map((t) => {
+            const activo = estadosSel.has(t.id);
+            return (
+              <button
+                key={t.id}
+                type="button"
+                aria-pressed={activo}
+                onClick={() => alternarEstado(t.id)}
+                className={`${chipClase(activo)} min-w-[104px]`}
               >
-                {conteo[t.id]}
-              </span>
-              <span className="mt-1 block text-xs font-semibold text-muted-foreground">
-                {t.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+                <span
+                  className={`block text-2xl font-extrabold leading-none ${t.tono}`}
+                >
+                  {conteo[t.id]}
+                </span>
+                <span className="mt-1 block text-xs font-semibold text-muted-foreground">
+                  {t.label}
+                </span>
+              </button>
+            );
+          })}
+          <span className="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden />
+          {(
+            [
+              {
+                id: "urgentes",
+                label: "Urgentes",
+                activo: soloUrgentes,
+                alternar: () => setSoloUrgentes((v) => !v),
+              },
+              {
+                id: "atrasados",
+                label: "Atrasados",
+                activo: soloAtrasados,
+                alternar: () => setSoloAtrasados((v) => !v),
+              },
+            ] as const
+          )
+            .filter((a) => conteo[a.id] > 0 || a.activo)
+            .map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                aria-pressed={a.activo}
+                onClick={() => {
+                  a.alternar();
+                  setVisibles(POR_PAGINA);
+                }}
+                className={`${chipClase(a.activo)} min-w-[104px]`}
+              >
+                <span className="block text-2xl font-extrabold leading-none text-destructive">
+                  {conteo[a.id]}
+                </span>
+                <span className="mt-1 block text-xs font-semibold text-muted-foreground">
+                  {a.label}
+                </span>
+              </button>
+            ))}
+        </div>
 
-      {/* Filtros */}
-      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
-          <label className="sm:col-span-2 lg:col-span-4">
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-3 shadow-sm">
+          <label className="min-w-[220px] flex-1">
             <span className={labelClass}>Buscar</span>
             <input
               type="search"
@@ -576,37 +648,7 @@ export default function MisPedidosPanel() {
               }}
             />
           </label>
-          <label className="lg:col-span-2">
-            <span className={labelClass}>Solicitante</span>
-            <select
-              className={fieldClass}
-              value={fSolicitante}
-              onChange={(e) => setFSolicitante(e.target.value)}
-            >
-              <option value="">Todos</option>
-              {opciones.solicitantes.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="lg:col-span-3">
-            <span className={labelClass}>Centro de negocio</span>
-            <select
-              className={fieldClass}
-              value={fCentro}
-              onChange={(e) => setFCentro(e.target.value)}
-            >
-              <option value="">Todos</option>
-              {opciones.centros.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="lg:col-span-3">
+          <label className="w-full sm:w-64">
             <span className={labelClass}>Ordenar por</span>
             <select
               className={fieldClass}
@@ -619,74 +661,132 @@ export default function MisPedidosPanel() {
               <option value="urgentes">Urgentes primero</option>
             </select>
           </label>
-          <label className="lg:col-span-2">
-            <span className={labelClass}>Pedido desde</span>
-            <input
-              type="date"
-              className={fieldClass}
-              value={desde}
-              onChange={(e) => setDesde(e.target.value)}
-            />
-          </label>
-          <label className="lg:col-span-2">
-            <span className={labelClass}>Pedido hasta</span>
-            <input
-              type="date"
-              className={fieldClass}
-              value={hasta}
-              onChange={(e) => setHasta(e.target.value)}
-            />
-          </label>
-          <label className="lg:col-span-3">
-            <span className={labelClass}>Etiqueta</span>
-            <select
-              className={fieldClass}
-              value={fEtiqueta}
-              onChange={(e) => setFEtiqueta(e.target.value)}
-            >
-              <option value="">Todas</option>
-              {opciones.etiquetas.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-5 lg:justify-end">
-            {hayFiltros && (
-              <button
-                type="button"
-                onClick={limpiar}
-                className="inline-flex h-10 items-center rounded-lg px-3 text-sm font-semibold text-accent hover:underline"
-              >
-                Limpiar filtros
-              </button>
+          <button
+            type="button"
+            aria-expanded={filtrosAbiertos}
+            onClick={() => setFiltrosAbiertos((v) => !v)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted"
+          >
+            Filtros
+            {nFiltrosExtra > 0 && (
+              <span className="rounded-full bg-brand px-1.5 text-xs font-bold text-brand-foreground">
+                {nFiltrosExtra}
+              </span>
             )}
-            <button
-              type="button"
-              onClick={() =>
-                setAbiertos(
-                  todosAbiertos
-                    ? new Set()
-                    : new Set(mostrados.map((p) => p.pedidoId))
-                )
-              }
-              disabled={mostrados.length === 0}
-              className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
-            >
-              {todosAbiertos ? "Contraer todos" : "Expandir todos"}
-            </button>
-            <button
-              type="button"
-              onClick={actualizar}
-              disabled={cargando}
-              className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
-            >
-              {cargando ? "Actualizando…" : "Actualizar"}
-            </button>
-          </div>
+            <span aria-hidden className="text-xs text-muted-foreground">
+              {filtrosAbiertos ? "▲" : "▼"}
+            </span>
+          </button>
         </div>
       </div>
+
+      {filtrosAbiertos && (
+        <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label>
+              <span className={labelClass}>Solicitante</span>
+              <select
+                className={fieldClass}
+                value={fSolicitante}
+                onChange={(e) => setFSolicitante(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {opciones.solicitantes.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className={labelClass}>Centro de negocio</span>
+              <select
+                className={fieldClass}
+                value={fCentro}
+                onChange={(e) => setFCentro(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {opciones.centros.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className={labelClass}>Etiqueta</span>
+              <select
+                className={fieldClass}
+                value={fEtiqueta}
+                onChange={(e) => setFEtiqueta(e.target.value)}
+              >
+                <option value="">Todas</option>
+                {opciones.etiquetas.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label>
+              <span className={labelClass}>Pedido desde</span>
+              <input
+                type="date"
+                className={`${fieldClass} w-44`}
+                value={desde}
+                onChange={(e) => setDesde(e.target.value)}
+              />
+            </label>
+            <label>
+              <span className={labelClass}>Pedido hasta</span>
+              <input
+                type="date"
+                className={`${fieldClass} w-44`}
+                value={hasta}
+                onChange={(e) => setHasta(e.target.value)}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: "Últimos 7 días", d: sumaDias(hoy, -7), h: "" },
+                { label: "Últimos 30 días", d: sumaDias(hoy, -30), h: "" },
+                { label: "Este mes", d: `${hoy.slice(0, 8)}01`, h: "" },
+              ].map((r) => (
+                <button
+                  key={r.label}
+                  type="button"
+                  onClick={() => {
+                    setDesde(r.d);
+                    setHasta(r.h);
+                  }}
+                  className={`inline-flex h-10 items-center rounded-lg border px-3 text-sm font-semibold shadow-sm transition-colors ${
+                    desde === r.d && hasta === r.h
+                      ? "border-brand bg-brand/15 text-primary"
+                      : "border-border bg-card text-primary hover:bg-muted"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+              {(desde || hasta) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDesde("");
+                    setHasta("");
+                  }}
+                  className="inline-flex h-10 items-center rounded-lg px-3 text-sm font-semibold text-accent hover:underline"
+                >
+                  Quitar fechas
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <p role="alert" className="text-sm font-medium text-destructive">
@@ -697,7 +797,7 @@ export default function MisPedidosPanel() {
         <p className="text-sm text-muted-foreground">Cargando pedidos…</p>
       )}
       {!cargando && !error && (
-        <p className="flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
           <span>
             {lista.length === pedidos.length
               ? `${lista.length} pedido${lista.length === 1 ? "" : "s"}`
@@ -720,7 +820,40 @@ export default function MisPedidosPanel() {
                 : "Seleccionar visibles"}
             </button>
           )}
-        </p>
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            {hayFiltros && (
+              <button
+                type="button"
+                onClick={limpiar}
+                className="font-semibold text-accent hover:underline"
+              >
+                Restablecer filtros
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                setAbiertos(
+                  todosAbiertos
+                    ? new Set()
+                    : new Set(mostrados.map((p) => p.pedidoId))
+                )
+              }
+              disabled={mostrados.length === 0}
+              className="inline-flex h-8 items-center rounded-lg border border-border bg-card px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              {todosAbiertos ? "Contraer todos" : "Expandir todos"}
+            </button>
+            <button
+              type="button"
+              onClick={actualizar}
+              disabled={cargando}
+              className="inline-flex h-8 items-center rounded-lg border border-border bg-card px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              Actualizar
+            </button>
+          </span>
+        </div>
       )}
       {!cargando && !error && lista.length === 0 && (
         <p className="rounded-xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
