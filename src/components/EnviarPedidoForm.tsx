@@ -1334,17 +1334,22 @@ export default function EnviarPedidoForm({
       : correoActual;
     // Los archivos que no caben en el correo se suben a Drive y van como enlace.
     const { correo: porCorreo, drive: porDrive } = repartirAdjuntos(adjuntos);
-    if (resultado.ok && googleEmail && porDrive.length) {
+    if (resultado.ok && googleEmail && adjuntos.length) {
       const enlaces: string[] = [];
       const fallidos: string[] = [];
-      for (const f of porDrive) {
+      // Todos los archivos quedan en la carpeta del pedido; solo los que no
+      // caben en el correo van además como enlace.
+      for (const f of adjuntos) {
+        const soloEnlace = porDrive.includes(f);
         try {
           const id = await subirADrive(resultado.folio, f);
-          enlaces.push(
-            `- ${f.name}: ${window.location.origin}/api/pedidos/chat/archivo?folio=${resultado.folio}&id=${id}`
-          );
+          if (soloEnlace) {
+            enlaces.push(
+              `- ${f.name}: ${window.location.origin}/api/pedidos/chat/archivo?folio=${resultado.folio}&id=${id}`
+            );
+          }
         } catch {
-          fallidos.push(f.name);
+          if (soloEnlace) fallidos.push(f.name);
         }
       }
       const bloque = [
@@ -1355,15 +1360,17 @@ export default function EnviarPedidoForm({
           ? [`No se pudieron subir: ${fallidos.join(", ")}. Se enviarán por separado.`]
           : []),
       ].join("\n");
-      const cuerpo = correoFinal.cuerpoCorreo;
-      const i = cuerpo.lastIndexOf("\n\nSaludos,");
-      correoFinal = {
-        ...correoFinal,
-        cuerpoCorreo:
-          i >= 0
-            ? `${cuerpo.slice(0, i)}\n\n${bloque}${cuerpo.slice(i)}`
-            : `${cuerpo}\n\n${bloque}`,
-      };
+      if (bloque) {
+        const cuerpo = correoFinal.cuerpoCorreo;
+        const i = cuerpo.lastIndexOf("\n\nSaludos,");
+        correoFinal = {
+          ...correoFinal,
+          cuerpoCorreo:
+            i >= 0
+              ? `${cuerpo.slice(0, i)}\n\n${bloque}${cuerpo.slice(i)}`
+              : `${cuerpo}\n\n${bloque}`,
+        };
+      }
     }
     setRegistro(resultado);
     setRegistrando(false);
