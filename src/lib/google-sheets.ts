@@ -246,3 +246,58 @@ export async function ensureSheet(
     );
   }
 }
+
+/**
+ * Amplía la grilla de una pestaña hasta tener al menos `columnas` columnas.
+ * Las pestañas nuevas nacen con 26 (A..Z): escribir más allá falla con
+ * «exceeds grid limits».
+ */
+export async function asegurarColumnas(
+  spreadsheetId: string,
+  sheetTitle: string,
+  columnas: number
+): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(
+    `${API}/${spreadsheetId}?fields=sheets.properties(sheetId,title,gridProperties.columnCount)`,
+    { headers, cache: "no-store" }
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Error al leer la grilla del spreadsheet (${res.status}): ${await res.text()}`
+    );
+  }
+  const meta = (await res.json()) as {
+    sheets: {
+      properties: {
+        sheetId: number;
+        title: string;
+        gridProperties?: { columnCount?: number };
+      };
+    }[];
+  };
+  const sheet = meta.sheets.find((s) => s.properties.title === sheetTitle);
+  if (!sheet) throw new Error(`No existe la pestaña "${sheetTitle}".`);
+  const actuales = sheet.properties.gridProperties?.columnCount ?? 26;
+  if (actuales >= columnas) return;
+  const up = await fetch(`${API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: [
+        {
+          appendDimension: {
+            sheetId: sheet.properties.sheetId,
+            dimension: "COLUMNS",
+            length: columnas - actuales,
+          },
+        },
+      ],
+    }),
+  });
+  if (!up.ok) {
+    throw new Error(
+      `Error al ampliar las columnas de "${sheetTitle}" (${up.status}): ${await up.text()}`
+    );
+  }
+}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
 import {
   AVISO_RECEPCION,
+  ESTADOS_OC_ASOCIABLES,
   ambienteDefontana,
   crearConsumoInterno,
   crearParteEntradaCostoDirecto,
@@ -13,6 +14,7 @@ import {
 import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
 import {
   articulosSheetId,
+  asegurarColumnas,
   batchWriteRanges,
   readRange,
 } from "@/lib/google-sheets";
@@ -28,7 +30,11 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : String(v ?? "").
  * Flujo de inventario en Defontana para artículos ya recibidos de un pedido;
  * deja los folios en la columna «Consumo interno».
  *
- * Body: { pedidoId, bodega, accion, oc, factura (solo pe_cd), lineas: [{ fila, cantidad, costoUnitario }] }
+ * Body: { pedidoId, bodega, accion, oc, factura, lineas: [{ fila, cantidad, costoUnitario }] }
+ *  - factura: N° de la factura con que se recepcionan los artículos. Obligatoria
+ *    al recepcionar una OC (rec, rec_ci); opcional en ci y pe_cd. Queda en la glosa
+ *    del consumo interno y en la marca de la planilla; en pe_cd además es el
+ *    documento de referencia del parte.
  *  - rec_ci : recepciona la OC (total o parcial; genera el parte de entrada) y
  *             enseguida hace el consumo interno de lo recepcionado. Exige OC.
  *  - rec    : solo recepciona la OC (el material queda en stock). Exige OC.
@@ -86,13 +92,25 @@ export async function POST(request: Request) {
     );
   }
   const facturaTexto = str(body.factura);
-  const facturaNumero = facturaTexto === "" || !conEntradaDirecta ? undefined : Number(facturaTexto);
+  const facturaNumero = facturaTexto === "" ? undefined : Number(facturaTexto);
   if (
     facturaNumero !== undefined &&
     (!Number.isInteger(facturaNumero) || facturaNumero <= 0 || facturaNumero > 99_999_999)
   ) {
     return NextResponse.json(
       { error: "El N° de factura debe ser un número entero." },
+      { status: 400 }
+    );
+  }
+  if (conRecepcionOC && facturaNumero === undefined) {
+    return NextResponse.json(
+      { error: "Indica el N° de la factura con que se recepcionan los artículos." },
+      { status: 400 }
+    );
+  }
+  if (ocNumero !== undefined && facturaNumero === undefined) {
+    return NextResponse.json(
+      { error: "Indica primero el N° de factura: la OC se elige a partir de la factura." },
       { status: 400 }
     );
   }
@@ -136,7 +154,7 @@ export async function POST(request: Request) {
 
   try {
     const sheetId = articulosSheetId();
-    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Z`);
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:AA`);
     const delPedido = rows.filter((r) => str(r[0]) === pedidoId);
     if (delPedido.length === 0) {
       return NextResponse.json({ error: "Pedido no encontrado." }, { status: 404 });
@@ -224,6 +242,40 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    // Una OC solo puede estar asociada a un pedido; y un artículo ya asociado
+    // a otra OC no se mueve a ésta desde aquí (se cambia con «Asociar OC»).
+    if (oc) {
+      const otro = rows.find(
+        (r) => str(r[26]) === String(oc.numero) && str(r[0]) !== pedidoId
+      );
+      if (otro) {
+        return NextResponse.json(
+          {
+            error: `La OC ${oc.numero} está asociada al pedido ${str(otro[0])}. Una OC solo puede asociarse a un pedido.`,
+          },
+          { status: 409 }
+        );
+      }
+      if (conRecepcionOC && !ESTADOS_OC_ASOCIABLES.includes(oc.estadoTexto)) {
+        return NextResponse.json(
+          {
+            error: `La OC ${oc.numero} está «${oc.estadoTexto}»: solo se recepciona con la OC en estado ${ESTADOS_OC_ASOCIABLES.join(" o ")}.`,
+          },
+          { status: 409 }
+        );
+      }
+      const otraOC = detalle
+        .map((d) => ({ d, asociada: str(rows[d.fila - 2]?.[26]) }))
+        .filter((x) => x.asociada !== "" && x.asociada !== String(oc.numero));
+      if (otraOC.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Asociados a otra OC: ${otraOC.map((x) => `«${x.d.nombre}» (OC ${x.asociada})`).join(", ")}. Elige esa OC o cambia la asociación.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
     const pedido = detalle.map((d) => ({
       codigo: d.codigo,
       nombre: d.nombre,
@@ -253,7 +305,15 @@ export async function POST(request: Request) {
     const fecha = new Date().toLocaleDateString("sv-SE", {
       timeZone: "America/Santiago",
     });
-    const glosa = [pedidoId, str(cabecera[15])].filter(Boolean).join(" - ").slice(0, 200);
+    const glosa = [
+      pedidoId,
+      facturaNumero ? `Fact. ${facturaNumero}` : "",
+      str(cabecera[15]),
+    ]
+      .filter(Boolean)
+      .join(" - ")
+      .slice(0, 200);
+    const sufijoFactura = facturaNumero ? ` · FC-${facturaNumero}` : "";
     const anotaciones = new Map<number, string>(detalle.map((d) => [d.fila, d.previo]));
     const anotar = (
       filas: typeof detalle,
@@ -266,14 +326,22 @@ export async function POST(request: Request) {
         );
       }
     };
-    const escribir = () =>
-      batchWriteRanges(
-        sheetId,
-        detalle.map((d) => ({
+    const escribir = async () => {
+      // Si se usó una OC, los artículos quedan asociados a ella (columna AA).
+      if (oc) await asegurarColumnas(sheetId, PEDIDOS_SHEET, 27);
+      await batchWriteRanges(sheetId, [
+        ...detalle.map((d) => ({
           range: `${PEDIDOS_SHEET}!R${d.fila}`,
           values: [[anotaciones.get(d.fila) ?? ""]],
-        }))
-      );
+        })),
+        ...(oc
+          ? detalle.map((d) => ({
+              range: `${PEDIDOS_SHEET}!AA${d.fila}`,
+              values: [[String(oc.numero)]],
+            }))
+          : []),
+      ]);
+    };
 
     let folioRecepcion: number | undefined;
     let partes: number[] = [];
@@ -286,7 +354,7 @@ export async function POST(request: Request) {
       folioRecepcion = r.recepcion;
       partes = r.partes;
       const etiqueta = `REC-${r.recepcion}${partes.length ? `/PE-${partes.join("+")}` : ""}`;
-      anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega})`);
+      anotar(detalle, (d) => `${etiqueta} (${d.cantidad} · ${bodega}${sufijoFactura})`);
       // Se anota ya: si luego falla el consumo, la recepción queda registrada.
       try {
         await escribir();
@@ -391,7 +459,7 @@ export async function POST(request: Request) {
           { status: 502 }
         );
       }
-      anotar(aConsumir, (d) => `CI-${folioConsumo} (${d.cantidad} · ${bodega})`);
+      anotar(aConsumir, (d) => `CI-${folioConsumo} (${d.cantidad} · ${bodega}${sufijoFactura})`);
       // El documento ya existe en Defontana: si falla la planilla, el error
       // incluye el folio para no duplicarlo a ciegas.
       try {

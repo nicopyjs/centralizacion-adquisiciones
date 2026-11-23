@@ -365,8 +365,37 @@ export type OrdenCompra = {
   serie: string;
   proveedorRut: string;
   proveedorNombre: string;
+  /** "YYYY-MM-DD" */
+  fecha: string;
+  /** Estado como lo muestra Defontana en el listado: Aprobado, Parcialmente Recepcionado… */
+  estadoTexto: string;
+  /** Campo personalizado «Código Pedido» de la OC, si Defontana lo trae. */
+  codigoPedido: string;
   lineas: LineaOC[];
 };
+
+/** Estados de OC a los que se puede asociar un pedido (regla de Adquisiciones). */
+export const ESTADOS_OC_ASOCIABLES = ["Aprobado", "Parcialmente Recepcionado"];
+
+/**
+ * Estado en texto a partir de los códigos de PurchaseOrder/Get (verificado en
+ * `replapi` el 2026-11-23 contra el estado del listado): Ingresado = aprobación
+ * pendiente (approveState PC); Anulado = emissionState N; Cerrado = billingState
+ * C; si no, según lo recepcionado (receiptState P / I / C).
+ */
+export function estadoTextoOC(o: {
+  approveState?: string;
+  receiptState?: string;
+  billingState?: string;
+  emissionState?: string;
+}): string {
+  if (o.emissionState === "N") return "Anulado";
+  if (o.approveState !== "AC") return "Ingresado";
+  if (o.billingState === "C") return "Cerrado";
+  if (o.receiptState === "C") return "Completamente Recepcionado";
+  if (o.receiptState === "I") return "Parcialmente Recepcionado";
+  return "Aprobado";
+}
 
 /**
  * Lee una OC de Defontana con proveedor y cuánto se ha recepcionado de cada
@@ -379,6 +408,11 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
       success: boolean;
       purchaseOrderData?: {
         receiptState?: string;
+        approveState?: string;
+        billingState?: string;
+        emissionState?: string;
+        emissionDate?: string;
+        customFields?: { name?: string; value?: string }[] | null;
         series?: string | null;
         providerInfo?: { legalCode?: string; name?: string };
         purchaseOrderDetail?: {
@@ -399,6 +433,12 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
       serie: o.series ?? "",
       proveedorRut: formatearRut(o.providerInfo?.legalCode ?? ""),
       proveedorNombre: o.providerInfo?.name ?? "",
+      fecha: (o.emissionDate ?? "").slice(0, 10),
+      estadoTexto: estadoTextoOC(o),
+      codigoPedido:
+        (o.customFields ?? [])
+          .find((c) => /^c[oó]digo\s*pedido$/i.test((c.name ?? "").trim()))
+          ?.value?.trim() ?? "",
       lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
         linea: d.line,
         codigo: d.productId,
@@ -541,4 +581,56 @@ export async function recepcionarOC(
     if (detail.every((x) => x.isService)) break;
   }
   return { recepcion, partes };
+}
+
+export type OCListada = {
+  numero: number;
+  proveedor: string;
+  rut: string;
+  /** "YYYY-MM-DD" */
+  fecha: string;
+  estado: string;
+  total: string;
+};
+
+/**
+ * OC de un proveedor (por nombre o RUT) de los últimos 12 meses, de la más
+ * reciente a la más antigua. `PurchaseOrder/List` filtra por
+ * `ProviderNameOrLegalCode` (verificado en `replapi` el 2026-11-23).
+ */
+export async function buscarOCsDeProveedor(texto: string): Promise<OCListada[]> {
+  const hoy = new Date();
+  const desde = new Date(hoy.getTime() - 365 * 864e5);
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  const out: OCListada[] = [];
+  for (let pagina = 0; pagina < 4; pagina++) {
+    const r = await llamar<{
+      success: boolean;
+      message?: string | null;
+      totalItems?: number;
+      data?: {
+        number: number;
+        providerName: string;
+        providerLegalCode: string;
+        emissionDate: string;
+        status: string;
+        totalLocalCurrency: string;
+      }[];
+    }>(
+      `/api/PurchaseOrder/List?FromDate=${ymd(desde)}&ToDate=${ymd(hoy)}&ItemsPerPage=100&Page=${pagina}&Status=0&ProviderNameOrLegalCode=${encodeURIComponent(texto)}`
+    );
+    if (!r.success) throw new Error(r.message || "No se pudieron leer las OC.");
+    for (const o of r.data ?? []) {
+      out.push({
+        numero: o.number,
+        proveedor: o.providerName,
+        rut: o.providerLegalCode,
+        fecha: (o.emissionDate ?? "").slice(0, 10),
+        estado: o.status,
+        total: o.totalLocalCurrency,
+      });
+    }
+    if ((r.data?.length ?? 0) < 100) break;
+  }
+  return out.sort((a, b) => b.numero - a.numero);
 }
