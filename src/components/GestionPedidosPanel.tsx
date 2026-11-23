@@ -9,6 +9,7 @@ import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
   AVISO_RECEPCION,
+  ESTADOS_OC_ASOCIABLES,
   problemasPorRecibir,
   problemasRecepcion,
   type LineaOC,
@@ -33,7 +34,12 @@ type PedidoItem = {
   /** Artículo anulado por Adquisiciones: no cuenta como pedido ni se recibe. */
   anulado: boolean;
   motivoAnulacion: string;
+  /** N° de la OC de Defontana asociada a este artículo ("" = en gestión). */
+  ocAsociada: string;
 };
+
+/** Datos de una OC de Defontana, para mostrarla junto al artículo. */
+type InfoOC = { proveedor: string; fecha: string; estado: string } | null;
 
 type PedidoResumen = {
   pedidoId: string;
@@ -1828,6 +1834,22 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               onAlternarTodasLasFilas={alternarTodasLasFilas}
               onAccion={abrirAccion}
               onConsumo={() => setConsumoPedido(pedidoActual.pedidoId)}
+              onOcAsociada={(filas, oc) => {
+                const set = new Set(filas);
+                setPedidos((prev) =>
+                  prev.map((p) =>
+                    p.pedidoId !== pedidoActual.pedidoId
+                      ? p
+                      : {
+                          ...p,
+                          items: p.items.map((x) =>
+                            set.has(x.fila) ? { ...x, ocAsociada: oc } : x
+                          ),
+                        }
+                  )
+                );
+                setSeleccionFilas(new Set());
+              }}
               onAplicarATodos={aplicarCamposEnBloque}
               hayCambiosPendientes={totalCambios > 0}
               onModificar={setModificando}
@@ -2339,6 +2361,9 @@ function DialogoConsumo({
   const [bodega, setBodega] = useState("");
   const [oc, setOc] = useState("");
   const [factura, setFactura] = useState("");
+  // La OC se elige entre las asociadas al pedido; «otra» permite digitar un N°.
+  const [otraOc, setOtraOc] = useState(false);
+  const [ocsPedido, setOcsPedido] = useState<Record<string, InfoOC>>({});
   const [accion, setAccion] = useState<Accion>("rec_ci");
   // «Entra stock» por OC (rec*) o por ingreso directo sin OC (pe_cd, con
   // costo escrito a mano); solo "ci" consume stock que ya existía. pe_cd es
@@ -2363,6 +2388,22 @@ function DialogoConsumo({
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
+  const ocsAsociadas = Array.from(
+    new Set(pedido.items.map((i) => i.ocAsociada).filter(Boolean))
+  ).sort();
+  useEffect(() => {
+    if (ocsAsociadas.length === 0) return;
+    fetch(`/api/pedidos/oc?pedidoId=${encodeURIComponent(pedido.pedidoId)}`, {
+      cache: "no-store",
+    })
+      .then(async (r) => {
+        const d = await r.json();
+        if (r.ok) setOcsPedido(d.ordenes ?? {});
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const recibidos = pedido.items.filter((i) => (i.cantidadRecibida ?? 0) > 0);
   // Tope y valor por defecto: lo recibido menos lo ya recepcionado y/o
   // consumido desde aquí (se puede hacer en partes).
@@ -2374,7 +2415,23 @@ function DialogoConsumo({
       accion === "ci" ? Infinity : rec - yaRecepcionado(i.consumoInterno)
     );
   };
-  const elegibles = recibidos.filter((i) => tope(i) > 0);
+  // Con una OC elegida solo se ofrecen los artículos asociados a ella (si no
+  // hay ninguno asociado, los que no tienen OC) y, si la OC está recepcionada
+  // en parte, solo los que aún están pendientes de recepción en ella.
+  const ocElegida = oc.trim();
+  const hayAsociadosAEsta = recibidos.some((i) => i.ocAsociada === ocElegida);
+  const elegibles = recibidos.filter((i) => {
+    if (tope(i) <= 0) return false;
+    if (ocElegida) {
+      if (i.ocAsociada && i.ocAsociada !== ocElegida) return false;
+      if (hayAsociadosAEsta && i.ocAsociada !== ocElegida) return false;
+    }
+    if (conRecepcionOC && ocInfo?.estado === "ok" && ocInfo.recibidaEstado === "I") {
+      const l = ocInfo.lineas.find((x) => x.codigo === i.codigo);
+      if (l && l.pedida - l.recibida <= 0) return false;
+    }
+    return true;
+  });
   const [cantEditada, setCantEditada] = useState<Record<number, string>>({});
   const cant = (i: (typeof recibidos)[number]) =>
     cantEditada[i.fila] ?? String(tope(i));
@@ -2503,7 +2560,10 @@ function DialogoConsumo({
       ...(conEntradaDirecta ? { costoUnitario: Number(costo(i)) } : {}),
     }));
     if (!bodega) return setError("Elige la bodega.");
-    if (conRecepcionOC && !oc) return setError("Indica el N° de OC que vas a recepcionar.");
+    if (conRecepcionOC && !factura.trim()) {
+      return setError("Indica el N° de la factura con que se recepcionan los artículos.");
+    }
+    if (conRecepcionOC && !oc) return setError("Elige la OC que vas a recepcionar.");
     if (ocBloquea) return setError("Revisa el aviso de la OC antes de continuar.");
     if (lineas.length === 0) return setError("Marca al menos un artículo.");
     for (const l of lineas) {
@@ -2547,7 +2607,7 @@ function DialogoConsumo({
           bodega,
           accion,
           oc: oc.trim(),
-          ...(conEntradaDirecta ? { factura: factura.trim() } : {}),
+          factura: factura.trim(),
           lineas,
         }),
       });
@@ -2635,80 +2695,133 @@ function DialogoConsumo({
           </span>
         </label>
 
-        <label className="mt-4 block">
-          <span className={labelClass}>
-            N° de OC{conRecepcionOC ? "" : " (opcional)"}
-          </span>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={oc}
-            disabled={enviando}
-            onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
-            placeholder="Ej.: 4331"
-            className={inputClass}
-          />
-          {conEntradaDirecta && (
-            <span className="mt-1 block text-xs text-muted-foreground">
-              Si la indicas, se autocompletan bodega y costo por artículo desde
-              la OC (y queda anotada para trazabilidad), pero Defontana NO la
-              marca como recepcionada: eso solo pasa con «Recepcionar OC».
-            </span>
-          )}
-          {ocInfo?.estado === "cargando" && (
-            <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
-          )}
-          {ocInfo?.estado === "inexistente" && (
-            <p className="mt-1 text-xs font-semibold text-destructive">
-              La OC {oc} no existe en Defontana.
-            </p>
-          )}
-          {ocInfo?.estado === "error" && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              No se pudo consultar la OC; se validará al registrar.
-            </p>
-          )}
-          {ocInfo?.estado === "ok" && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              OC {oc} · {ocInfo.proveedor || "sin proveedor"}
-              {!conEntradaDirecta &&
-                ` · ${
-                  ocInfo.recibidaEstado === "C"
-                    ? "recepcionada completa"
-                    : ocInfo.recibidaEstado === "I"
-                      ? "recepcionada parcial"
-                      : "sin recepcionar"
-                }`}
-            </p>
-          )}
-          {problemasOC.length > 0 && (
-            <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
-              OC {oc}: {problemasOC.join("; ")}.
-              {!conRecepcionOC && ` ${AVISO_RECEPCION}`}
-            </p>
-          )}
-        </label>
-
-        {conEntradaDirecta && (
-          <label className="mt-4 block">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="consumo-oc" className={labelClass}>
+              N° DE OC{conRecepcionOC ? "" : " (opcional)"}
+            </label>
+            <select
+              id="consumo-oc"
+              value={otraOc ? "__otra" : oc}
+              disabled={enviando || !factura.trim()}
+              onChange={(e) => {
+                if (e.target.value === "__otra") {
+                  setOtraOc(true);
+                  setOc("");
+                } else {
+                  setOtraOc(false);
+                  setOc(e.target.value);
+                }
+                setError(null);
+              }}
+              className={`${inputClass} disabled:opacity-60`}
+            >
+              <option value="">
+                {factura.trim() ? "Elige la OC de la factura" : "Primero el N° de factura"}
+              </option>
+              {ocsAsociadas
+                .filter((n) => {
+                  const info = ocsPedido[n];
+                  return (
+                    !conRecepcionOC ||
+                    !info ||
+                    ESTADOS_OC_ASOCIABLES.includes(info.estado)
+                  );
+                })
+                .map((n) => {
+                  const info = ocsPedido[n];
+                  return (
+                    <option key={n} value={n}>
+                      OC {n}
+                      {info ? ` · ${info.proveedor} · ${info.estado}` : ""}
+                    </option>
+                  );
+                })}
+              <option value="__otra">Otra OC (digitar el N°)…</option>
+            </select>
+            {otraOc && (
+              <input
+                type="text"
+                inputMode="numeric"
+                value={oc}
+                disabled={enviando || !factura.trim()}
+                onChange={(e) => setOc(e.target.value.replace(/\D/g, ""))}
+                placeholder="Ej.: 4331"
+                aria-label="N° de OC"
+                className={`${inputClass} mt-2`}
+              />
+            )}
+          </div>
+          <label className="block">
             <span className={labelClass}>
-              N° de factura electrónica de compra (opcional)
+              No. DE FACTURA{conRecepcionOC ? "" : " (opcional)"}
             </span>
             <input
               type="text"
               inputMode="numeric"
               value={factura}
               disabled={enviando}
-              onChange={(e) => setFactura(e.target.value.replace(/\D/g, ""))}
-              placeholder="Ej.: 555"
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "");
+                setFactura(v);
+                if (!v) {
+                  setOc("");
+                  setOtraOc(false);
+                }
+              }}
+              placeholder="Ej.: 4331"
               className={inputClass}
             />
-            <span className="mt-1 block text-xs text-muted-foreground">
-              Queda como documento de referencia del parte («Factura Electrónica
-              Compra» + este número). Si la indicas, reemplaza a la OC como
-              referencia (el documento admite una sola).
-            </span>
           </label>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Ingresa la factura con que se recepcionan los artículos (física o en PDF):
+          la OC se habilita después, para elegir la que indica la factura. Solo
+          aparecen OC asociadas a este pedido
+          {conRecepcionOC ? ` en estado ${ESTADOS_OC_ASOCIABLES.join(" o ")}` : ""}
+          ; si la OC está recepcionada en parte, se muestran solo los artículos
+          pendientes de recepción.
+          {conEntradaDirecta &&
+            " En el parte de entrada, la factura queda como documento de referencia («Factura Electrónica Compra» + este número) y reemplaza a la OC en esa referencia."}
+        </p>
+        {conEntradaDirecta && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Si indicas la OC, se autocompletan bodega y costo por artículo desde ella
+            (y queda anotada para trazabilidad), pero Defontana NO la marca como
+            recepcionada: eso solo pasa con «Recepcionar OC».
+          </p>
+        )}
+        {ocInfo?.estado === "cargando" && (
+          <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
+        )}
+        {ocInfo?.estado === "inexistente" && (
+          <p className="mt-1 text-xs font-semibold text-destructive">
+            La OC {oc} no existe en Defontana.
+          </p>
+        )}
+        {ocInfo?.estado === "error" && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            No se pudo consultar la OC; se validará al registrar.
+          </p>
+        )}
+        {ocInfo?.estado === "ok" && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            OC {oc} · {ocInfo.proveedor || "sin proveedor"}
+            {!conEntradaDirecta &&
+              ` · ${
+                ocInfo.recibidaEstado === "C"
+                  ? "recepcionada completa"
+                  : ocInfo.recibidaEstado === "I"
+                    ? "recepcionada parcial"
+                    : "sin recepcionar"
+              }`}
+          </p>
+        )}
+        {problemasOC.length > 0 && (
+          <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+            OC {oc}: {problemasOC.join("; ")}.
+            {!conRecepcionOC && ` ${AVISO_RECEPCION}`}
+          </p>
         )}
 
         {ambiente === "pruebas" && conEntradaDirecta && (
@@ -2891,6 +3004,378 @@ function DialogoConsumo({
                   : accion === "pe_cd"
                     ? "Ingresar (gasto directo)"
                     : "Registrar consumo interno"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type OCBusqueda = {
+  numero: number;
+  proveedor: string;
+  rut: string;
+  fecha: string;
+  estado: string;
+  total: string;
+  otroPedido: string | null;
+};
+
+function fechaDMA(ymd: string): string {
+  return ymd ? ymd.split("-").reverse().join("/") : "";
+}
+
+/**
+ * Asocia una OC de Defontana a los artículos marcados del pedido. Reglas de
+ * Adquisiciones: un pedido puede tener varias OC, pero una OC solo puede estar
+ * asociada a un pedido, y solo si está Aprobada o Parcialmente Recepcionada.
+ */
+function DialogoAsociarOC({
+  pedidoId,
+  items,
+  onCerrar,
+  onGuardado,
+}: {
+  pedidoId: string;
+  items: PedidoItem[];
+  onCerrar: () => void;
+  onGuardado: (oc: string) => void;
+}) {
+  const caja = useRef<HTMLDivElement>(null);
+  const [proveedor, setProveedor] = useState("");
+  const [resultados, setResultados] = useState<OCBusqueda[] | null>(null);
+  const [buscando, setBuscando] = useState(false);
+  const [numero, setNumero] = useState("");
+  const [info, setInfo] = useState<
+    | { numero: string; estado: "cargando" | "inexistente" | "error" }
+    | {
+        numero: string;
+        estado: "ok";
+        proveedor: string;
+        fecha: string;
+        estadoOC: string;
+        asociable: boolean;
+        otroPedido: string | null;
+        codigos: string[];
+      }
+    | null
+  >(null);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => caja.current?.focus(), []);
+
+  // Búsqueda por proveedor (nombre o RUT) con retardo mientras se escribe.
+  useEffect(() => {
+    const texto = proveedor.trim();
+    if (texto.length < 2) return;
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      setBuscando(true);
+      fetch(
+        `/api/pedidos/oc?proveedor=${encodeURIComponent(texto)}&pedidoId=${encodeURIComponent(pedidoId)}`,
+        { cache: "no-store", signal: ctl.signal }
+      )
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "No se pudo buscar.");
+          setResultados(d.ordenes ?? []);
+          setError(null);
+        })
+        .catch((e) => {
+          if (e?.name !== "AbortError") {
+            setResultados(null);
+            setError(e instanceof Error ? e.message : "Error de red.");
+          }
+        })
+        .finally(() => {
+          if (!ctl.signal.aborted) setBuscando(false);
+        });
+    }, 450);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [proveedor, pedidoId]);
+
+  // Datos de la OC elegida (fecha, estado, si se puede asociar).
+  useEffect(() => {
+    if (!numero) return;
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      fetch(
+        `/api/pedidos/oc?numero=${numero}&pedidoId=${encodeURIComponent(pedidoId)}`,
+        { cache: "no-store", signal: ctl.signal }
+      )
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error);
+          setInfo(
+            d.existe
+              ? {
+                  numero,
+                  estado: "ok",
+                  proveedor: d.proveedor ?? "",
+                  fecha: d.fecha ?? "",
+                  estadoOC: d.estado ?? "",
+                  asociable: d.asociable === true,
+                  otroPedido: d.otroPedido ?? null,
+                  codigos: d.codigos ?? [],
+                }
+              : { numero, estado: "inexistente" }
+          );
+        })
+        .catch((e) => {
+          if (e?.name !== "AbortError") setInfo({ numero, estado: "error" });
+        });
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [numero, pedidoId]);
+
+  const infoActual = !numero
+    ? null
+    : info?.numero === numero
+      ? info
+      : ({ numero, estado: "cargando" } as const);
+  const faltan =
+    infoActual?.estado === "ok"
+      ? items.filter((i) => !infoActual.codigos.includes(i.codigo))
+      : [];
+  const yaAsociadas = items.filter((i) => i.ocAsociada);
+  const puedeGuardar =
+    infoActual?.estado === "ok" &&
+    infoActual.asociable &&
+    !infoActual.otroPedido &&
+    faltan.length === 0 &&
+    !enviando;
+
+  async function guardar(oc: string) {
+    setEnviando(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/pedidos/oc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pedidoId, oc, filas: items.map((i) => i.fila) }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "No se pudo asociar la OC.");
+      onGuardado(oc);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error de red.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  const inputClass =
+    "h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40";
+  const grupos = new Map<string, OCBusqueda[]>();
+  for (const o of resultados ?? []) {
+    const k = `${o.proveedor} (${o.rut})`;
+    grupos.set(k, [...(grupos.get(k) ?? []), o]);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) onCerrar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) onCerrar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Asociar orden de compra a los artículos seleccionados"
+        className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold uppercase tracking-wide text-primary">
+          Asociar orden de compra a los artículos seleccionados del pedido{" "}
+          {folioCorto(pedidoId)}
+        </h3>
+        <ul className="mt-2 max-h-24 overflow-y-auto rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs text-card-foreground">
+          {items.map((i) => (
+            <li key={i.fila} className="truncate">
+              {i.nombre}
+              {i.ocAsociada ? (
+                <span className="text-muted-foreground"> · hoy en OC {i.ocAsociada}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+
+        <label className="mt-4 block">
+          <span className={labelClass}>Buscar proveedor</span>
+          <input
+            type="text"
+            value={proveedor}
+            disabled={enviando}
+            onChange={(e) => {
+              setProveedor(e.target.value);
+              if (e.target.value.trim().length < 2) setResultados(null);
+            }}
+            placeholder="Nombre o RUT del proveedor"
+            className={inputClass}
+          />
+        </label>
+        {buscando && (
+          <p className="mt-1 text-xs text-muted-foreground">Buscando OC en Defontana…</p>
+        )}
+        {resultados && !buscando && resultados.length === 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Sin OC {ESTADOS_OC_ASOCIABLES.join(" o ")} para «{proveedor.trim()}» en los
+            últimos 12 meses.
+          </p>
+        )}
+        {resultados && resultados.length > 0 && (
+          <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border">
+            {Array.from(grupos.entries()).map(([prov, ocs]) => (
+              <div key={prov}>
+                <p className="sticky top-0 bg-muted px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-secondary">
+                  {prov}
+                </p>
+                <ul className="divide-y divide-border">
+                  {ocs.map((o) => (
+                    <li key={o.numero}>
+                      <button
+                        type="button"
+                        disabled={enviando || !!o.otroPedido}
+                        onClick={() => {
+                          setNumero(String(o.numero));
+                          setError(null);
+                        }}
+                        className={`flex w-full flex-wrap items-center gap-x-3 px-3 py-1.5 text-left text-sm hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50 ${
+                          numero === String(o.numero) ? "bg-accent/10" : ""
+                        }`}
+                      >
+                        <span className="font-bold text-primary">OC {o.numero}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {fechaDMA(o.fecha)} · {o.estado} · {o.total}
+                        </span>
+                        {o.otroPedido && (
+                          <span className="text-xs font-semibold text-destructive">
+                            ya asociada al pedido {o.otroPedido}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="mt-4 text-center text-xs font-bold uppercase tracking-wide text-secondary">
+          Asociar orden de compra
+        </p>
+        <div className="mt-2 grid grid-cols-[5rem_1fr] items-center gap-x-3 gap-y-2 text-sm">
+          <label htmlFor="oc-numero" className="font-semibold text-card-foreground">
+            Número
+          </label>
+          <input
+            id="oc-numero"
+            type="text"
+            inputMode="numeric"
+            value={numero}
+            disabled={enviando}
+            onChange={(e) => {
+              setNumero(e.target.value.replace(/\D/g, ""));
+              setError(null);
+            }}
+            placeholder="Ej.: 4759"
+            className={`${inputClass} max-w-[10rem]`}
+          />
+          <span className="font-semibold text-card-foreground">Fecha</span>
+          <span className="text-card-foreground">
+            {infoActual?.estado === "ok" ? fechaDMA(infoActual.fecha) : "—"}
+          </span>
+          <span className="font-semibold text-card-foreground">Estado</span>
+          <span className="text-card-foreground">
+            {infoActual?.estado === "ok" ? infoActual.estadoOC : "—"}
+          </span>
+        </div>
+        {infoActual?.estado === "cargando" && (
+          <p className="mt-1 text-xs text-muted-foreground">Consultando la OC en Defontana…</p>
+        )}
+        {infoActual?.estado === "inexistente" && (
+          <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+            La OC {numero} no existe en Defontana.
+          </p>
+        )}
+        {infoActual?.estado === "error" && (
+          <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+            No se pudo consultar la OC. Reintenta.
+          </p>
+        )}
+        {infoActual?.estado === "ok" && (
+          <>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Proveedor: {infoActual.proveedor || "—"}
+            </p>
+            {!infoActual.asociable && (
+              <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+                La OC está «{infoActual.estadoOC}»: solo se asocian OC{" "}
+                {ESTADOS_OC_ASOCIABLES.join(" o ")}.
+              </p>
+            )}
+            {infoActual.otroPedido && (
+              <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+                La OC ya está asociada al pedido {infoActual.otroPedido}: una OC solo
+                puede asociarse a un pedido.
+              </p>
+            )}
+            {faltan.length > 0 && (
+              <p role="alert" className="mt-1 text-xs font-semibold text-destructive">
+                La OC no incluye: {faltan.map((i) => `«${i.nombre}»`).join(", ")}.
+              </p>
+            )}
+          </>
+        )}
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {yaAsociadas.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void guardar("")}
+              disabled={enviando}
+              className="mr-auto inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-destructive hover:bg-destructive/5 disabled:opacity-50"
+            >
+              Quitar OC
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onCerrar}
+            disabled={enviando}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => void guardar(numero)}
+            disabled={!puedeGuardar}
+            className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
+          >
+            {enviando ? "Asociando…" : "Asociar OC"}
           </button>
         </div>
       </div>
@@ -3440,8 +3925,11 @@ function Detalle({
   onEliminar,
   onAnularLinea,
   onReactivarLinea,
+  onOcAsociada,
 }: {
   pedido: PedidoResumen;
+  /** Se asoció (o quitó, con "") una OC a estas filas. */
+  onOcAsociada: (filas: number[], oc: string) => void;
   ediciones: Record<number, LineaEdit>;
   guardando: Record<number, boolean>;
   guardado: Record<number, boolean>;
@@ -3482,6 +3970,27 @@ function Detalle({
   const sinCambios = cambios === 0;
   const abierto = ["pendiente", "parcial"].includes(estadoDe(pedido));
   const [datosAbiertos, setDatosAbiertos] = useState(false);
+  // OC asociadas a los artículos: se leen de Defontana (proveedor, fecha, estado).
+  const [asociando, setAsociando] = useState(false);
+  const [ocInfos, setOcInfos] = useState<Record<string, InfoOC>>({});
+  const ocsAsociadas = Array.from(
+    new Set(pedido.items.map((i) => i.ocAsociada).filter(Boolean))
+  ).sort();
+  const ocsClave = ocsAsociadas.join(",");
+  useEffect(() => {
+    if (!ocsClave) return;
+    const ctl = new AbortController();
+    fetch(`/api/pedidos/oc?pedidoId=${encodeURIComponent(pedido.pedidoId)}`, {
+      cache: "no-store",
+      signal: ctl.signal,
+    })
+      .then(async (r) => {
+        const d = await r.json();
+        if (r.ok) setOcInfos(d.ordenes ?? {});
+      })
+      .catch(() => {});
+    return () => ctl.abort();
+  }, [ocsClave, pedido.pedidoId]);
   // Datos comunes a todo el pedido: se escriben una vez y se copian a cada artículo.
   const [todosPersona, setTodosPersona] = useState("");
   const [todosBodega, setTodosBodega] = useState("");
@@ -3503,6 +4012,7 @@ function Detalle({
   );
   const todasSeleccionadas =
     vigentes.length > 0 && vigentes.every((it) => seleccionFilas.has(it.fila));
+  const seleccionadas = vigentes.filter((it) => seleccionFilas.has(it.fila));
 
   const estado = ESTADOS[estadoDe(pedido)];
   const faltantes = vigentes.filter((it) => {
@@ -3914,7 +4424,44 @@ function Detalle({
           onActividad={onActividad}
         />
         <ReportarCorreo folio={pedido.pedidoId} items={vigentes} />
+        {!bloqueado && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAsociando(true)}
+              disabled={seleccionadas.length === 0}
+              title={
+                seleccionadas.length === 0
+                  ? "Marca los artículos de la tabla que están en la OC"
+                  : "Asociar una orden de compra de Defontana a los artículos marcados"
+              }
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Asociar OC{seleccionadas.length > 0 ? ` (${seleccionadas.length})` : ""}
+            </button>
+            {seleccionadas.length === 0 && (
+              <span className="text-xs text-muted-foreground">
+                Marca los artículos de la tabla para asociarlos a una OC.
+              </span>
+            )}
+          </div>
+        )}
       </div>
+
+      {asociando && (
+        <DialogoAsociarOC
+          pedidoId={pedido.pedidoId}
+          items={seleccionadas}
+          onCerrar={() => setAsociando(false)}
+          onGuardado={(oc) => {
+            setAsociando(false);
+            onOcAsociada(
+              seleccionadas.map((i) => i.fila),
+              oc
+            );
+          }}
+        />
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1340px]">
@@ -3962,24 +4509,25 @@ function Detalle({
               const seleccionada = seleccionFilas.has(it.fila);
               const hoy = hoyYMD();
               const lock = bloqueado || it.anulado;
+              const fondoFila = it.anulado
+                ? "bg-muted/60 opacity-60"
+                : seleccionada
+                  ? "bg-accent/10"
+                  : sucia
+                    ? "bg-accent/5"
+                    : estadoLinea(it) === "completo"
+                      ? "bg-[#bdefd6]"
+                      : estadoLinea(it) === "parcial"
+                        ? "bg-[#fed7aa]"
+                        : estadoLinea(it) === "pendiente"
+                          ? "bg-[#e3e9f2]"
+                          : "";
+              const infoOC = it.ocAsociada ? ocInfos[it.ocAsociada] : undefined;
+              const dato = "font-semibold text-card-foreground";
               return (
+                <Fragment key={it.fila}>
                 <tr
-                  key={it.fila}
-                  className={`border-b border-border/70 align-top last:border-0 max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 ${
-                    it.anulado
-                      ? "bg-muted/60 opacity-60"
-                      : seleccionada
-                      ? "bg-accent/10"
-                      : sucia
-                        ? "bg-accent/5"
-                        : estadoLinea(it) === "completo"
-                          ? "bg-[#bdefd6] hover:bg-[#a9e8c8]"
-                          : estadoLinea(it) === "parcial"
-                            ? "bg-[#fed7aa] hover:bg-[#fdc88a]"
-                            : estadoLinea(it) === "pendiente"
-                              ? "bg-[#e3e9f2] hover:bg-[#d7dfeb]"
-                              : "hover:bg-muted/30"
-                  }`}
+                  className={`align-top max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 lg:border-b-0 ${fondoFila}`}
                 >
                   <td className="py-2 pl-4 pr-1.5 pt-3 max-lg:absolute max-lg:right-3 max-lg:top-3 max-lg:p-0">
                     <input
@@ -4291,6 +4839,39 @@ function Detalle({
                     )}
                   </td>
                 </tr>
+                <tr
+                  className={`border-b border-border/70 last:border-0 max-lg:block max-lg:px-3 max-lg:pb-3 ${fondoFila}`}
+                >
+                  <td colSpan={9} className="px-4 pb-2.5 pt-0 max-lg:block max-lg:p-0">
+                    <p className="flex flex-wrap items-center gap-x-5 gap-y-0.5 rounded-md border border-border/60 bg-card/60 px-3 py-1 text-xs uppercase tracking-wide text-muted-foreground">
+                      <span>
+                        Proveedor:{" "}
+                        <span className={dato}>
+                          {!it.ocAsociada
+                            ? "En gestión"
+                            : infoOC
+                              ? infoOC.proveedor
+                              : infoOC === null
+                                ? "No encontrado"
+                                : "Consultando…"}
+                        </span>
+                      </span>
+                      <span>
+                        OC: <span className={dato}>{it.ocAsociada || "En gestión"}</span>
+                      </span>
+                      <span>
+                        Fecha:{" "}
+                        <span className={dato}>
+                          {infoOC?.fecha ? infoOC.fecha.split("-").reverse().join("/") : ""}
+                        </span>
+                      </span>
+                      <span>
+                        Estado: <span className={dato}>{infoOC?.estado ?? ""}</span>
+                      </span>
+                    </p>
+                  </td>
+                </tr>
+                </Fragment>
               );
             })}
           </tbody>

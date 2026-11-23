@@ -21,6 +21,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       existe: true,
       estado: oc.estado,
+      estadoTexto: oc.estadoTexto,
       proveedor: oc.proveedorNombre,
       lineas: oc.lineas,
     });

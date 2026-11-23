@@ -14,6 +14,7 @@ import { getSolicitantes } from "@/lib/solicitantes";
 import {
   appendRows,
   articulosSheetId,
+  asegurarColumnas,
   batchWriteRanges,
   deleteRow,
   ensureSheet,
@@ -50,11 +51,12 @@ const HEADERS = [
   "Estado pedido",
   "Motivo estado",
   "Motivo anulación artículo",
+  "OC asociada",
 ];
-// Última columna de encabezados (26 columnas -> A..Z).
-const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:Z1`;
+// Última columna de encabezados (27 columnas -> A..AA).
+const HEADERS_RANGE = `${PEDIDOS_SHEET}!A1:AA1`;
 // Rango de datos (sin encabezado).
-const DATA_RANGE = `${PEDIDOS_SHEET}!A2:Z`;
+const DATA_RANGE = `${PEDIDOS_SHEET}!A2:AA`;
 
 // Prefijos de centro de negocio -> prefijo del folio del pedido (igual al
 // prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
@@ -146,6 +148,8 @@ async function asegurarPedidosSheet(sheetId: string) {
     current.length === HEADERS.length &&
     HEADERS.every((h, i) => (current[i] ?? "") === h);
   if (!matches) {
+    // Las pestañas nacen con 26 columnas (A..Z): «OC asociada» es la 27.
+    await asegurarColumnas(sheetId, PEDIDOS_SHEET, HEADERS.length);
     await writeRange(sheetId, HEADERS_RANGE, [HEADERS]);
   }
 }
@@ -342,6 +346,8 @@ export type PedidoItem = {
   /** Artículo anulado por Adquisiciones: no cuenta como pedido ni se recibe. */
   anulado: boolean;
   motivoAnulacion: string;
+  /** N° de la OC de Defontana a la que Adquisiciones asoció este artículo ("" = en gestión). */
+  ocAsociada: string;
 };
 
 export type EstadoManual = "" | "cerrado" | "anulado";
@@ -447,6 +453,7 @@ export async function GET() {
         comentarioArticulo: str(row[22]),
         anulado: str(row[25]) !== "",
         motivoAnulacion: str(row[25]),
+        ocAsociada: str(row[26]),
       });
     });
 
