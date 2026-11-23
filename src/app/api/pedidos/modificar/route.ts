@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
-import { agregarMensaje, normArea } from "@/lib/chat";
+import { agregarMensaje, moverHiloDeArea, normArea } from "@/lib/chat";
+import { AREAS } from "@/lib/auth";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
@@ -40,6 +41,14 @@ async function avisarEnChat(folio: string, area: string, texto: string) {
   }
 }
 
+// Prefijo del código de centro de cada área (igual que en Enviar Pedido).
+const PREFIJO_AREA: Record<string, string> = {
+  refacciones: "RCT",
+  "servicio técnico": "SST",
+  instalaciones: "INT",
+  "transición y postventa": "TYP",
+};
+
 const fmt = (n: number) => n.toLocaleString("es-CL");
 
 /**
@@ -50,8 +59,9 @@ const fmt = (n: number) => n.toLocaleString("es-CL");
  *                (anular conserva la fila con el motivo en la columna Z; exige motivo)
  *  - "agregar":  `{ pedidoId, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
  *  - "cabecera": `{ pedidoId, fechaEntrega, despacho, comentario, solicitante,
- *                  centroNegocio, centroCodigo, clasificador1, clasificador2, urgente }`
- *                (el área no se cambia: define el folio, el chat y quién ve el pedido)
+ *                  centroNegocio, centroCodigo, clasificador1, clasificador2, urgente, area? }`
+ *                `area` (etiqueta) corrige el área del pedido: el folio no cambia, pero
+ *                el pedido y su chat pasan a verse en la nueva área; el centro debe ser de ella.
  * Todo cambio deja un aviso en el chat del pedido.
  */
 export async function POST(request: Request) {
@@ -209,6 +219,21 @@ export async function POST(request: Request) {
 
       if (!solicitante) return error("El solicitante no puede quedar vacío.");
       if (!centroCodigo || !centroNegocio) return error("Debes elegir un centro de negocio.");
+
+      // Área: solo cambia si viene en el body y es distinta de la actual.
+      let areaNueva = area;
+      if ("area" in body) {
+        const pedida = AREAS.find((a) => normArea(a.label) === normArea(str(body.area)));
+        if (!pedida) return error("Área inválida.");
+        areaNueva = pedida.label;
+      }
+      const cambiaArea = normArea(areaNueva) !== normArea(area);
+      if (cambiaArea) {
+        const prefijo = PREFIJO_AREA[normArea(areaNueva)];
+        if (!prefijo || !centroCodigo.toUpperCase().startsWith(prefijo)) {
+          return error(`El centro de negocio debe ser de ${areaNueva}.`);
+        }
+      }
       if (clasificador1 && clasificador1 !== str(prev[7]) && !CLASIFICADORES_1.includes(clasificador1)) {
         return error("Clasificador 1 inválido.");
       }
@@ -217,6 +242,7 @@ export async function POST(request: Request) {
       }
 
       const cambios: string[] = [];
+      if (cambiaArea) cambios.push(`área «${areaNueva}» (antes ${area || "—"})`);
       if (solicitante !== str(prev[2])) cambios.push(`solicitante «${solicitante}»`);
       if (centroCodigo !== str(prev[5])) cambios.push(`centro de negocio «${centroNegocio}»`);
       if (clasificador1 !== str(prev[7])) cambios.push(`clasificador 1 «${clasificador1 || "—"}»`);
@@ -236,6 +262,7 @@ export async function POST(request: Request) {
         sheetId,
         delPedido.flatMap((x) => [
           { range: `${PEDIDOS_SHEET}!C${x.fila}`, values: [[solicitante]] },
+          ...(cambiaArea ? [{ range: `${PEDIDOS_SHEET}!D${x.fila}`, values: [[areaNueva]] }] : []),
           { range: `${PEDIDOS_SHEET}!E${x.fila}:F${x.fila}`, values: [[centroNegocio, centroCodigo]] },
           ...(fechaCambia
             ? [{ range: `${PEDIDOS_SHEET}!G${x.fila}`, values: [[fechaEntrega]] }]
@@ -245,7 +272,14 @@ export async function POST(request: Request) {
           { range: `${PEDIDOS_SHEET}!T${x.fila}`, values: [[urgente ? "Sí" : ""]] },
         ])
       );
-      await avisarEnChat(pedidoId, area, `se actualizó ${cambios.join(", ")}.`);
+      if (cambiaArea) {
+        try {
+          await moverHiloDeArea(pedidoId, normArea(area), normArea(areaNueva));
+        } catch {
+          // Si Redis falla, el aviso de abajo vuelve a fijar el área del hilo.
+        }
+      }
+      await avisarEnChat(pedidoId, areaNueva, `se actualizó ${cambios.join(", ")}.`);
       return NextResponse.json({ ok: true });
     }
 

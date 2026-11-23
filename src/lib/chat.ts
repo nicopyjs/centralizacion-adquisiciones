@@ -114,3 +114,19 @@ export function limpiarNombre(nombre: string): string {
   const n = nombre.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").trim().slice(0, 120);
   return n || "archivo";
 }
+
+/** Traslada el hilo a otra área (el pedido se corrigió de área): su aviso de no leído viaja con él. */
+export async function moverHiloDeArea(
+  folio: string,
+  areaVieja: string,
+  areaNueva: string
+): Promise<void> {
+  if (areaVieja === areaNueva) return;
+  const r = db();
+  await r.set(kArea(folio), areaNueva);
+  const pendientes = Number(await r.hget<number | string>(kNoLeidosSol(areaVieja), folio)) || 0;
+  if (pendientes > 0) {
+    await r.hdel(kNoLeidosSol(areaVieja), folio);
+    await r.hincrby(kNoLeidosSol(areaNueva), folio, pendientes);
+  }
+}

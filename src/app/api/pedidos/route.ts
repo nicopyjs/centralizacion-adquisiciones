@@ -10,6 +10,7 @@ import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
 import { getCategoriasConArticulos } from "@/lib/articulos";
 import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
 import { getGoogleEmail } from "@/lib/google-oauth";
+import { areasParaEnviar } from "@/lib/usuarios";
 import { getSolicitantes } from "@/lib/solicitantes";
 import {
   appendRows,
@@ -61,6 +62,13 @@ const DATA_RANGE = `${PEDIDOS_SHEET}!A2:AA`;
 // Prefijos de centro de negocio -> prefijo del folio del pedido (igual al
 // prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
 const PREFIJOS_FOLIO = ["RCT", "SST", "INT", "TYP"];
+
+const PREFIJO_POR_AREA: Record<string, string> = {
+  refacciones: "RCT",
+  "servicio técnico": "SST",
+  instalaciones: "INT",
+  "transición y postventa": "TYP",
+};
 
 /** Prefijo del folio a partir del código de centro (p. ej. "RCTA25008..." -> "RCT"). */
 function prefijoFolio(centroCodigo: string): string {
@@ -221,7 +229,24 @@ export async function POST(request: Request) {
   // Sin cuenta @nebchile.cl (los maestros) el pedido queda «Pendiente
   // aprobación» hasta que un supervisor del área lo apruebe. Como esta ruta es
   // pública para ellos, se exige un solicitante de la nómina y un área válida.
-  const pendiente = !(await getGoogleEmail());
+  const emailGoogle = await getGoogleEmail();
+  const permitidas = areasParaEnviar(emailGoogle);
+  if (permitidas && !permitidas.some((a) => norm(a) === norm(area))) {
+    return NextResponse.json(
+      { error: `Tu cuenta solo puede enviar pedidos a: ${permitidas.join(", ")}.` },
+      { status: 403 }
+    );
+  }
+  if (permitidas) {
+    const prefijos = permitidas.map((a) => PREFIJO_POR_AREA[norm(a)]).filter(Boolean);
+    if (!prefijos.some((p) => centroCodigo.toUpperCase().startsWith(p))) {
+      return NextResponse.json(
+        { error: "Tu cuenta solo puede usar centros de negocio de su propia área." },
+        { status: 403 }
+      );
+    }
+  }
+  const pendiente = !emailGoogle;
   if (pendiente) {
     if (!AREAS.some((a) => norm(a.label) === norm(area))) {
       return NextResponse.json({ error: "Área inválida." }, { status: 400 });
