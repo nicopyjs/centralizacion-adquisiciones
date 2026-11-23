@@ -1896,8 +1896,9 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
           pedido={pedidoActual}
           modo={modificando}
           onCerrar={() => setModificando(null)}
-          onGuardado={async () => {
+          onGuardado={async (nuevoId) => {
             setModificando(null);
+            if (nuevoId) setSeleccionado(nuevoId);
             await cargarPedidos();
           }}
         />
@@ -3403,7 +3404,7 @@ function DialogoModificar({
     | { tipo: "agregar" }
     | { tipo: "cabecera" };
   onCerrar: () => void;
-  onGuardado: () => Promise<void>;
+  onGuardado: (nuevoPedidoId?: string) => Promise<void>;
 }) {
   const item = modo.tipo === "linea" ? modo.item : null;
   const cabecera = modo.tipo === "cabecera";
@@ -3557,7 +3558,7 @@ function DialogoModificar({
       }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "No se pudo guardar.");
-      await onGuardado();
+      await onGuardado(typeof data.nuevoPedidoId === "string" ? data.nuevoPedidoId : undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error de red.");
     } finally {
@@ -3626,7 +3627,7 @@ function DialogoModificar({
                 </select>
                 {area !== pedido.area && (
                   <span className="mt-0.5 block text-xs font-semibold text-destructive">
-                    Cambiarás el pedido de {pedido.area} a {area}: elige un centro de {area}. El folio ({folioCorto(pedido.pedidoId)}) se mantiene.
+                    Cambiarás el pedido de {pedido.area} a {area}: elige un centro de {area}. El pedido tomará un folio nuevo de esa área (el actual es {folioCorto(pedido.pedidoId)}).
                   </span>
                 )}
               </label>

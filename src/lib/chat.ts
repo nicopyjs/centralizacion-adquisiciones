@@ -115,18 +115,28 @@ export function limpiarNombre(nombre: string): string {
   return n || "archivo";
 }
 
-/** Traslada el hilo a otra área (el pedido se corrigió de área): su aviso de no leído viaja con él. */
-export async function moverHiloDeArea(
-  folio: string,
+/**
+ * El pedido se corrigió de área y cambió de folio: el hilo (mensajes, área y
+ * avisos de no leído) pasa al folio nuevo y a la nueva área.
+ */
+export async function renombrarHilo(
+  folioViejo: string,
+  folioNuevo: string,
   areaVieja: string,
   areaNueva: string
 ): Promise<void> {
-  if (areaVieja === areaNueva) return;
   const r = db();
-  await r.set(kArea(folio), areaNueva);
-  const pendientes = Number(await r.hget<number | string>(kNoLeidosSol(areaVieja), folio)) || 0;
-  if (pendientes > 0) {
-    await r.hdel(kNoLeidosSol(areaVieja), folio);
-    await r.hincrby(kNoLeidosSol(areaNueva), folio, pendientes);
+  if ((await r.exists(kMsgs(folioViejo))) > 0) await r.rename(kMsgs(folioViejo), kMsgs(folioNuevo));
+  await r.del(kArea(folioViejo));
+  await r.set(kArea(folioNuevo), areaNueva);
+  const deAdq = Number(await r.hget<number | string>(kNoLeidosAdq, folioViejo)) || 0;
+  if (deAdq > 0) {
+    await r.hdel(kNoLeidosAdq, folioViejo);
+    await r.hincrby(kNoLeidosAdq, folioNuevo, deAdq);
+  }
+  const deSol = Number(await r.hget<number | string>(kNoLeidosSol(areaVieja), folioViejo)) || 0;
+  if (deSol > 0) {
+    await r.hdel(kNoLeidosSol(areaVieja), folioViejo);
+    await r.hincrby(kNoLeidosSol(areaNueva), folioNuevo, deSol);
   }
 }
