@@ -50,6 +50,20 @@ export async function carpetaDePedido(folio: string): Promise<string> {
   return asegurarCarpeta(folio, chat);
 }
 
+/** Renombra la carpeta de un pedido (si no existe, no hace nada). */
+export async function renombrarCarpetaPedido(folioViejo: string, folioNuevo: string): Promise<void> {
+  const chat = await buscarCarpeta(CARPETA_CHAT, rootId());
+  if (!chat) return;
+  const id = await buscarCarpeta(folioViejo, chat);
+  if (!id) return;
+  const res = await fetch(`${FILES}/${id}?supportsAllDrives=true`, {
+    method: "PATCH",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ name: folioNuevo }),
+  });
+  if (!res.ok) throw new Error(`Drive (renombrar carpeta) HTTP ${res.status}`);
+}
+
 /** Sube un archivo a la carpeta indicada y devuelve su id de Drive. */
 export async function subirArchivo(
   carpetaId: string,

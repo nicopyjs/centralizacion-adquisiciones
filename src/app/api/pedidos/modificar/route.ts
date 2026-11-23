@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
-import { agregarMensaje, moverHiloDeArea, normArea } from "@/lib/chat";
+import { agregarMensaje, renombrarHilo, normArea } from "@/lib/chat";
 import { AREAS } from "@/lib/auth";
+import { renombrarCarpetaPedido } from "@/lib/drive";
+import { ETIQUETAS_SHEET } from "@/lib/etiquetas";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
@@ -49,6 +51,18 @@ const PREFIJO_AREA: Record<string, string> = {
   "transición y postventa": "TYP",
 };
 
+/** Siguiente folio correlativo del prefijo (RCT-1, RCT-2, …). */
+async function siguienteFolio(sheetId: string, prefijo: string): Promise<string> {
+  const col = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:A`);
+  const patron = new RegExp(`^${prefijo}-(\\d+)$`);
+  let max = 0;
+  for (const row of col) {
+    const m = patron.exec(str(row[0]));
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `${prefijo}-${max + 1}`;
+}
+
 const fmt = (n: number) => n.toLocaleString("es-CL");
 
 /**
@@ -60,8 +74,9 @@ const fmt = (n: number) => n.toLocaleString("es-CL");
  *  - "agregar":  `{ pedidoId, codigo, nombre, categoria, unidad, cantidad, comentarioArticulo }`
  *  - "cabecera": `{ pedidoId, fechaEntrega, despacho, comentario, solicitante,
  *                  centroNegocio, centroCodigo, clasificador1, clasificador2, urgente, area? }`
- *                `area` (etiqueta) corrige el área del pedido: el folio no cambia, pero
- *                el pedido y su chat pasan a verse en la nueva área; el centro debe ser de ella.
+ *                `area` (etiqueta) corrige el área del pedido: el pedido toma un folio nuevo
+ *                del prefijo de esa área (RCT-62 → SST-xx) y su chat, carpeta de Drive y
+ *                etiquetas lo siguen; el centro debe ser de la nueva área.
  * Todo cambio deja un aviso en el chat del pedido.
  */
 export async function POST(request: Request) {
@@ -258,11 +273,21 @@ export async function POST(request: Request) {
       if (comentario !== str(prev[15])) cambios.push("comentario del pedido");
       if (cambios.length === 0) return NextResponse.json({ ok: true });
 
+      // Cambio de área: el folio lleva el prefijo del área, así que también cambia.
+      const folioNuevo = cambiaArea
+        ? await siguienteFolio(sheetId, PREFIJO_AREA[normArea(areaNueva)])
+        : pedidoId;
+
       await batchWriteRanges(
         sheetId,
         delPedido.flatMap((x) => [
           { range: `${PEDIDOS_SHEET}!C${x.fila}`, values: [[solicitante]] },
-          ...(cambiaArea ? [{ range: `${PEDIDOS_SHEET}!D${x.fila}`, values: [[areaNueva]] }] : []),
+          ...(cambiaArea
+            ? [
+                { range: `${PEDIDOS_SHEET}!A${x.fila}`, values: [[folioNuevo]] },
+                { range: `${PEDIDOS_SHEET}!D${x.fila}`, values: [[areaNueva]] },
+              ]
+            : []),
           { range: `${PEDIDOS_SHEET}!E${x.fila}:F${x.fila}`, values: [[centroNegocio, centroCodigo]] },
           ...(fechaCambia
             ? [{ range: `${PEDIDOS_SHEET}!G${x.fila}`, values: [[fechaEntrega]] }]
@@ -273,13 +298,38 @@ export async function POST(request: Request) {
         ])
       );
       if (cambiaArea) {
+        // Lo que cuelga del folio viejo se traslada; si algo falla, la planilla
+        // ya quedó bien y se informa para corregirlo a mano.
+        const pendientes: string[] = [];
         try {
-          await moverHiloDeArea(pedidoId, normArea(area), normArea(areaNueva));
+          await renombrarHilo(pedidoId, folioNuevo, normArea(area), normArea(areaNueva));
         } catch {
-          // Si Redis falla, el aviso de abajo vuelve a fijar el área del hilo.
+          pendientes.push("chat");
         }
+        try {
+          await renombrarCarpetaPedido(pedidoId, folioNuevo);
+        } catch {
+          pendientes.push("carpeta de Drive");
+        }
+        try {
+          const et = await readRange(sheetId, `${ETIQUETAS_SHEET}!A2:C`);
+          const idx = et.findIndex((f) => str(f[0]) === pedidoId);
+          if (idx >= 0) {
+            await batchWriteRanges(sheetId, [
+              { range: `${ETIQUETAS_SHEET}!A${idx + 2}:B${idx + 2}`, values: [[folioNuevo, areaNueva]] },
+            ]);
+          }
+        } catch {
+          pendientes.push("etiquetas");
+        }
+        await avisarEnChat(
+          folioNuevo,
+          areaNueva,
+          `se actualizó ${cambios.join(", ")}. El folio pasó de ${pedidoId} a ${folioNuevo}.`
+        );
+        return NextResponse.json({ ok: true, nuevoPedidoId: folioNuevo, pendientes });
       }
-      await avisarEnChat(pedidoId, areaNueva, `se actualizó ${cambios.join(", ")}.`);
+      await avisarEnChat(pedidoId, area, `se actualizó ${cambios.join(", ")}.`);
       return NextResponse.json({ ok: true });
     }
 
