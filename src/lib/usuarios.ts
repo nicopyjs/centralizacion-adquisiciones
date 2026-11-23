@@ -1,4 +1,4 @@
-import type { Area, Perfil } from "@/lib/auth";
+import { areaLabel, type Area, type Perfil } from "@/lib/auth";
 
 /**
  * Perfil que recibe cada cuenta @nebchile.cl al entrar con Google. Es la
@@ -83,4 +83,17 @@ export function perfilDeEmail(email: string | null | undefined): PerfilUsuario |
   return e.perfil === "adquisiciones"
     ? { perfil: "adquisiciones", areas: [], admin: false }
     : { perfil: "supervisor", areas: e.areas, admin: false };
+}
+
+/**
+ * Áreas (etiquetas de la hoja Pedidos) a las que puede enviar pedidos un
+ * correo, o null si no tiene restricción. Quien pertenece a Servicio Técnico
+ * solo puede pedir para sus propias áreas (y por tanto solo para sus centros
+ * de negocio); el resto de las cuentas no tiene límite.
+ */
+export function areasParaEnviar(email: string | null | undefined): string[] | null {
+  const u = perfilDeEmail(email);
+  if (!u || u.admin || u.perfil !== "supervisor") return null;
+  if (!u.areas.includes("servicio-tecnico")) return null;
+  return u.areas.map((a) => areaLabel(a));
 }

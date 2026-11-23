@@ -65,6 +65,14 @@ type Alerta = "urgentes" | "atrasados";
 type Filtro = "porAtender" | "todos" | Alerta | Estado;
 
 /** Estados que activa la vista rápida «Por atender» (y el filtro por defecto). */
+// Áreas del pedido (etiqueta guardada en la planilla) y prefijo de sus centros.
+const AREAS_PEDIDO = [
+  { label: "Refacciones", prefijo: "RCT" },
+  { label: "Servicio Técnico", prefijo: "SST" },
+  { label: "Instalaciones", prefijo: "INT" },
+  { label: "Transición y Postventa", prefijo: "TYP" },
+];
+
 const ESTADOS_POR_ATENDER: Estado[] = ["pendiente", "parcial"];
 
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
@@ -3412,6 +3420,10 @@ function DialogoModificar({
   const [comentario, setComentario] = useState(pedido.comentario);
   const [solicitante, setSolicitante] = useState(pedido.solicitante);
   const [centroCodigo, setCentroCodigo] = useState(pedido.centroCodigo);
+  const [area, setArea] = useState(
+    AREAS_PEDIDO.find((a) => a.label.toLowerCase() === pedido.area.trim().toLowerCase())?.label ??
+      pedido.area
+  );
   const [clasificador1, setClasificador1] = useState(pedido.clasificador1);
   const [clasificador2, setClasificador2] = useState(pedido.clasificador2);
   const [urgente, setUrgente] = useState(pedido.urgente);
@@ -3471,17 +3483,22 @@ function DialogoModificar({
     return Array.from(nombres).map((n) => ({ value: n, label: n }));
   }, [solicitantes, pedido.solicitante]);
 
-  // Centros del mismo prefijo (área) que el pedido: el área no se cambia.
+  // Centros del área elegida (prefijo del código). Si el área no cambia, el
+  // centro actual se mantiene aunque ya no figure en la lista.
   const opcionesCentro: ComboOption[] = useMemo(() => {
-    const prefijo = pedido.centroCodigo.slice(0, 3).toUpperCase();
+    const prefijo = AREAS_PEDIDO.find((a) => a.label === area)?.prefijo ?? "";
     const lista = centros.filter(
       (c) => !prefijo || c.codigo.toUpperCase().startsWith(prefijo)
     );
-    if (pedido.centroCodigo && !lista.some((c) => c.codigo === pedido.centroCodigo)) {
+    if (
+      pedido.centroCodigo &&
+      (!prefijo || pedido.centroCodigo.toUpperCase().startsWith(prefijo)) &&
+      !lista.some((c) => c.codigo === pedido.centroCodigo)
+    ) {
       lista.unshift({ codigo: pedido.centroCodigo, descripcion: pedido.centroNegocio });
     }
     return lista.map((c) => ({ value: c.codigo, label: c.descripcion }));
-  }, [centros, pedido.centroCodigo, pedido.centroNegocio]);
+  }, [centros, area, pedido.centroCodigo, pedido.centroNegocio]);
 
   const elegido =
     catalogo.find((a) => a.codigo === codigo) ??
@@ -3499,6 +3516,7 @@ function DialogoModificar({
       payload = {
         accion: "cabecera",
         pedidoId: pedido.pedidoId,
+        area,
         fechaEntrega,
         despacho,
         comentario,
@@ -3590,6 +3608,28 @@ function DialogoModificar({
                   onChange={setSolicitante}
                 />
               </div>
+              <label className="block">
+                <span className={labelClass}>Área</span>
+                <select
+                  className={fieldClass}
+                  value={area}
+                  onChange={(e) => {
+                    setArea(e.target.value);
+                    // El centro elegido puede no ser de la nueva área.
+                    setCentroCodigo("");
+                  }}
+                >
+                  {!AREAS_PEDIDO.some((a) => a.label === area) && <option value={area}>{area}</option>}
+                  {AREAS_PEDIDO.map((a) => (
+                    <option key={a.label} value={a.label}>{a.label}</option>
+                  ))}
+                </select>
+                {area !== pedido.area && (
+                  <span className="mt-0.5 block text-xs font-semibold text-destructive">
+                    Cambiarás el pedido de {pedido.area} a {area}: elige un centro de {area}. El folio ({folioCorto(pedido.pedidoId)}) se mantiene.
+                  </span>
+                )}
+              </label>
               <div>
                 <span className={labelClass}>Centro de negocio</span>
                 <SearchCombobox
@@ -3599,7 +3639,7 @@ function DialogoModificar({
                   onChange={setCentroCodigo}
                 />
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Solo centros de la misma área ({pedido.area}); el área no se cambia.
+                  Solo centros del área elegida ({area}).
                 </span>
               </div>
               <label className="block">

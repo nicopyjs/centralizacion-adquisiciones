@@ -1,10 +1,13 @@
 import EnviarPedidoForm from "@/components/EnviarPedidoForm";
+import { getGoogleEmail } from "@/lib/google-oauth";
+import { areasParaEnviar } from "@/lib/usuarios";
 
 export const metadata = {
   title: "Enviar Pedido | Centralización Adquisiciones",
 };
 
-export default function EnviarPedidoPage() {
+export default async function EnviarPedidoPage() {
+  const areasPermitidas = areasParaEnviar(await getGoogleEmail()) ?? undefined;
   return (
     <div className="mx-auto w-full max-w-[1440px]">
       <header className="mb-6">
@@ -17,7 +20,7 @@ export default function EnviarPedidoPage() {
           correo de solicitud ya redactado para revisarlo y enviarlo.
         </p>
       </header>
-      <EnviarPedidoForm />
+      <EnviarPedidoForm areasPermitidas={areasPermitidas} />
     </div>
   );
 }

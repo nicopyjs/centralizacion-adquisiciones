@@ -214,7 +214,7 @@ const DESTINATARIO_PRINCIPAL = "adquisiciones@nebchile.cl";
 // Cada área destino filtra los centros de negocio por el prefijo de su código
 // (columna C de la planilla de centros): RCT = Refacciones, SST = Servicio
 // Técnico, INT = Instalaciones.
-const AREAS = [
+const TODAS_LAS_AREAS = [
   { label: "Refacciones", email: "refacciones@nebchile.cl", prefijo: "RCT" },
   { label: "Servicio Técnico", email: "serviciotecnico@nebchile.cl", prefijo: "SST" },
   { label: "Instalaciones", email: "instalaciones@nebchile.cl", prefijo: "INT" },
@@ -703,11 +703,22 @@ type EnviarPedidoFormProps = {
   // Si se pasa, solo se muestran (y quedan seleccionables) estas categorías
   // de artículos, comparando sin distinguir mayúsculas/minúsculas.
   categoriasPermitidas?: string[];
+  // Si se pasa, solo se ofrecen estas áreas destino (etiquetas).
+  areasPermitidas?: string[];
 };
 
 export default function EnviarPedidoForm({
   categoriasPermitidas,
+  areasPermitidas,
 }: EnviarPedidoFormProps = {}) {
+  // Cuentas restringidas (Servicio Técnico) solo ven sus áreas.
+  const AREAS = useMemo(
+    () =>
+      areasPermitidas
+        ? TODAS_LAS_AREAS.filter((a) => areasPermitidas.includes(a.label))
+        : TODAS_LAS_AREAS,
+    [areasPermitidas]
+  );
   const [categorias, setCategorias] = useState<CategoriaConArticulos[]>([]);
   const [centros, setCentros] = useState<CentroNegocio[]>([]);
   const [solicitantes, setSolicitantes] = useState<string[]>([]);
@@ -1205,7 +1216,7 @@ export default function EnviarPedidoForm({
 
   // Directo a Adquisiciones; el área va en copia.
   const para = DESTINATARIO_PRINCIPAL;
-  const cc = areaDestino;
+  const cc = areaActual.email;
 
   // /a/nebchile.cl/ fuerza la cuenta Workspace de NEB aunque el navegador
   // tenga una cuenta personal como principal (/u/0/).

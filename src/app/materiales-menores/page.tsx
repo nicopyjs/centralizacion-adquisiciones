@@ -1,11 +1,14 @@
 import EnviarPedidoForm from "@/components/EnviarPedidoForm";
+import { getGoogleEmail } from "@/lib/google-oauth";
+import { areasParaEnviar } from "@/lib/usuarios";
 import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
 
 export const metadata = {
   title: "Materiales Menores | Centralización Adquisiciones",
 };
 
-export default function MaterialesMenoresPage() {
+export default async function MaterialesMenoresPage() {
+  const areasPermitidas = areasParaEnviar(await getGoogleEmail()) ?? undefined;
   return (
     <div className="mx-auto w-full max-w-[1440px]">
       <header className="mb-6">
@@ -19,7 +22,7 @@ export default function MaterialesMenoresPage() {
           @nebchile.cl se envía directo a Adquisiciones por correo.
         </p>
       </header>
-      <EnviarPedidoForm categoriasPermitidas={CATEGORIAS_MATERIALES_MENORES} />
+      <EnviarPedidoForm categoriasPermitidas={CATEGORIAS_MATERIALES_MENORES} areasPermitidas={areasPermitidas} />
     </div>
   );
 }
