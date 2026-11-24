@@ -184,7 +184,7 @@ La OC reutiliza del pedido: el **centro de negocio**, las **cantidades** y el **
 ### 6.3 Avisos y errores frecuentes
 
 - **"Defontana en modo PRUEBAS"**: la OC no se crea en el Defontana real. Si ves este aviso en el uso diario, avisa a soporte.
-- **«X» ya está en la OC N°**: ese artículo ya tiene OC. Si necesitas cambiarla, usa **Asociar OC → Quitar OC** primero.
+- **Artículos que ya tienen OC**: **Crear OC** y **Asociar OC** se desactivan si entre los marcados hay alguno con OC. Si necesitas cambiarla, márcalos y usa **Quitar OC (n)** primero (esto solo los deja "En gestión" en el pedido; la OC en Defontana no se modifica).
 - **El pedido está cerrado o anulado**: reábrelo primero.
 - Si la OC se creó en Defontana pero no se pudo asociar al pedido, el mensaje indica el N° de OC: asóciala con **Asociar OC**.
 
@@ -218,7 +218,8 @@ Reglas:
 - Una OC solo puede estar asociada a **un** pedido.
 - Todos los artículos marcados deben estar en la OC.
 - Si un artículo ya tiene recepción o consumo registrado, su OC no se puede cambiar.
-- **Quitar OC** deja los artículos "En gestión" otra vez.
+- Un artículo que ya tiene OC no se puede asociar a otra: primero márcalo y presiona **Quitar OC (n)**, que lo deja "En gestión" otra vez.
+- Los artículos que ya tienen recepción o consumo registrado no admiten quitar ni cambiar su OC.
 
 ---
 
@@ -274,7 +275,7 @@ Necesitas una cuenta de Google **@nebchile.cl** con acceso. Si te rechaza, pide 
 Revisa el N° que mostró el sistema y busca esa OC en Defontana. Recuerda que queda «Ingresado» hasta que se apruebe, y que Clasificador 1 y 2 se completan a mano.
 
 **Me equivoqué de proveedor o de precio al crear la OC.**
-Corrígela directamente en Defontana. Si necesitas rehacerla, anula la OC allá y usa **Asociar OC → Quitar OC** para liberar los artículos.
+Corrígela directamente en Defontana. Si necesitas rehacerla, anula la OC allá y usa **Quitar OC (n)** para liberar los artículos.
 
 ---
 

@@ -4506,6 +4506,8 @@ function Detalle({
   // OC asociadas a los artículos: se leen de Defontana (proveedor, fecha, estado).
   const [asociando, setAsociando] = useState(false);
   const [creandoOC, setCreandoOC] = useState(false);
+  const [quitandoOC, setQuitandoOC] = useState(false);
+  const [errorQuitarOC, setErrorQuitarOC] = useState<string | null>(null);
   const [ocInfos, setOcInfos] = useState<Record<string, InfoOC>>({});
   const ocsAsociadas = Array.from(
     new Set(pedido.items.map((i) => i.ocAsociada).filter(Boolean))
@@ -4547,6 +4549,31 @@ function Detalle({
   const todasSeleccionadas =
     vigentes.length > 0 && vigentes.every((it) => seleccionFilas.has(it.fila));
   const seleccionadas = vigentes.filter((it) => seleccionFilas.has(it.fila));
+  const conOC = seleccionadas.filter((it) => it.ocAsociada);
+
+  async function quitarOC() {
+    setQuitandoOC(true);
+    setErrorQuitarOC(null);
+    try {
+      const filas = conOC.map((it) => it.fila);
+      const res = await fetch("/api/pedidos/oc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pedidoId: pedido.pedidoId, oc: "", filas }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "No se pudo quitar la OC.");
+      onOcAsociada(filas, "");
+    } catch (e) {
+      setErrorQuitarOC(e instanceof Error ? e.message : "Error de red.");
+    } finally {
+      setQuitandoOC(false);
+    }
+  }
 
   const estado = ESTADOS[estadoDe(pedido)];
   const faltantes = vigentes.filter((it) => {
@@ -4963,11 +4990,13 @@ function Detalle({
             <button
               type="button"
               onClick={() => setAsociando(true)}
-              disabled={seleccionadas.length === 0}
+              disabled={seleccionadas.length === 0 || conOC.length > 0}
               title={
                 seleccionadas.length === 0
                   ? "Marca los artículos de la tabla que están en la OC"
-                  : "Asociar una orden de compra de Defontana a los artículos marcados"
+                  : conOC.length > 0
+                    ? "Hay artículos que ya tienen OC: quítales la OC primero"
+                    : "Asociar una orden de compra de Defontana a los artículos marcados"
               }
               className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -4976,19 +5005,44 @@ function Detalle({
             <button
               type="button"
               onClick={() => setCreandoOC(true)}
-              disabled={seleccionadas.length === 0}
+              disabled={seleccionadas.length === 0 || conOC.length > 0}
               title={
                 seleccionadas.length === 0
                   ? "Marca los artículos de la tabla que irán en la nueva OC"
-                  : "Crear en Defontana una OC con los artículos marcados"
+                  : conOC.length > 0
+                    ? "Hay artículos que ya tienen OC: quítales la OC primero"
+                    : "Crear en Defontana una OC con los artículos marcados"
               }
               className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
               Crear OC{seleccionadas.length > 0 ? ` (${seleccionadas.length})` : ""}
             </button>
+            {conOC.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void quitarOC()}
+                  disabled={quitandoOC}
+                  title="Deja los artículos marcados sin OC (la OC en Defontana no se modifica)"
+                  className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-destructive hover:bg-destructive/5 disabled:opacity-50"
+                >
+                  {quitandoOC ? "Quitando…" : `Quitar OC (${conOC.length})`}
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  {conOC.length === seleccionadas.length
+                    ? "Los artículos marcados ya tienen OC."
+                    : `${conOC.length} de los marcados ya tienen OC: no se puede crear ni asociar otra.`}
+                </span>
+              </>
+            )}
             {seleccionadas.length === 0 && (
               <span className="text-xs text-muted-foreground">
                 Marca los artículos de la tabla para asociarlos a una OC.
+              </span>
+            )}
+            {errorQuitarOC && (
+              <span role="alert" className="text-xs font-semibold text-destructive">
+                {errorQuitarOC}
               </span>
             )}
           </div>
