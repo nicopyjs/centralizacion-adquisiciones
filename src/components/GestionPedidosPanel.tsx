@@ -9,6 +9,7 @@ import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
   AVISO_RECEPCION,
+  CODIGO_ARTICULO_MANUAL,
   ESTADOS_OC_ASOCIABLES,
   problemasPorRecibir,
   problemasRecepcion,
@@ -1842,17 +1843,22 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               onAlternarTodasLasFilas={alternarTodasLasFilas}
               onAccion={abrirAccion}
               onConsumo={() => setConsumoPedido(pedidoActual.pedidoId)}
-              onOcAsociada={(filas, oc) => {
+              onOcAsociada={(filas, oc, articulosCreados) => {
                 const set = new Set(filas);
+                const nuevos = new Map((articulosCreados ?? []).map((a) => [a.fila, a]));
                 setPedidos((prev) =>
                   prev.map((p) =>
                     p.pedidoId !== pedidoActual.pedidoId
                       ? p
                       : {
                           ...p,
-                          items: p.items.map((x) =>
-                            set.has(x.fila) ? { ...x, ocAsociada: oc } : x
-                          ),
+                          items: p.items.map((x) => {
+                            if (!set.has(x.fila)) return x;
+                            const n = nuevos.get(x.fila);
+                            return n
+                              ? { ...x, ocAsociada: oc, codigo: n.codigo, categoria: n.categoria }
+                              : { ...x, ocAsociada: oc };
+                          }),
                         }
                   )
                 );
@@ -3412,7 +3418,11 @@ function DialogoCrearOC({
   pedido: PedidoResumen;
   items: PedidoItem[];
   onCerrar: () => void;
-  onCreada: (filas: number[], oc: string) => void;
+  onCreada: (
+    filas: number[],
+    oc: string,
+    articulosCreados: { fila: number; codigo: string; categoria: string }[]
+  ) => void;
 }) {
   const caja = useRef<HTMLDivElement>(null);
   const [texto, setTexto] = useState("");
@@ -3420,6 +3430,12 @@ function DialogoCrearOC({
   const [buscando, setBuscando] = useState(false);
   const [proveedor, setProveedor] = useState<ProveedorBusqueda | null>(null);
   const [condiciones, setCondiciones] = useState<CondicionBusqueda[]>([]);
+  const [categorias, setCategorias] = useState<{ id: number; nombre: string }[]>([]);
+  const [unidades, setUnidades] = useState<{ codigo: string; nombre: string }[]>([]);
+  // Artículos manuales (sin código en el catálogo): categoría y unidad con que se crean.
+  const [datosArticulo, setDatosArticulo] = useState<
+    Record<number, { categoriaId: string; unidad: string }>
+  >({});
   const [ambiente, setAmbiente] = useState("");
   const [condicion, setCondicion] = useState("");
   const [fechaRecepcion, setFechaRecepcion] = useState(
@@ -3429,7 +3445,11 @@ function DialogoCrearOC({
   const [precios, setPrecios] = useState<Record<number, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
-  const [creada, setCreada] = useState<{ oc: number; omitidos: string[] } | null>(null);
+  const [creada, setCreada] = useState<{
+    oc: number;
+    omitidos: string[];
+    articulos: { fila: number; codigo: string; categoria: string }[];
+  } | null>(null);
 
   useEffect(() => caja.current?.focus(), []);
 
@@ -3439,6 +3459,8 @@ function DialogoCrearOC({
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
         setCondiciones(d.condiciones ?? []);
+        setCategorias(d.categorias ?? []);
+        setUnidades(d.unidades ?? []);
         setAmbiente(d.ambiente ?? "");
       })
       .catch((e) =>
@@ -3483,8 +3505,24 @@ function DialogoCrearOC({
   const neto = items.reduce((a, i) => a + Math.round(i.cantidad * (num(i.fila) || 0)), 0);
   const iva = exenta ? 0 : Math.round(neto * 0.19);
   const preciosOk = items.every((i) => num(i.fila) > 0);
+  const esManual = (i: PedidoItem) => i.codigo === CODIGO_ARTICULO_MANUAL;
+  // Unidad por defecto: la que escribió el solicitante si existe en Defontana, si no UN.
+  const unidadDe = (i: PedidoItem) =>
+    datosArticulo[i.fila]?.unidad ??
+    (unidades.some((u) => u.codigo === i.unidad.trim().toUpperCase())
+      ? i.unidad.trim().toUpperCase()
+      : "UN");
+  const manualesOk = items.every(
+    (i) => !esManual(i) || (!!datosArticulo[i.fila]?.categoriaId && !!unidadDe(i))
+  );
   const puedeCrear =
-    !!proveedor && !!condicion && !!fechaRecepcion && preciosOk && !enviando && !creada;
+    !!proveedor &&
+    !!condicion &&
+    !!fechaRecepcion &&
+    preciosOk &&
+    manualesOk &&
+    !enviando &&
+    !creada;
   const condicionProveedor = proveedor
     ? condiciones.find((c) => c.codigo === proveedor.condicionPago)
     : undefined;
@@ -3512,7 +3550,13 @@ function DialogoCrearOC({
           condicionPago: condicion,
           fechaRecepcion,
           exenta,
-          lineas: items.map((i) => ({ fila: i.fila, precio: num(i.fila) })),
+          lineas: items.map((i) => ({
+            fila: i.fila,
+            precio: num(i.fila),
+            ...(esManual(i)
+              ? { categoriaId: Number(datosArticulo[i.fila]?.categoriaId), unidad: unidadDe(i) }
+              : {}),
+          })),
         }),
       });
       if (res.status === 401) {
@@ -3521,7 +3565,11 @@ function DialogoCrearOC({
       }
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "No se pudo crear la OC.");
-      setCreada({ oc: d.oc, omitidos: d.omitidos ?? [] });
+      setCreada({
+        oc: d.oc,
+        omitidos: d.omitidos ?? [],
+        articulos: d.articulosCreados ?? [],
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error de red.");
     } finally {
@@ -3535,7 +3583,8 @@ function DialogoCrearOC({
     creada
       ? onCreada(
           items.map((i) => i.fila),
-          String(creada.oc)
+          String(creada.oc),
+          creada.articulos
         )
       : onCerrar();
 
@@ -3570,6 +3619,17 @@ function DialogoCrearOC({
           <div className="mt-4 space-y-2 text-sm text-card-foreground">
             <p className="font-bold text-primary">OC {creada.oc} creada y asociada al pedido.</p>
             <p>Queda en estado «Ingresado»: falta aprobarla en Defontana.</p>
+            {creada.articulos.length > 0 && (
+              <p>
+                Artículos creados en Defontana:{" "}
+                {creada.articulos
+                  .map((a) => {
+                    const it = items.find((x) => x.fila === a.fila);
+                    return `${it?.nombre ?? "artículo"} → ${a.codigo}`;
+                  })
+                  .join(" · ")}
+              </p>
+            )}
             {creada.omitidos.length > 0 && (
               <p role="alert" className="font-semibold text-destructive">
                 Defontana no permite enviar por API: {creada.omitidos.join(", ")}. Complétalos a
@@ -3694,7 +3754,7 @@ function DialogoCrearOC({
               {items.map((i) => (
                 <li
                   key={i.fila}
-                  className="grid grid-cols-[1fr_7rem_6rem] items-center gap-x-3 px-3 py-1.5 text-sm"
+                  className="grid grid-cols-[1fr_7rem_6rem] items-center gap-x-3 gap-y-1.5 px-3 py-1.5 text-sm"
                 >
                   <span className="min-w-0 truncate text-card-foreground" title={i.nombre}>
                     {i.nombre}
@@ -3721,6 +3781,54 @@ function DialogoCrearOC({
                   <span className="text-right text-xs text-muted-foreground">
                     {num(i.fila) > 0 ? clp(i.cantidad * num(i.fila)) : "—"}
                   </span>
+                  {esManual(i) && (
+                    <div className="col-span-3 grid gap-2 rounded-lg bg-muted/50 p-2 sm:grid-cols-[1fr_9rem]">
+                      <p className="text-xs font-semibold text-secondary sm:col-span-2">
+                        Artículo manual: no existe en Defontana. Se creará con el siguiente código
+                        de su categoría.
+                      </p>
+                      <select
+                        aria-label={`Categoría de ${i.nombre}`}
+                        className={inputClass}
+                        disabled={enviando}
+                        value={datosArticulo[i.fila]?.categoriaId ?? ""}
+                        onChange={(e) =>
+                          setDatosArticulo((p) => ({
+                            ...p,
+                            [i.fila]: { unidad: unidadDe(i), categoriaId: e.target.value },
+                          }))
+                        }
+                      >
+                        <option value="">Categoría…</option>
+                        {categorias.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nombre}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label={`Unidad de ${i.nombre}`}
+                        className={inputClass}
+                        disabled={enviando}
+                        value={unidadDe(i)}
+                        onChange={(e) =>
+                          setDatosArticulo((p) => ({
+                            ...p,
+                            [i.fila]: {
+                              categoriaId: p[i.fila]?.categoriaId ?? "",
+                              unidad: e.target.value,
+                            },
+                          }))
+                        }
+                      >
+                        {unidades.map((u) => (
+                          <option key={u.codigo} value={u.codigo}>
+                            {u.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -4349,7 +4457,12 @@ function Detalle({
 }: {
   pedido: PedidoResumen;
   /** Se asoció (o quitó, con "") una OC a estas filas. */
-  onOcAsociada: (filas: number[], oc: string) => void;
+  onOcAsociada: (
+    filas: number[],
+    oc: string,
+    /** Artículos manuales que se crearon en Defontana junto con la OC. */
+    articulosCreados?: { fila: number; codigo: string; categoria: string }[]
+  ) => void;
   ediciones: Record<number, LineaEdit>;
   guardando: Record<number, boolean>;
   guardado: Record<number, boolean>;
@@ -4887,9 +5000,9 @@ function Detalle({
           pedido={pedido}
           items={seleccionadas}
           onCerrar={() => setCreandoOC(false)}
-          onCreada={(filas, oc) => {
+          onCreada={(filas, oc, articulosCreados) => {
             setCreandoOC(false);
-            onOcAsociada(filas, oc);
+            onOcAsociada(filas, oc, articulosCreados);
           }}
         />
       )}

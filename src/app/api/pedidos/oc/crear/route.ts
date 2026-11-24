@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { haySesion } from "@/lib/auth";
 import {
+  CODIGO_ARTICULO_MANUAL,
   ambienteDefontana,
   buscarProveedores,
+  categoriasArticulo,
   condicionesPago,
+  crearArticulo,
   crearOC,
   formatearRut,
+  unidadesArticulo,
 } from "@/lib/defontana";
 import {
   articulosSheetId,
@@ -41,8 +45,15 @@ export async function GET(request: Request) {
       if (proveedor.length < 2) return NextResponse.json({ proveedores: [] });
       return NextResponse.json({ proveedores: await buscarProveedores(proveedor) });
     }
+    const [condiciones, categorias, unidades] = await Promise.all([
+      condicionesPago(),
+      categoriasArticulo(),
+      unidadesArticulo(),
+    ]);
     return NextResponse.json({
-      condiciones: await condicionesPago(),
+      condiciones,
+      categorias,
+      unidades,
       ambiente: ambienteDefontana(),
     });
   } catch (err) {
@@ -78,10 +89,15 @@ export async function POST(request: Request) {
   const proveedor = str(body.proveedor);
   const condicionPago = str(body.condicionPago);
   const fechaRecepcion = str(body.fechaRecepcion);
-  const entradas = (Array.isArray(body.lineas) ? body.lineas : []).map((l) => ({
-    fila: Number((l as { fila?: unknown })?.fila),
-    precio: Number((l as { precio?: unknown })?.precio),
-  }));
+  const entradas = (Array.isArray(body.lineas) ? body.lineas : []).map((l) => {
+    const o = (l ?? {}) as { fila?: unknown; precio?: unknown; categoriaId?: unknown; unidad?: unknown };
+    return {
+      fila: Number(o.fila),
+      precio: Number(o.precio),
+      categoriaId: Number(o.categoriaId),
+      unidad: str(o.unidad),
+    };
+  });
   if (
     !pedidoId ||
     !proveedor ||
@@ -151,6 +167,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "El pedido no tiene centro de negocio." }, { status: 400 });
     }
 
+    // Artículos manuales (sin código en el catálogo): se crean en Defontana con
+    // la categoría elegida, y el código nuevo se anota en la planilla de
+    // inmediato, así un reintento no los duplica si la OC falla después.
+    const manuales = lineas.filter(({ row }) => str(row[11]) === CODIGO_ARTICULO_MANUAL);
+    const articulosCreados: { fila: number; codigo: string; categoria: string }[] = [];
+    if (manuales.length > 0) {
+      const [categorias, unidades] = await Promise.all([categoriasArticulo(), unidadesArticulo()]);
+      for (const m of manuales) {
+        const nombre = str(m.row[12]);
+        if (!categorias.some((c) => c.id === m.categoriaId)) {
+          return NextResponse.json(
+            { error: `Elige la categoría de «${nombre}» para crearlo en Defontana.` },
+            { status: 400 }
+          );
+        }
+        if (!unidades.some((u) => u.codigo === m.unidad)) {
+          return NextResponse.json(
+            { error: `Elige la unidad de «${nombre}» para crearlo en Defontana.` },
+            { status: 400 }
+          );
+        }
+      }
+      for (const m of manuales) {
+        const categoria = categorias.find((c) => c.id === m.categoriaId)!;
+        const codigo = await crearArticulo({
+          nombre: str(m.row[12]),
+          unidad: m.unidad,
+          categoriaId: m.categoriaId,
+          precio: m.precio,
+        });
+        m.row[11] = codigo;
+        m.row[10] = categoria.nombre;
+        m.row[13] = m.unidad;
+        articulosCreados.push({ fila: m.fila, codigo, categoria: categoria.nombre });
+        await batchWriteRanges(sheetId, [
+          {
+            range: `${PEDIDOS_SHEET}!K${m.fila}:L${m.fila}`,
+            values: [[categoria.nombre, codigo]],
+          },
+          { range: `${PEDIDOS_SHEET}!N${m.fila}`, values: [[m.unidad]] },
+        ]);
+      }
+    }
+
     const { numero, omitidos } = await crearOC({
       proveedorRut: formatearRut(proveedor),
       centroNegocio: centro,
@@ -193,6 +253,7 @@ export async function POST(request: Request) {
       oc: numero,
       filas: lineas.map((l) => l.fila),
       omitidos,
+      articulosCreados,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
