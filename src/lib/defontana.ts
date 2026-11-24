@@ -380,8 +380,9 @@ export const ESTADOS_OC_ASOCIABLES = ["Aprobado", "Parcialmente Recepcionado"];
 /**
  * Estado en texto a partir de los códigos de PurchaseOrder/Get (verificado en
  * `replapi` el 2026-11-23 contra el estado del listado): Ingresado = aprobación
- * pendiente (approveState PC); Anulado = emissionState N; Cerrado = billingState
- * C; si no, según lo recepcionado (receiptState P / I / C).
+ * pendiente (approveState PC); Anulado = emissionState N; Cerrado = emissionState
+ * C (billingState NO sirve: una OC facturada y aún sin recepcionar trae C y sigue
+ * «Aprobado», p. ej. la 4753; verificado contra producción el 2026-11-24); si no, según lo recepcionado (receiptState P / I / C).
  */
 export function estadoTextoOC(o: {
   approveState?: string;
@@ -391,7 +392,7 @@ export function estadoTextoOC(o: {
 }): string {
   if (o.emissionState === "N") return "Anulado";
   if (o.approveState !== "AC") return "Ingresado";
-  if (o.billingState === "C") return "Cerrado";
+  if (o.emissionState === "C") return "Cerrado";
   if (o.receiptState === "C") return "Completamente Recepcionado";
   if (o.receiptState === "I") return "Parcialmente Recepcionado";
   return "Aprobado";
