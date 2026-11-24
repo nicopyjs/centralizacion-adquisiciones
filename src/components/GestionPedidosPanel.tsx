@@ -3392,6 +3392,385 @@ function DialogoAsociarOC({
   );
 }
 
+type ProveedorBusqueda = { rut: string; nombre: string; condicionPago: string };
+type CondicionBusqueda = { codigo: string; nombre: string };
+
+const clp = (n: number) => `$${Math.round(n).toLocaleString("es-CL")}`;
+
+/**
+ * Crea en Defontana una OC con los artículos marcados del pedido. Reutiliza el
+ * centro de negocio, los clasificadores y el código del pedido; el proveedor, la
+ * condición de pago y los precios se eligen aquí. Al crearse queda asociada a
+ * esos artículos (un pedido puede tener varias OC).
+ */
+function DialogoCrearOC({
+  pedido,
+  items,
+  onCerrar,
+  onCreada,
+}: {
+  pedido: PedidoResumen;
+  items: PedidoItem[];
+  onCerrar: () => void;
+  onCreada: (filas: number[], oc: string) => void;
+}) {
+  const caja = useRef<HTMLDivElement>(null);
+  const [texto, setTexto] = useState("");
+  const [resultados, setResultados] = useState<ProveedorBusqueda[] | null>(null);
+  const [buscando, setBuscando] = useState(false);
+  const [proveedor, setProveedor] = useState<ProveedorBusqueda | null>(null);
+  const [condiciones, setCondiciones] = useState<CondicionBusqueda[]>([]);
+  const [ambiente, setAmbiente] = useState("");
+  const [condicion, setCondicion] = useState("");
+  const [fechaRecepcion, setFechaRecepcion] = useState(
+    () => fechaEntregaAYMD(pedido.fechaEntrega) || new Date().toLocaleDateString("en-CA")
+  );
+  const [exenta, setExenta] = useState(false);
+  const [precios, setPrecios] = useState<Record<number, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const [creada, setCreada] = useState<{ oc: number; omitidos: string[] } | null>(null);
+
+  useEffect(() => caja.current?.focus(), []);
+
+  useEffect(() => {
+    fetch("/api/pedidos/oc/crear", { cache: "no-store" })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setCondiciones(d.condiciones ?? []);
+        setAmbiente(d.ambiente ?? "");
+      })
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : "No se pudieron leer las condiciones de pago.")
+      );
+  }, []);
+
+  // Búsqueda de proveedor (nombre o RUT) con retardo mientras se escribe.
+  useEffect(() => {
+    const t = texto.trim();
+    if (t.length < 2) return;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => {
+      setBuscando(true);
+      fetch(`/api/pedidos/oc/crear?proveedor=${encodeURIComponent(t)}`, {
+        cache: "no-store",
+        signal: ctl.signal,
+      })
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "No se pudo buscar.");
+          setResultados(d.proveedores ?? []);
+          setError(null);
+        })
+        .catch((e) => {
+          if (e?.name !== "AbortError") {
+            setResultados(null);
+            setError(e instanceof Error ? e.message : "Error de red.");
+          }
+        })
+        .finally(() => {
+          if (!ctl.signal.aborted) setBuscando(false);
+        });
+    }, 450);
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [texto]);
+
+  const num = (fila: number) => Number((precios[fila] ?? "").replace(",", "."));
+  const neto = items.reduce((a, i) => a + Math.round(i.cantidad * (num(i.fila) || 0)), 0);
+  const iva = exenta ? 0 : Math.round(neto * 0.19);
+  const preciosOk = items.every((i) => num(i.fila) > 0);
+  const puedeCrear =
+    !!proveedor && !!condicion && !!fechaRecepcion && preciosOk && !enviando && !creada;
+  const condicionProveedor = proveedor
+    ? condiciones.find((c) => c.codigo === proveedor.condicionPago)
+    : undefined;
+
+  function elegir(p: ProveedorBusqueda) {
+    setProveedor(p);
+    setResultados(null);
+    setTexto("");
+    setError(null);
+    // La condición que el proveedor trae en Defontana es solo la sugerida.
+    if (condiciones.some((c) => c.codigo === p.condicionPago)) setCondicion(p.condicionPago);
+  }
+
+  async function crear() {
+    if (!proveedor) return;
+    setEnviando(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/pedidos/oc/crear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pedidoId: pedido.pedidoId,
+          proveedor: proveedor.rut,
+          condicionPago: condicion,
+          fechaRecepcion,
+          exenta,
+          lineas: items.map((i) => ({ fila: i.fila, precio: num(i.fila) })),
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "No se pudo crear la OC.");
+      setCreada({ oc: d.oc, omitidos: d.omitidos ?? [] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error de red.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  const inputClass =
+    "h-10 w-full rounded-lg border border-border bg-card px-3 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40 disabled:bg-muted";
+  const cerrar = () =>
+    creada
+      ? onCreada(
+          items.map((i) => i.fila),
+          String(creada.oc)
+        )
+      : onCerrar();
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !enviando) cerrar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) cerrar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Crear orden de compra con los artículos seleccionados"
+        className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <h3 className="text-base font-extrabold uppercase tracking-wide text-primary">
+          Crear orden de compra · pedido {folioCorto(pedido.pedidoId)}
+        </h3>
+        {ambiente === "pruebas" && (
+          <p className="mt-1 rounded-md bg-muted px-2 py-1 text-xs font-semibold text-secondary">
+            Defontana en modo PRUEBAS: la OC no se crea en producción.
+          </p>
+        )}
+
+        {creada ? (
+          <div className="mt-4 space-y-2 text-sm text-card-foreground">
+            <p className="font-bold text-primary">OC {creada.oc} creada y asociada al pedido.</p>
+            <p>Queda en estado «Ingresado»: falta aprobarla en Defontana.</p>
+            {creada.omitidos.length > 0 && (
+              <p role="alert" className="font-semibold text-destructive">
+                Defontana no permite enviar por API: {creada.omitidos.join(", ")}. Complétalos a
+                mano en la OC (pedido: {pedido.clasificador1 || "—"} /{" "}
+                {pedido.clasificador2 || "—"}).
+              </p>
+            )}
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={cerrar}
+                className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Centro de negocio: <b>{pedido.centroNegocio || "—"}</b> · Clasif. 1:{" "}
+              <b>{pedido.clasificador1 || "—"}</b> · Clasif. 2:{" "}
+              <b>{pedido.clasificador2 || "—"}</b> (del pedido)
+            </p>
+
+            <p className={`${labelClass} mt-4`}>Proveedor</p>
+            {proveedor ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
+                <span className="font-semibold text-card-foreground">
+                  {proveedor.nombre} <span className="font-normal">({proveedor.rut})</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={enviando}
+                  onClick={() => setProveedor(null)}
+                  className="text-xs font-semibold text-secondary hover:underline"
+                >
+                  Cambiar
+                </button>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={texto}
+                  disabled={enviando}
+                  onChange={(e) => {
+                    setTexto(e.target.value);
+                    if (e.target.value.trim().length < 2) setResultados(null);
+                  }}
+                  placeholder="Nombre o RUT completo del proveedor"
+                  className={inputClass}
+                />
+                {buscando && (
+                  <p className="mt-1 text-xs text-muted-foreground">Buscando en Defontana…</p>
+                )}
+                {resultados && !buscando && resultados.length === 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Sin proveedores activos para «{texto.trim()}». Si es nuevo, créalo antes en
+                    Defontana.
+                  </p>
+                )}
+                {resultados && resultados.length > 0 && (
+                  <ul className="mt-2 max-h-48 divide-y divide-border overflow-y-auto rounded-lg border border-border">
+                    {resultados.map((p) => (
+                      <li key={p.rut}>
+                        <button
+                          type="button"
+                          onClick={() => elegir(p)}
+                          className="flex w-full flex-wrap items-center gap-x-3 px-3 py-1.5 text-left text-sm hover:bg-accent/10"
+                        >
+                          <span className="font-bold text-primary">{p.nombre}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {p.rut}
+                            {p.condicionPago ? ` · ${p.condicionPago}` : ""}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelClass}>Condición de pago</span>
+                <select
+                  className={inputClass}
+                  value={condicion}
+                  disabled={enviando}
+                  onChange={(e) => setCondicion(e.target.value)}
+                >
+                  <option value="">Selecciona…</option>
+                  {condiciones.map((c) => (
+                    <option key={c.codigo} value={c.codigo}>
+                      {c.nombre}
+                    </option>
+                  ))}
+                </select>
+                {proveedor && (
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    Condición del proveedor en Defontana:{" "}
+                    {condicionProveedor?.nombre || proveedor.condicionPago || "ninguna"}
+                  </span>
+                )}
+              </label>
+              <label className="block">
+                <span className={labelClass}>Fecha de recepción</span>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={fechaRecepcion}
+                  disabled={enviando}
+                  onChange={(e) => setFechaRecepcion(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <p className={`${labelClass} mt-4`}>Artículos y precio neto unitario</p>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {items.map((i) => (
+                <li
+                  key={i.fila}
+                  className="grid grid-cols-[1fr_7rem_6rem] items-center gap-x-3 px-3 py-1.5 text-sm"
+                >
+                  <span className="min-w-0 truncate text-card-foreground" title={i.nombre}>
+                    {i.nombre}
+                    <span className="text-xs text-muted-foreground">
+                      {" "}
+                      · {i.cantidad} {i.unidad}
+                    </span>
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    aria-label={`Precio neto unitario de ${i.nombre}`}
+                    placeholder="Precio"
+                    value={precios[i.fila] ?? ""}
+                    disabled={enviando}
+                    onChange={(e) =>
+                      setPrecios((p) => ({
+                        ...p,
+                        [i.fila]: e.target.value.replace(/[^\d.,]/g, ""),
+                      }))
+                    }
+                    className="h-9 w-full rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                  />
+                  <span className="text-right text-xs text-muted-foreground">
+                    {num(i.fila) > 0 ? clp(i.cantidad * num(i.fila)) : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+              <label className="inline-flex items-center gap-2 text-card-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer accent-accent"
+                  checked={exenta}
+                  disabled={enviando}
+                  onChange={(e) => setExenta(e.target.checked)}
+                />
+                Exenta de IVA
+              </label>
+              <span className="text-card-foreground">
+                Neto {clp(neto)} · IVA {clp(iva)} · <b>Total {clp(neto + iva)}</b>
+              </span>
+            </div>
+
+            {error && (
+              <p role="alert" className="mt-3 text-sm font-medium text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCerrar}
+                disabled={enviando}
+                className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void crear()}
+                disabled={!puedeCrear}
+                className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover disabled:opacity-60"
+              >
+                {enviando ? "Creando OC…" : "Crear OC en Defontana"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DialogoModificar({
   pedido,
   modo,
@@ -4013,6 +4392,7 @@ function Detalle({
   const [datosAbiertos, setDatosAbiertos] = useState(false);
   // OC asociadas a los artículos: se leen de Defontana (proveedor, fecha, estado).
   const [asociando, setAsociando] = useState(false);
+  const [creandoOC, setCreandoOC] = useState(false);
   const [ocInfos, setOcInfos] = useState<Record<string, InfoOC>>({});
   const ocsAsociadas = Array.from(
     new Set(pedido.items.map((i) => i.ocAsociada).filter(Boolean))
@@ -4480,6 +4860,19 @@ function Detalle({
             >
               Asociar OC{seleccionadas.length > 0 ? ` (${seleccionadas.length})` : ""}
             </button>
+            <button
+              type="button"
+              onClick={() => setCreandoOC(true)}
+              disabled={seleccionadas.length === 0}
+              title={
+                seleccionadas.length === 0
+                  ? "Marca los artículos de la tabla que irán en la nueva OC"
+                  : "Crear en Defontana una OC con los artículos marcados"
+              }
+              className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Crear OC{seleccionadas.length > 0 ? ` (${seleccionadas.length})` : ""}
+            </button>
             {seleccionadas.length === 0 && (
               <span className="text-xs text-muted-foreground">
                 Marca los artículos de la tabla para asociarlos a una OC.
@@ -4488,6 +4881,18 @@ function Detalle({
           </div>
         )}
       </div>
+
+      {creandoOC && (
+        <DialogoCrearOC
+          pedido={pedido}
+          items={seleccionadas}
+          onCerrar={() => setCreandoOC(false)}
+          onCreada={(filas, oc) => {
+            setCreandoOC(false);
+            onOcAsociada(filas, oc);
+          }}
+        />
+      )}
 
       {asociando && (
         <DialogoAsociarOC

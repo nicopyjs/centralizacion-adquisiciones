@@ -635,3 +635,170 @@ export async function buscarOCsDeProveedor(texto: string): Promise<OCListada[]> 
   }
   return out.sort((a, b) => b.numero - a.numero);
 }
+
+export type CondicionPago = { codigo: string; nombre: string };
+
+/** Catálogo de condiciones de pago (Sale/GetPaymentConditions, verificado en `replapi` el 2026-11-24). */
+export async function condicionesPago(): Promise<CondicionPago[]> {
+  const r = await llamar<{
+    success: boolean;
+    message?: string | null;
+    items?: { code: string; name: string }[] | null;
+  }>("/api/Sale/GetPaymentConditions");
+  if (!r.success) throw new Error(r.message || "No se pudieron leer las condiciones de pago.");
+  return (r.items ?? []).map((c) => ({ codigo: c.code, nombre: c.name }));
+}
+
+export type ProveedorDefontana = {
+  /** RUT con puntos y guion: es el `providerID` que pide InsertPurchaseOrder. */
+  rut: string;
+  nombre: string;
+  /** Condición de pago asociada al proveedor en Defontana ("" si no tiene). */
+  condicionPago: string;
+};
+
+/**
+ * Proveedores activos por nombre o RUT (PurchaseOrder/GetProviders, verificado en
+ * `replapi` el 2026-11-24: `description` busca por nombre, `legalCode` por RUT
+ * exacto con puntos y guion). La condición de pago del proveedor viene en
+ * `purchase[0].paymentConditionId`.
+ */
+export async function buscarProveedores(texto: string): Promise<ProveedorDefontana[]> {
+  const t = texto.trim();
+  const filtro = /^\d[\d.\-kK]*$/.test(t)
+    ? `legalCode=${encodeURIComponent(formatearRut(t))}`
+    : `description=${encodeURIComponent(t)}`;
+  const r = await llamar<{
+    success: boolean;
+    message?: string | null;
+    providersList?: {
+      legalCode: string;
+      name: string;
+      purchase?: { paymentConditionId?: string | null }[] | null;
+    }[];
+  }>(`/api/PurchaseOrder/GetProviders?${filtro}&status=1&itemsPerPage=20&pageNumber=0`);
+  if (!r.success) throw new Error(r.message || "No se pudieron leer los proveedores.");
+  return (r.providersList ?? []).map((p) => ({
+    rut: p.legalCode,
+    nombre: p.name,
+    condicionPago: p.purchase?.[0]?.paymentConditionId ?? "",
+  }));
+}
+
+/** Despacho de las OC de NEB (el mismo que trae el ERP al crear una OC a mano). */
+const DESPACHO_NEB = {
+  dispatchContact: "990767096",
+  dispatchPhone: "990767096",
+  dispatchAddress: "Padre Mariano 391 of 203",
+  dispatchDistrict: "PROVIDENCIA",
+  dispatchState: "REGION METROPOLITANA",
+  dispatchCity: "Santiago",
+  dispatchCountry: "CL",
+};
+
+/**
+ * "06 RCT - Refacciones de Central Térmica" → "06RCT", como guarda Defontana el
+ * clasificador en las OC creadas a mano (verificado en la OC 4753).
+ */
+export function clasificadorOC(valor: string | undefined): string {
+  return (valor ?? "").split(" - ")[0].replace(/\s+/g, "");
+}
+
+export type CrearOCInput = {
+  proveedorRut: string;
+  centroNegocio: string;
+  condicionPago: string;
+  /** "YYYY-MM-DD" */
+  fechaEmision: string;
+  /** "YYYY-MM-DD" */
+  fechaRecepcion: string;
+  /** OC exenta de IVA (los precios se tratan como monto exento). */
+  exenta: boolean;
+  comentario: string;
+  codigoPedido: string;
+  clasificador1?: string;
+  clasificador2?: string;
+  /** `precio` es el neto unitario en pesos. */
+  lineas: { codigo: string; cantidad: number; precio: number; comentario?: string }[];
+};
+
+/**
+ * Crea una OC (PurchaseOrder/InsertPurchaseOrder, contrato del Swagger
+ * "Main API v1"; probado en `replapi` el 2026-11-24). Queda en «Ingresado»
+ * (approveState PC): alguien la aprueba en Defontana.
+ *
+ * Campos personalizados: «Código Pedido» se acepta. Clasificador 1/2 los
+ * rechaza `replapi` con «excede el máximo permitido de 0 caracteres» (el campo
+ * no tiene largo configurado en Defontana) y a nivel de línea se ignoran en
+ * silencio. Por eso, si Defontana rechaza un campo personalizado por nombre, se
+ * reintenta sin él y se devuelve en `omitidos` para que se complete a mano.
+ */
+export async function crearOC(
+  input: CrearOCInput
+): Promise<{ numero: number; omitidos: string[] }> {
+  const details = input.lineas.map((l) => ({
+    isService: false,
+    productID: l.codigo,
+    quantity: l.cantidad,
+    price: l.precio,
+    total: Math.round(l.cantidad * l.precio),
+    discount: 0,
+    comment: l.comentario ?? "",
+    customFields: [],
+  }));
+  const neto = details.reduce((a, d) => a + d.total, 0);
+  const iva = input.exenta ? 0 : Math.round(neto * 0.19);
+  const c1 = clasificadorOC(input.clasificador1);
+  const c2 = clasificadorOC(input.clasificador2);
+  let customFields = [
+    { name: "Código Pedido", value: input.codigoPedido },
+    ...(c1 ? [{ name: "Clasificador 1", value: c1 }] : []),
+    ...(c2 ? [{ name: "Clasificador 2", value: c2 }] : []),
+  ];
+  const omitidos: string[] = [];
+  const dia = (ymd: string) => `${ymd}T00:00:00`;
+
+  for (let intento = 0; intento < 5; intento++) {
+    const r = await llamar<{
+      number?: string | number | null;
+      success: boolean;
+      message?: string | null;
+      exceptionMessage?: string | null;
+    }>("/api/PurchaseOrder/InsertPurchaseOrder", {
+      method: "POST",
+      body: {
+        providerID: input.proveedorRut,
+        businessCenter: input.centroNegocio,
+        coinID: "PESO",
+        paymentCondition: input.condicionPago,
+        // Factura de compra electrónica: el tipo que trae el proveedor y el ERP.
+        documentTypeId: "FCA",
+        exchangeRate: 1,
+        emissionDate: dia(input.fechaEmision),
+        expirationDate: dia(input.fechaEmision),
+        receiptDate: dia(input.fechaRecepcion),
+        amountBeforeTaxes: input.exenta ? 0 : neto,
+        modifiers: 0,
+        amountExempt: input.exenta ? neto : 0,
+        taxes: iva,
+        amountTotal: neto + iva,
+        details,
+        ...DESPACHO_NEB,
+        comment: input.comentario,
+        customFields,
+        taxesOC: input.exenta ? [] : [{ code: "IVA", percentage: 19, value: iva }],
+      },
+    });
+    const numero = Number(r.number);
+    if (r.success && numero) return { numero, omitidos };
+    const msg = r.exceptionMessage || r.message || "Defontana rechazó la OC.";
+    const campo = /campo(?: personalizado)? '([^']+)'/.exec(msg)?.[1];
+    if (campo && customFields.some((c) => c.name === campo) && campo !== "Código Pedido") {
+      omitidos.push(campo);
+      customFields = customFields.filter((c) => c.name !== campo);
+      continue;
+    }
+    throw new Error(msg);
+  }
+  throw new Error("Defontana rechazó los campos personalizados de la OC.");
+}
