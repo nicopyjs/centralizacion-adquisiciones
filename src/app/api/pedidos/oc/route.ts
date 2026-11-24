@@ -181,6 +181,15 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+      // Un artículo con OC no se reasocia: primero se le quita la OC.
+      if (numero !== null && str(row[26]) !== "" && str(row[26]) !== String(numero)) {
+        return NextResponse.json(
+          {
+            error: `«${str(row[12])}» ya está en la OC ${str(row[26])}. Quítale la OC primero.`,
+          },
+          { status: 409 }
+        );
+      }
       // Con recepción o consumo ya registrado la OC no se puede cambiar: los
       // movimientos de Defontana quedaron contra esa OC.
       const marca = str(row[17]);
