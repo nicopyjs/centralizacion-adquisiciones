@@ -802,3 +802,103 @@ export async function crearOC(
   }
   throw new Error("Defontana rechazó los campos personalizados de la OC.");
 }
+
+/** Código con el que la planilla de pedidos guarda un artículo que no está en el catálogo. */
+export const CODIGO_ARTICULO_MANUAL = "MANUAL";
+
+export type CategoriaArticulo = { id: number; nombre: string };
+export type UnidadArticulo = { codigo: string; nombre: string };
+
+/** Categorías de artículos (Sale/GetCategories; en `replapi` hay 68, tipo "A" = artículo). */
+export async function categoriasArticulo(): Promise<CategoriaArticulo[]> {
+  const r = await llamar<{
+    success: boolean;
+    message?: string | null;
+    categoriesList?: { categoryID: number; description: string; type?: string }[] | null;
+  }>("/api/Sale/GetCategories?itemsPerPage=200&pageNumber=0");
+  if (!r.success) throw new Error(r.message || "No se pudieron leer las categorías.");
+  const lista = r.categoriesList ?? [];
+  return lista
+    .filter((c) => (c.type ?? "A") === "A")
+    .map((c) => ({ id: c.categoryID, nombre: c.description }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+}
+
+/** Unidades de medida (Sale/GetUnits). Defontana acepta cualquier texto al crear un artículo, por eso se valida contra este catálogo. */
+export async function unidadesArticulo(): Promise<UnidadArticulo[]> {
+  const r = await llamar<{
+    success: boolean;
+    message?: string | null;
+    unitList?: { code: string; description: string }[] | null;
+  }>("/api/Sale/GetUnits?itemsPerPage=100&pageNumber=0");
+  if (!r.success) throw new Error(r.message || "No se pudieron leer las unidades.");
+  return (r.unitList ?? []).map((u) => ({ codigo: u.code, nombre: u.description }));
+}
+
+/**
+ * Prefijo de código por categoría y último correlativo conocido de cada prefijo
+ * (medido en Defontana el 2026-11-24). NEB codifica los artículos como
+ * 4 letras + 4 dígitos (CACU0014); varias categorías comparten prefijo, por eso
+ * el correlativo es por prefijo. Es solo el punto de partida: `crearArticulo`
+ * sigue subiendo mientras Defontana responda «ya existe».
+ */
+const CODIGO_POR_CATEGORIA: Record<number, [prefijo: string, ultimo: number]> = {
+  1: ["ESAC", 6], 2: ["ACAC", 33], 3: ["ACEQ", 49], 4: ["AICA", 106], 5: ["AIPX", 20],
+  6: ["BBAC", 4], 7: ["BBEQ", 125], 8: ["BBRP", 5], 9: ["CDAC", 63], 10: ["CDEQ", 9],
+  11: ["CDRP", 52], 12: ["CACU", 19], 13: ["CAFE", 20], 14: ["CAPX", 4], 15: ["CAPR", 38],
+  16: ["CAPV", 10], 17: ["COCL", 13], 18: ["ELCO", 22], 19: ["ELGN", 288], 20: ["ELTA", 2],
+  21: ["EPEQ", 3], 22: ["EPGN", 116], 23: ["EPRO", 83], 24: ["EXEQ", 56], 25: ["FJGN", 280],
+  26: ["FIBR", 156], 27: ["FICU", 214], 28: ["FIFE", 183], 29: ["FIGV", 83], 30: ["FINX", 24],
+  31: ["FIPX", 123], 32: ["FIPR", 179], 33: ["FIPV", 85], 34: ["FIRN", 68], 35: ["HEEL", 50],
+  36: ["HEIN", 31], 37: ["HEMA", 193], 38: ["HEOM", 5], 39: ["ITAA", 13], 40: ["ITGN", 363],
+  41: ["ITOF", 57], 42: ["ICAC", 29], 43: ["ICEQ", 9], 44: ["MECD", 7], 45: ["RAAC", 8],
+  46: ["RAEQ", 57], 47: ["SUCE", 5], 48: ["SUMD", 3], 49: ["VABO", 30], 50: ["VAGL", 17],
+  51: ["VAIC", 112], 52: ["VAMP", 13], 53: ["VAMO", 21], 54: ["VEAC", 24], 55: ["VECS", 60],
+  56: ["VECF", 14], 57: ["VEDU", 38], 58: ["VEEQ", 85], 59: ["VEIV", 51], 60: ["VETM", 2],
+  62: ["TAEQ", 4], 63: ["TAEQ", 4], 64: ["AREQ", 1], 65: ["ARVE", 1], 66: ["ARMA", 1],
+  67: ["ESAE", 6], 68: ["TEIF", 2], 69: ["SECO", 2],
+};
+
+/**
+ * Crea un artículo en Defontana (Sale/SaveProduct, probado en `replapi` el
+ * 2026-11-24) con el siguiente código libre de su categoría. Devuelve el código.
+ * Un código repetido responde `success:false` «ya existe» (no sobrescribe).
+ */
+export async function crearArticulo(input: {
+  nombre: string;
+  unidad: string;
+  categoriaId: number;
+  /** Precio de compra neto (solo informativo en el maestro). */
+  precio?: number;
+}): Promise<string> {
+  const base = CODIGO_POR_CATEGORIA[input.categoriaId];
+  if (!base) {
+    throw new Error(`La categoría ${input.categoriaId} no tiene prefijo de código definido.`);
+  }
+  const [prefijo, ultimo] = base;
+  for (let n = ultimo + 1; n <= ultimo + 40; n++) {
+    const codigo = `${prefijo}${String(n).padStart(4, "0")}`;
+    const r = await llamar<{
+      success: boolean;
+      message?: string | null;
+      exceptionMessage?: string | null;
+    }>("/api/Sale/SaveProduct", {
+      method: "POST",
+      body: {
+        code: codigo,
+        name: input.nombre.trim().toUpperCase(),
+        unit: input.unidad,
+        price: input.precio ?? 0,
+        description: "",
+        categoryID: input.categoriaId,
+        isService: false,
+        usaLotes: false,
+      },
+    });
+    if (r.success) return codigo;
+    const msg = r.exceptionMessage || r.message || "";
+    if (/ya existe/i.test(msg)) continue;
+    throw new Error(msg || "Defontana rechazó la creación del artículo.");
+  }
+  throw new Error(`No se encontró un código libre para el prefijo ${prefijo}.`);
+}
