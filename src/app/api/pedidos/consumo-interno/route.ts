@@ -256,7 +256,7 @@ export async function POST(request: Request) {
           { status: 409 }
         );
       }
-      if (conRecepcionOC && !ESTADOS_OC_ASOCIABLES.includes(oc.estadoTexto)) {
+      if ((conRecepcionOC || conEntradaDirecta) && !ESTADOS_OC_ASOCIABLES.includes(oc.estadoTexto)) {
         return NextResponse.json(
           {
             error: `La OC ${oc.numero} está «${oc.estadoTexto}»: solo se recepciona con la OC en estado ${ESTADOS_OC_ASOCIABLES.join(" o ")}.`,
@@ -281,7 +281,7 @@ export async function POST(request: Request) {
       nombre: d.nombre,
       cantidad: d.cantidad,
     }));
-    if (oc && conRecepcionOC) {
+    if (oc && (conRecepcionOC || conEntradaDirecta)) {
       const problemas = problemasPorRecibir(oc, pedido);
       if (problemas.length > 0) {
         return NextResponse.json(
@@ -382,12 +382,15 @@ export async function POST(request: Request) {
           centroNegocio: centro,
           clasificador1,
           clasificador2,
-          ...(oc ? { providerId: oc.proveedorRut, ocNumero: oc.numero } : {}),
+          ...(oc
+            ? { providerId: oc.proveedorRut, ocNumero: oc.numero, ocSerie: oc.serie ?? "" }
+            : {}),
           facturaNumero,
           lineas: detalle.map((d) => ({
             articleId: d.codigo,
             cantidad: d.cantidad,
             costoUnitario: costoPorFila.get(d.fila) ?? 0,
+            ocLinea: oc?.lineas.find((x) => x.codigo === d.codigo)?.linea,
           })),
         });
         folioEntrada = r.folio;
