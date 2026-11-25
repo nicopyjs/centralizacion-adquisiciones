@@ -310,10 +310,17 @@ export async function crearParteEntradaCostoDirecto(
       date: input.fecha,
       externalDocumentID: input.externalId,
       ...(input.providerId ? { providerId: input.providerId } : {}),
-      ...(input.facturaNumero
-        ? { referenceDocumentFolio: input.facturaNumero, referenceDocumentType: "FCA" }
-        : input.ocNumero
-          ? { referenceDocumentFolio: input.ocNumero, referenceDocumentType: "OC_ABA" }
+      // Con OC, el parte referencia la OC (OC_ABA) con motivo COMPRA, igual que
+      // el que genera el ERP al recepcionar; la factura solo va en la glosa.
+      // Sin OC, la factura (FCA) es la referencia.
+      ...(input.ocNumero
+        ? {
+            reasonId: "COMPRA",
+            referenceDocumentFolio: input.ocNumero,
+            referenceDocumentType: "OC_ABA",
+          }
+        : input.facturaNumero
+          ? { referenceDocumentFolio: input.facturaNumero, referenceDocumentType: "FCA" }
           : {}),
       analysis,
       details: input.lineas.map((l) => ({

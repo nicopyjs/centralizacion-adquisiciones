@@ -2797,7 +2797,7 @@ function DialogoConsumo({
           ; si la OC está recepcionada en parte, se muestran solo los artículos
           pendientes de recepción.
           {conEntradaDirecta &&
-            " En el parte de entrada, la factura queda como documento de referencia («Factura Electrónica Compra» + este número) y reemplaza a la OC en esa referencia."}
+            " Si indicas también la OC, el parte referencia la OC y la factura queda en la glosa («proveedor FAC-número»); sin OC, la factura es el documento de referencia («Factura Electrónica Compra» + este número)."}
         </p>
         {conEntradaDirecta && (
           <p className="mt-1 text-xs text-muted-foreground">
