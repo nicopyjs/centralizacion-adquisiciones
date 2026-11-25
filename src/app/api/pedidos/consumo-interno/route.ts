@@ -307,7 +307,8 @@ export async function POST(request: Request) {
     });
     const glosa = [
       pedidoId,
-      facturaNumero ? `Fact. ${facturaNumero}` : "",
+      conEntradaDirecta && oc && facturaNumero ? `${oc.proveedorNombre} FAC-${facturaNumero}` : "",
+      !(conEntradaDirecta && oc) && facturaNumero ? `Fact. ${facturaNumero}` : "",
       str(cabecera[15]),
     ]
       .filter(Boolean)
