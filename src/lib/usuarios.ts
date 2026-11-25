@@ -49,7 +49,7 @@ const POR_AREA: Record<Area, string[]> = {
     "servicios",
     "torellana",
   ],
-  "transicion-postventa": ["iguajardo"],
+  "transicion-postventa": ["iguajardo", "servicios"],
 };
 
 const DOMINIO = "@nebchile.cl";

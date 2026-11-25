@@ -4546,6 +4546,28 @@ function Detalle({
   );
   const todasSeleccionadas =
     vigentes.length > 0 && vigentes.every((it) => seleccionFilas.has(it.fila));
+  /** Suelta la OC asociada a un artículo (solo la anotación de la planilla). */
+  const quitarOC = async (it: (typeof vigentes)[number]) => {
+    if (
+      !window.confirm(
+        `¿Quitar la OC ${it.ocAsociada} de «${it.nombre}»? Solo se borra la asociación en la planilla; en Defontana no cambia nada.`
+      )
+    )
+      return;
+    try {
+      const res = await fetch("/api/pedidos/oc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pedidoId: pedido.pedidoId, oc: "", filas: [it.fila] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "No se pudo quitar la OC.");
+      onOcAsociada([it.fila], "");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "No se pudo quitar la OC.");
+    }
+  };
+
   const seleccionadas = vigentes.filter((it) => seleccionFilas.has(it.fila));
   // Los artículos que ya tienen OC se ignoran: Crear/Asociar OC solo usan el resto.
   const conOC = seleccionadas.filter((it) => it.ocAsociada);
@@ -5431,6 +5453,15 @@ function Detalle({
                       </span>
                       <span>
                         OC: <span className={dato}>{it.ocAsociada || "En gestión"}</span>
+                        {it.ocAsociada && (
+                          <button
+                            type="button"
+                            className="ml-2 text-xs text-red-600 underline"
+                            onClick={() => quitarOC(it)}
+                          >
+                            Quitar
+                          </button>
+                        )}
                       </span>
                       <span>
                         Fecha:{" "}
