@@ -4,6 +4,7 @@ import { agregarMensaje, renombrarHilo, normArea } from "@/lib/chat";
 import { AREAS } from "@/lib/auth";
 import { renombrarCarpetaPedido } from "@/lib/drive";
 import { ETIQUETAS_SHEET } from "@/lib/etiquetas";
+import { renombrarCorreoPedido } from "@/lib/google-oauth";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
@@ -305,6 +306,11 @@ export async function POST(request: Request) {
           await renombrarHilo(pedidoId, folioNuevo, normArea(area), normArea(areaNueva));
         } catch {
           pendientes.push("chat");
+        }
+        try {
+          await renombrarCorreoPedido(pedidoId, folioNuevo);
+        } catch {
+          pendientes.push("cadena de correo");
         }
         try {
           await renombrarCarpetaPedido(pedidoId, folioNuevo);

@@ -12,6 +12,7 @@ import {
   GoogleAuthError,
   enviarCorreo,
   getGoogleEmail,
+  kReportes,
   leerCorreoPedido,
   threadEnMiBuzon,
 } from "@/lib/google-oauth";
@@ -28,7 +29,6 @@ import {
  */
 
 const FOLIO_RE = /^[A-Z]{3}-\d+$/;
-const kReportes = (folio: string) => `mail:reportes:${folio}`;
 
 type Reporte = { ts: number; por: string; oc: string; nota: string };
 

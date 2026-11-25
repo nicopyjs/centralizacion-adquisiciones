@@ -63,11 +63,12 @@ const DATA_RANGE = `${PEDIDOS_SHEET}!A2:AA`;
 // prefijo de área usado en EnviarPedidoForm: RCT, SST, INT).
 const PREFIJOS_FOLIO = ["RCT", "SST", "INT", "TYP"];
 
+// Claves sin tildes: se consultan con `norm()`, que las quita.
 const PREFIJO_POR_AREA: Record<string, string> = {
   refacciones: "RCT",
-  "servicio técnico": "SST",
+  "servicio tecnico": "SST",
   instalaciones: "INT",
-  "transición y postventa": "TYP",
+  "transicion y postventa": "TYP",
 };
 
 /** Prefijo del folio a partir del código de centro (p. ej. "RCTA25008..." -> "RCT"). */
