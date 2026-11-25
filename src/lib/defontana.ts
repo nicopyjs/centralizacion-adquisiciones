@@ -240,7 +240,16 @@ export type ParteEntradaCostoDirectoInput = {
    * reemplaza a la OC en esa referencia: el documento admite una sola.
    */
   facturaNumero?: number;
-  lineas: { articleId: string; cantidad: number; costoUnitario: number; comentario?: string }[];
+  /** Serie de la OC ("" si no tiene); va con `ocLinea` de cada línea. */
+  ocSerie?: string;
+  lineas: {
+    articleId: string;
+    cantidad: number;
+    costoUnitario: number;
+    comentario?: string;
+    /** N° de línea de la OC: con él Defontana liga el parte a la OC. */
+    ocLinea?: number;
+  }[];
 };
 
 /**
@@ -329,6 +338,14 @@ export async function crearParteEntradaCostoDirecto(
         price: l.costoUnitario,
         comment: l.comentario ?? "",
         analysis,
+        // `ocDetails` hace que Defontana cree la recepción de la OC y deje el
+        // parte en sus documentos relacionados (como «Recepción (Nuevo)» del
+        // ERP). Verificado en `replapi` el 2026-11-25 (OC 4751 → recepción
+        // 3939 con PE_CD 222; actualiza `receivedQuantity`). Solo con OC
+        // aprobada y sin él el parte queda suelto.
+        ...(input.ocNumero && l.ocLinea
+          ? { ocDetails: { number: input.ocNumero, serie: input.ocSerie ?? "", line: l.ocLinea } }
+          : {}),
       })),
     },
   });

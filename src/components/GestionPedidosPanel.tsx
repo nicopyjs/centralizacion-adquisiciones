@@ -2802,8 +2802,8 @@ function DialogoConsumo({
         {conEntradaDirecta && (
           <p className="mt-1 text-xs text-muted-foreground">
             Si indicas la OC, se autocompletan bodega y costo por artículo desde ella
-            (y queda anotada para trazabilidad), pero Defontana NO la marca como
-            recepcionada: eso solo pasa con «Recepcionar OC».
+            y el parte queda ligado a la OC como una recepción (la OC debe estar
+            Aprobada o Parcialmente Recepcionada y los artículos caber en lo pendiente).
           </p>
         )}
         {ocInfo?.estado === "cargando" && (
