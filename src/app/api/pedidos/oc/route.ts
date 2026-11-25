@@ -197,7 +197,7 @@ export async function POST(request: Request) {
         if (yaRecepcionado(marca) > 0 || yaConsumido(marca) > 0) {
           return NextResponse.json(
             {
-              error: `«${str(row[12])}» ya tiene recepción o consumo registrado (${marca}): su OC no se puede cambiar.`,
+              error: `«${str(row[12])}» ya tiene recepción o consumo registrado (${marca}): su OC no se puede cambiar. Si ese documento ya se anuló en Defontana, borra la marca en «Consumo interno» y vuelve a intentarlo.`,
             },
             { status: 409 }
           );
