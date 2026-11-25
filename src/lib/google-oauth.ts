@@ -336,3 +336,21 @@ export async function leerCorreoPedido(
 export async function guardarCorreoPedido(c: CorreoPedido) {
   await db().set(kCorreoPedido(c.folio), c);
 }
+
+/** Reportes de consumo interno ya enviados en la cadena del pedido. */
+export const kReportes = (folio: string) => `mail:reportes:${folio}`;
+
+/**
+ * Traslada la cadena de correo y sus reportes al folio nuevo. Si quedaran bajo
+ * el viejo, el pedido que reutilice ese folio no podría enviar su correo.
+ */
+export async function renombrarCorreoPedido(viejo: string, nuevo: string) {
+  const correo = await leerCorreoPedido(viejo);
+  if (correo) {
+    await guardarCorreoPedido({ ...correo, folio: nuevo });
+    await db().del(kCorreoPedido(viejo));
+  }
+  if (await db().exists(kReportes(viejo))) {
+    await db().rename(kReportes(viejo), kReportes(nuevo));
+  }
+}
