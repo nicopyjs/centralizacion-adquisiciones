@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import SearchCombobox, { type ComboOption } from "./SearchCombobox";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
+import CorreoFaltante from "@/components/CorreoFaltante";
 import ReportarCorreo from "@/components/ReportarCorreo";
 import { yaConsumido, yaRecepcionado } from "@/lib/marcas-inventario";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
@@ -58,6 +59,8 @@ type PedidoResumen = {
   /** Cierre/anulación decidido por Adquisiciones; vacío = según lo recibido. */
   estadoManual: "" | "cerrado" | "anulado";
   motivoEstado: string;
+  /** El correo de solicitud no salió: se ofrece enviarlo. */
+  sinCorreo?: boolean;
   items: PedidoItem[];
 };
 
@@ -4982,6 +4985,7 @@ function Detalle({
           sinLeer={sinLeer}
           onActividad={onActividad}
         />
+        {pedido.sinCorreo && <CorreoFaltante folio={pedido.pedidoId} />}
         <ReportarCorreo folio={pedido.pedidoId} items={vigentes} />
         {!bloqueado && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
