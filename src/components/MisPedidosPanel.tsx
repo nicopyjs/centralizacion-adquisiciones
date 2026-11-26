@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import ChatPedido, { InsigniaChat, useChatNoLeidos } from "@/components/ChatPedido";
+import CorreoFaltante from "@/components/CorreoFaltante";
 import ReportarCorreo from "@/components/ReportarCorreo";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 
@@ -38,6 +39,8 @@ type Pedido = {
   estadoManual?: "" | "cerrado" | "anulado";
   motivoEstado?: string;
   etiquetas: string[];
+  /** El correo de solicitud no salió: se ofrece enviarlo. */
+  sinCorreo?: boolean;
   items: PedidoItem[];
 };
 
@@ -1002,6 +1005,7 @@ export default function MisPedidosPanel() {
                     sinLeer={noLeidos[p.pedidoId] ?? 0}
                     onActividad={refrescarNoLeidos}
                   />
+                  {p.sinCorreo && <CorreoFaltante folio={p.pedidoId} />}
                   <ReportarCorreo folio={p.pedidoId} items={vigentes} />
 
                   <ul className="mt-4 space-y-2 md:hidden">

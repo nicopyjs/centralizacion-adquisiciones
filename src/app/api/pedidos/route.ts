@@ -9,7 +9,8 @@ import { AREAS, areaLabel, getSesion, haySesion } from "@/lib/auth";
 import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
 import { getCategoriasConArticulos } from "@/lib/articulos";
 import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
-import { getGoogleEmail } from "@/lib/google-oauth";
+import { db } from "@/lib/chat";
+import { getGoogleEmail, kCorreoPedido } from "@/lib/google-oauth";
 import { areasParaEnviar } from "@/lib/usuarios";
 import { getSolicitantes } from "@/lib/solicitantes";
 import {
@@ -396,8 +397,13 @@ export type PedidoResumen = {
   motivoEstado: string;
   /** Etiquetas que el área le puso para organizarse (pestaña Etiquetas). */
   etiquetas: string[];
+  /** Pedido reciente cuyo correo de solicitud no quedó registrado (no salió). */
+  sinCorreo?: boolean;
   items: PedidoItem[];
 };
+
+/** Días hacia atrás en que se avisa un correo faltante (los antiguos no llevan registro). */
+const DIAS_SIN_CORREO = 10;
 
 export async function GET() {
   // Adquisiciones ve todo; supervisor/maestro solo los pedidos de su área
@@ -482,6 +488,21 @@ export async function GET() {
         ocAsociada: str(row[26]),
       });
     });
+
+    // Pedidos recientes sin cadena de correo registrada: el correo no salió.
+    const desde = new Date(Date.now() - DIAS_SIN_CORREO * 86_400_000).toISOString();
+    const recientes = Array.from(porPedido.values()).filter(
+      (p) => p.fecha >= desde && p.estadoManual === ""
+    );
+    await Promise.all(
+      recientes.map(async (p) => {
+        try {
+          if (!(await db().exists(kCorreoPedido(p.pedidoId)))) p.sinCorreo = true;
+        } catch {
+          // Sin Redis no se puede saber: no se avisa.
+        }
+      })
+    );
 
     const pedidos = Array.from(porPedido.values())
       .filter(

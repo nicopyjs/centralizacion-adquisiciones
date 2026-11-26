@@ -325,7 +325,7 @@ export type CorreoPedido = {
   ts: number;
 };
 
-const kCorreoPedido = (folio: string) => `mail:pedido:${folio}`;
+export const kCorreoPedido = (folio: string) => `mail:pedido:${folio}`;
 
 export async function leerCorreoPedido(
   folio: string
