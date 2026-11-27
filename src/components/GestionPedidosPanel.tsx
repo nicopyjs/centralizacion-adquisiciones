@@ -322,6 +322,11 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
   const [fDespacho, setFDespacho] = useState("");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
+  const [fProveedor, setFProveedor] = useState("");
+  const [fOC, setFOC] = useState("");
+  // Proveedor de cada OC asociada a algún pedido (N° de OC → nombre). No está en
+  // la planilla: se consulta a Defontana una vez por OC.
+  const [provPorOC, setProvPorOC] = useState<Record<string, string>>({});
 
   // Solo las filas que el usuario tocó; el resto se lee de `pedidos`.
   const [ediciones, setEdiciones] = useState<Record<number, LineaEdit>>({});
@@ -574,7 +579,53 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     fDespacho,
     fDesde,
     fHasta,
+    fProveedor,
+    fOC,
   ].filter(Boolean).length;
+
+  // OC y proveedores de los pedidos que ya tienen OC, para los desplegables.
+  const opcionesOC = useMemo(() => {
+    const ocs = Array.from(
+      new Set(pedidos.flatMap((p) => p.items.map((i) => i.ocAsociada)).filter(Boolean))
+    ).sort((a, b) => Number(b) - Number(a));
+    const proveedores = Array.from(new Set(ocs.map((o) => provPorOC[o]).filter(Boolean))).sort(
+      (a, b) => a.localeCompare(b, "es")
+    );
+    return {
+      oc: ocs.map((o) => ({ value: o, label: provPorOC[o] ? `${o} · ${provPorOC[o]}` : o })),
+      proveedor: proveedores.map((o) => ({ value: o, label: o })),
+    };
+  }, [pedidos, provPorOC]);
+
+  // Trae de Defontana el proveedor de las OC que aún no se conocen (en tandas).
+  useEffect(() => {
+    const faltan = Array.from(
+      new Set(pedidos.flatMap((p) => p.items.map((i) => i.ocAsociada)).filter(Boolean))
+    ).filter((o) => !(o in provPorOC));
+    if (faltan.length === 0) return;
+    let vigente = true;
+    (async () => {
+      for (let i = 0; i < faltan.length; i += 40) {
+        const tanda = faltan.slice(i, i + 40);
+        try {
+          const res = await fetch(`/api/pedidos/oc-proveedor?ocs=${tanda.join(",")}`);
+          if (!res.ok) continue;
+          const d = (await res.json()) as { proveedores?: Record<string, string> };
+          if (!vigente) return;
+          // Las que Defontana no devolvió quedan como "" para no reintentarlas.
+          const lote: Record<string, string> = {};
+          for (const o of tanda) lote[o] = d.proveedores?.[o] ?? "";
+          setProvPorOC((prev) => ({ ...prev, ...lote }));
+        } catch {
+          // sin proveedor: el filtro por OC sigue funcionando
+        }
+      }
+    })();
+    return () => {
+      vigente = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidos]);
 
   /** Cambia de pestaña y deja abierto el primer pedido de la nueva lista. */
   function aplicarSeleccion(estados: Set<Estado>, alertas: Set<Alerta>) {
@@ -614,6 +665,8 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     setFDespacho("");
     setFDesde("");
     setFHasta("");
+    setFProveedor("");
+    setFOC("");
   }
 
   // Búsqueda y filtros adicionales (todo salvo estado y alertas).
@@ -624,6 +677,10 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
       if (fArea && p.area.trim() !== fArea) return false;
       if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
       if (fDespacho && p.despacho.trim() !== fDespacho) return false;
+      if (fOC && !p.items.some((it) => it.ocAsociada === fOC)) return false;
+      if (fProveedor && !p.items.some((it) => it.ocAsociada && provPorOC[it.ocAsociada] === fProveedor)) {
+        return false;
+      }
       if (fDesde || fHasta) {
         const dia = /^\d{4}-\d{2}-\d{2}/.test(p.fecha)
           ? p.fecha.slice(0, 10)
@@ -638,11 +695,11 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
         p.solicitante,
         p.area,
         p.centroNegocio,
-        ...p.items.flatMap((it) => [it.nombre, it.codigo]),
+        ...p.items.flatMap((it) => [it.nombre, it.codigo, it.ocAsociada, provPorOC[it.ocAsociada]]),
       ].join(" ");
       return normalizar(texto).includes(q);
     };
-  }, [busqueda, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
+  }, [busqueda, provPorOC, fOC, fProveedor, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
 
   /** ¿Cumple el estado marcado? Sin estados marcados, todos menos anulados. */
   function pasaEstado(p: PedidoResumen): boolean {
@@ -1438,7 +1495,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               type="search"
               aria-label="Buscar pedidos"
               className={`${fieldClass} pl-9`}
-              placeholder="Buscar folio, solicitante, artículo…"
+              placeholder="Buscar folio, solicitante, artículo, OC, proveedor…"
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
             />
@@ -1488,7 +1545,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
         <div
           role="group"
           aria-label="Filtros adicionales"
-          className={`${cardClass} grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_150px_150px_auto] xl:items-end`}
+          className={`${cardClass} grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 xl:items-end`}
         >
           {(
             [
@@ -1526,6 +1583,30 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               )}
             </label>
           ))}
+          <label className="block min-w-0">
+            <span className={labelClass}>Proveedor (OC)</span>
+            <SearchCombobox
+              ariaLabel="Proveedor"
+              size="sm"
+              clearable
+              placeholder="Todos"
+              options={opcionesOC.proveedor}
+              value={fProveedor}
+              onChange={setFProveedor}
+            />
+          </label>
+          <label className="block min-w-0">
+            <span className={labelClass}>N° de OC</span>
+            <SearchCombobox
+              ariaLabel="N° de OC"
+              size="sm"
+              clearable
+              placeholder="Todas"
+              options={opcionesOC.oc}
+              value={fOC}
+              onChange={setFOC}
+            />
+          </label>
           <label className="block min-w-0">
             <span className={labelClass}>Pedido desde</span>
             <input
@@ -4820,6 +4901,7 @@ function Detalle({
   }, [ocsClave, pedido.pedidoId]);
   // Datos comunes a todo el pedido: se escriben una vez y se copian a cada artículo.
   const [todosPersona, setTodosPersona] = useState("");
+  const [aplicarAbierto, setAplicarAbierto] = useState(false);
   const [todosBodega, setTodosBodega] = useState("");
   const [todosEntrega, setTodosEntrega] = useState("");
   const hayDatosTodos = Boolean(todosPersona.trim() || todosBodega || todosEntrega);
@@ -5246,7 +5328,18 @@ function Detalle({
         )}
       </div>
 
-      {!bloqueado && vigentes.length > 1 && (
+      {!bloqueado && vigentes.length > 1 && !aplicarAbierto && !hayDatosTodos && (
+        <div className="border-b border-border bg-accent/[0.03] px-4 py-1.5">
+          <button
+            type="button"
+            onClick={() => setAplicarAbierto(true)}
+            className="text-xs font-bold text-accent hover:underline"
+          >
+            ▸ Aplicar recepcionado por / fechas a los {vigentes.length} artículos
+          </button>
+        </div>
+      )}
+      {!bloqueado && vigentes.length > 1 && (aplicarAbierto || hayDatosTodos) && (
         <div className="flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-border bg-accent/[0.03] px-4 py-2.5">
           <p className="mr-1 w-full text-xs font-bold text-accent sm:w-auto sm:pb-2.5">
             Aplicar a los {vigentes.length} artículos
@@ -5285,6 +5378,11 @@ function Detalle({
           <button
             type="button"
             disabled={!hayDatosTodos}
+            title={
+              hayDatosTodos
+                ? `Aplicar estos datos a los ${vigentes.length} artículos`
+                : "Elige quién recepciona o una fecha para aplicarla a todos"
+            }
             onClick={() => {
               onAplicarATodos(vigentes, {
                 recepcionadoPor: todosPersona.trim(),
@@ -5356,7 +5454,7 @@ function Detalle({
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1340px]">
+        <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1240px]">
           <thead className="max-lg:hidden">
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pl-4 pr-1.5 font-semibold">
@@ -5408,18 +5506,16 @@ function Detalle({
                   : sucia
                     ? "bg-accent/5"
                     : estadoLinea(it) === "completo"
-                      ? "bg-[#bdefd6]"
+                      ? "bg-[#e6f7ee]"
                       : estadoLinea(it) === "parcial"
-                        ? "bg-[#fed7aa]"
-                        : estadoLinea(it) === "pendiente"
-                          ? "bg-[#e3e9f2]"
-                          : "";
+                        ? "bg-[#fff1e0]"
+                        : "";
               const infoOC = it.ocAsociada ? ocInfos[it.ocAsociada] : undefined;
               const dato = "font-semibold text-card-foreground";
               return (
                 <Fragment key={it.fila}>
                 <tr
-                  className={`align-top max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 lg:border-b-0 ${fondoFila}`}
+                  className={`align-top max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 ${it.ocAsociada ? "lg:border-b-0" : "border-b border-border/70"} ${fondoFila}`}
                 >
                   <td className="py-2 pl-4 pr-1.5 pt-3 max-lg:absolute max-lg:right-3 max-lg:top-3 max-lg:p-0">
                     <input
@@ -5454,6 +5550,12 @@ function Detalle({
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                       <span>{it.codigo}</span>
                       {it.categoria && <span>· {it.categoria}</span>}
+                      {!it.ocAsociada && !it.anulado && (
+                        <span className="rounded-full bg-muted px-2 py-px text-[11px] font-semibold text-secondary">
+                          Sin OC
+                        </span>
+                      )}
+                      {(it.anulado || estadoLinea(it) !== "pendiente") && (
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-px text-[11px] font-semibold ${
                           it.anulado
@@ -5467,6 +5569,7 @@ function Detalle({
                       >
                         {it.anulado ? ESTADOS.anulado.label : estadoIt.label}
                       </span>
+                      )}
                     </div>
                     {it.anulado && it.motivoAnulacion && (
                       <p className="mt-1 max-w-[260px] text-xs font-medium text-destructive max-lg:max-w-none">
@@ -5564,7 +5667,7 @@ function Detalle({
                   </td>
                   <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
                     <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Recepcionado por</span>
-                    <div className="w-[230px] max-lg:w-full" title={edicion.recepcionadoPor || undefined}>
+                    <div className="w-[180px] max-lg:w-full" title={edicion.recepcionadoPor || undefined}>
                       <SearchCombobox
                         size="sm"
                         allowCustom
@@ -5731,6 +5834,7 @@ function Detalle({
                     )}
                   </td>
                 </tr>
+                {it.ocAsociada && (
                 <tr
                   className={`border-b border-border/70 last:border-0 max-lg:block max-lg:px-3 max-lg:pb-3 ${fondoFila}`}
                 >
@@ -5739,39 +5843,38 @@ function Detalle({
                       <span>
                         Proveedor:{" "}
                         <span className={dato}>
-                          {!it.ocAsociada
-                            ? "En gestión"
-                            : infoOC
-                              ? infoOC.proveedor
-                              : infoOC === null
-                                ? "No encontrado"
-                                : "Consultando…"}
+                          {infoOC
+                            ? infoOC.proveedor
+                            : infoOC === null
+                              ? "No encontrado"
+                              : "Consultando…"}
                         </span>
                       </span>
                       <span>
-                        OC: <span className={dato}>{it.ocAsociada || "En gestión"}</span>
-                        {it.ocAsociada && (
-                          <button
-                            type="button"
-                            className="ml-2 text-xs text-red-600 underline"
-                            onClick={() => quitarOC(it)}
-                          >
-                            Quitar
-                          </button>
-                        )}
+                        OC: <span className={dato}>{it.ocAsociada}</span>
+                        <button
+                          type="button"
+                          className="ml-2 text-xs text-red-600 underline"
+                          onClick={() => quitarOC(it)}
+                        >
+                          Quitar
+                        </button>
                       </span>
-                      <span>
-                        Fecha:{" "}
-                        <span className={dato}>
-                          {infoOC?.fecha ? infoOC.fecha.split("-").reverse().join("/") : ""}
+                      {infoOC?.fecha && (
+                        <span>
+                          Fecha:{" "}
+                          <span className={dato}>{infoOC.fecha.split("-").reverse().join("/")}</span>
                         </span>
-                      </span>
-                      <span>
-                        Estado: <span className={dato}>{infoOC?.estado ?? ""}</span>
-                      </span>
+                      )}
+                      {infoOC?.estado && (
+                        <span>
+                          Estado: <span className={dato}>{infoOC.estado}</span>
+                        </span>
+                      )}
                     </p>
                   </td>
                 </tr>
+                )}
                 </Fragment>
               );
             })}

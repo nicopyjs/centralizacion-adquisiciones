@@ -9,7 +9,7 @@ import { AREAS, areaLabel, getSesion, haySesion } from "@/lib/auth";
 import { ETIQUETAS_SHEET, leerEtiquetas } from "@/lib/etiquetas";
 import { getCategoriasConArticulos } from "@/lib/articulos";
 import { CATEGORIAS_MATERIALES_MENORES } from "@/lib/materiales-menores";
-import { db } from "@/lib/chat";
+import { agregarMensaje, db, normArea } from "@/lib/chat";
 import { getGoogleEmail, kCorreoPedido } from "@/lib/google-oauth";
 import { areasParaEnviar } from "@/lib/usuarios";
 import { getSolicitantes } from "@/lib/solicitantes";
@@ -674,7 +674,7 @@ export async function DELETE(request: Request) {
 
   const sheetId = articulosSheetId();
   try {
-    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:L`);
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:O`);
     const delPedido = rows.filter((r) => str(r[0]) === pedidoId);
     const objetivo = rows[fila - 2];
     if (!objetivo || str(objetivo[0]) !== pedidoId || str(objetivo[11]) !== codigo) {
@@ -693,6 +693,19 @@ export async function DELETE(request: Request) {
       );
     }
     await deleteRow(sheetId, PEDIDOS_SHEET, fila);
+    // Constancia en el chat: borrar una línea no deja otro rastro.
+    try {
+      await agregarMensaje(pedidoId, normArea(str(objetivo[3])), {
+        id: crypto.randomUUID(),
+        rol: "adquisiciones",
+        autor: "Adquisiciones",
+        texto: `🗑️ Pedido modificado: se eliminó «${str(objetivo[12])} × ${str(objetivo[14])}» (${codigo}) del pedido.`,
+        ts: Date.now(),
+        adjuntos: [],
+      });
+    } catch {
+      // el aviso es secundario: la línea ya se eliminó
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
