@@ -102,7 +102,7 @@ export async function POST(request: Request) {
 
   const sheetId = articulosSheetId();
   try {
-    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:Z`);
+    const rows = await readRange(sheetId, `${PEDIDOS_SHEET}!A2:AA`);
     const delPedido = rows
       .map((r, i) => ({ r, fila: i + 2 }))
       .filter((x) => str(x.r[0]) === pedidoId);
@@ -183,6 +183,35 @@ export async function POST(request: Request) {
         `se creó el artículo «${nombre}» (${codigo}, categoría ${categoria.nombre}).`
       );
       return NextResponse.json({ ok: true, codigo, categoria: categoria.nombre });
+    }
+
+    // Deja la línea otra vez como artículo manual (p. ej. el artículo creado en
+    // Defontana se borró). Conserva nombre, unidad y cantidad.
+    if (accion === "aManual") {
+      const fila = Number(body.fila);
+      const objetivo = delPedido.find((x) => x.fila === fila);
+      if (!objetivo || str(objetivo.r[11]) !== str(body.codigoActual)) {
+        return error("El pedido cambió. Recarga la lista e inténtalo de nuevo.", 409);
+      }
+      if (str(objetivo.r[11]) === CODIGO_ARTICULO_MANUAL) return NextResponse.json({ ok: true });
+      if ((Number(objetivo.r[16]) || 0) > 0 || str(objetivo.r[17])) {
+        return error("Este artículo ya tiene recepción o consumo registrado: no se puede dejar manual.");
+      }
+      if (str(objetivo.r[26])) {
+        return error(
+          `Este artículo está en la OC ${str(objetivo.r[26])}. Quítale la OC primero (Asociar OC → Quitar).`,
+          409
+        );
+      }
+      await batchWriteRanges(sheetId, [
+        { range: `${PEDIDOS_SHEET}!K${fila}:L${fila}`, values: [["", CODIGO_ARTICULO_MANUAL]] },
+      ]);
+      await avisarEnChat(
+        pedidoId,
+        area,
+        `«${str(objetivo.r[12])}» vuelve a ser un artículo manual (antes ${str(objetivo.r[11])}).`
+      );
+      return NextResponse.json({ ok: true });
     }
 
     if (accion === "anularLinea" || accion === "reactivarLinea") {
