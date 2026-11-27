@@ -293,6 +293,16 @@ function mismaEdicion(a: LineaEdit, b: LineaEdit): boolean {
   );
 }
 
+/** Algún artículo vigente aún no está en una OC. */
+function tieneSinOC(p: PedidoResumen): boolean {
+  return p.items.some((it) => !it.anulado && !it.ocAsociada);
+}
+
+/** Algún artículo vigente es manual (aún sin crear en Defontana). */
+function tieneManuales(p: PedidoResumen): boolean {
+  return p.items.some((it) => !it.anulado && it.codigo === CODIGO_ARTICULO_MANUAL);
+}
+
 function normalizar(s: string): string {
   return s
     .normalize("NFD")
@@ -322,6 +332,12 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
   const [fDespacho, setFDespacho] = useState("");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
+  // Chips extra: pedidos con algún artículo sin OC / con artículos manuales.
+  const [soloSinOC, setSoloSinOC] = useState(false);
+  const [soloManuales, setSoloManuales] = useState(false);
+  // OC de Defontana del proveedor buscado (el proveedor no está en la planilla,
+  // solo la OC asociada a cada artículo). `q` es el texto con que se consultó.
+  const [ocsProveedor, setOcsProveedor] = useState<{ q: string; ocs: Set<string> } | null>(null);
 
   // Solo las filas que el usuario tocó; el resto se lee de `pedidos`.
   const [ediciones, setEdiciones] = useState<Record<number, LineaEdit>>({});
@@ -574,7 +590,31 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     fDespacho,
     fDesde,
     fHasta,
+    soloSinOC,
+    soloManuales,
   ].filter(Boolean).length;
+
+  // Al escribir 3 o más letras se consultan en Defontana las OC de ese proveedor
+  // (nombre o RUT); así el buscador encuentra pedidos por proveedor.
+  useEffect(() => {
+    const q = normalizar(busqueda.trim());
+    if (q.length < 3) return;
+    let vigente = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/pedidos/oc-proveedor?q=${encodeURIComponent(busqueda.trim())}`);
+        if (!res.ok) return;
+        const d = (await res.json()) as { ocs?: number[] };
+        if (vigente) setOcsProveedor({ q, ocs: new Set((d.ocs ?? []).map(String)) });
+      } catch {
+        // sin proveedor: la búsqueda sigue funcionando con el resto de los campos
+      }
+    }, 450);
+    return () => {
+      vigente = false;
+      clearTimeout(t);
+    };
+  }, [busqueda]);
 
   /** Cambia de pestaña y deja abierto el primer pedido de la nueva lista. */
   function aplicarSeleccion(estados: Set<Estado>, alertas: Set<Alerta>) {
@@ -614,12 +654,17 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     setFDespacho("");
     setFDesde("");
     setFHasta("");
+    setSoloSinOC(false);
+    setSoloManuales(false);
   }
 
   // Búsqueda y filtros adicionales (todo salvo estado y alertas).
   const pasaBase = useMemo(() => {
     const q = normalizar(busqueda.trim());
+    const ocsDelProveedor = ocsProveedor?.q === q ? ocsProveedor.ocs : null;
     return (p: PedidoResumen): boolean => {
+      if (soloSinOC && !tieneSinOC(p)) return false;
+      if (soloManuales && !tieneManuales(p)) return false;
       if (fSolicitante && p.solicitante.trim() !== fSolicitante) return false;
       if (fArea && p.area.trim() !== fArea) return false;
       if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
@@ -638,11 +683,15 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
         p.solicitante,
         p.area,
         p.centroNegocio,
-        ...p.items.flatMap((it) => [it.nombre, it.codigo]),
+        ...p.items.flatMap((it) => [it.nombre, it.codigo, it.ocAsociada]),
       ].join(" ");
-      return normalizar(texto).includes(q);
+      if (normalizar(texto).includes(q)) return true;
+      return (
+        ocsDelProveedor !== null &&
+        p.items.some((it) => it.ocAsociada !== "" && ocsDelProveedor.has(it.ocAsociada))
+      );
     };
-  }, [busqueda, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
+  }, [busqueda, ocsProveedor, soloSinOC, soloManuales, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
 
   /** ¿Cumple el estado marcado? Sin estados marcados, todos menos anulados. */
   function pasaEstado(p: PedidoResumen): boolean {
@@ -683,6 +732,22 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     }
     return c;
   }, [pedidos, pasaBase, estadosSel, alertasSel]);
+
+  // Números de «Sin OC» / «Con manuales» sobre los pedidos que hoy se ven en el
+  // estado marcado (sin contar el propio chip).
+  const conteoExtra = useMemo(() => {
+    let sinOC = 0;
+    let manuales = 0;
+    for (const p of pedidos) {
+      if (!pasaEstado(p)) continue;
+      if (alertasSel.has("urgentes") && !esUrgentePendiente(p)) continue;
+      if (alertasSel.has("atrasados") && !esAtrasado(p)) continue;
+      if (tieneSinOC(p)) sinOC += 1;
+      if (tieneManuales(p)) manuales += 1;
+    }
+    return { sinOC, manuales };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidos, estadosSel, alertasSel]);
 
   const pedidosFiltrados = useMemo(() => {
     return (
@@ -1407,6 +1472,34 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               </Fragment>
             );
           })}
+          <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
+          {[
+            { activo: soloSinOC, set: setSoloSinOC, label: "Sin OC", n: conteoExtra.sinOC, ayuda: "Pedidos con algún artículo que aún no está en una OC" },
+            { activo: soloManuales, set: setSoloManuales, label: "Con manuales", n: conteoExtra.manuales, ayuda: "Pedidos con artículos manuales: hay que crearlos en Defontana antes de la OC" },
+          ].map((c) => (
+            <button
+              key={c.label}
+              type="button"
+              aria-pressed={c.activo}
+              title={c.ayuda}
+              onClick={() => {
+                c.set(!c.activo);
+                setSeleccionado(null);
+              }}
+              className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors ${
+                c.activo ? "bg-primary text-primary-foreground" : "text-secondary hover:bg-muted"
+              }`}
+            >
+              {c.label}
+              <span
+                className={`rounded-md px-1.5 text-xs font-bold tabular-nums ${
+                  c.activo ? "bg-white/20" : "bg-muted text-primary"
+                }`}
+              >
+                {c.n}
+              </span>
+            </button>
+          ))}
         </div>
 
         <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
@@ -1438,7 +1531,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               type="search"
               aria-label="Buscar pedidos"
               className={`${fieldClass} pl-9`}
-              placeholder="Buscar folio, solicitante, artículo…"
+              placeholder="Buscar folio, solicitante, artículo, OC, proveedor…"
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
             />
