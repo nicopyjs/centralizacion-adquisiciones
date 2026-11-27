@@ -172,6 +172,14 @@ export async function POST(request: Request) {
     // la categoría elegida, y el código nuevo se anota en la planilla de
     // inmediato, así un reintento no los duplica si la OC falla después.
     const manuales = lineas.filter(({ row }) => str(row[11]) === CODIGO_ARTICULO_MANUAL);
+    if (manuales.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Primero crea estos artículos manuales en Defontana (lápiz de la línea → «Crear este artículo»): ${manuales.map(({ row }) => `«${str(row[12])}»`).join(", ")}.`,
+        },
+        { status: 409 }
+      );
+    }
     const articulosCreados: { fila: number; codigo: string; categoria: string }[] = [];
     if (manuales.length > 0) {
       const [categorias, unidades] = await Promise.all([categoriasArticulo(), unidadesArticulo()]);
