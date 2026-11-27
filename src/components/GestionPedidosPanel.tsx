@@ -583,6 +583,35 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     fOC,
   ].filter(Boolean).length;
 
+  // Recuerda la vista (estados, alertas y orden) entre visitas, por navegador.
+  const vistaCargada = useRef(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("gestionPedidos.vista");
+      if (raw) {
+        const v = JSON.parse(raw) as { estados?: Estado[]; alertas?: Alerta[]; orden?: string };
+        const estadosOk = (v.estados ?? []).filter((e) => e in ESTADOS);
+        setEstadosSel(new Set(estadosOk));
+        setAlertasSel(new Set((v.alertas ?? []).filter((a) => a === "urgentes" || a === "atrasados")));
+        if (v.orden === "recientes" || v.orden === "entrega") setOrden(v.orden);
+      }
+    } catch {
+      // sin almacenamiento: se queda la vista por defecto
+    }
+    vistaCargada.current = true;
+  }, []);
+  useEffect(() => {
+    if (!vistaCargada.current) return;
+    try {
+      localStorage.setItem(
+        "gestionPedidos.vista",
+        JSON.stringify({ estados: [...estadosSel], alertas: [...alertasSel], orden })
+      );
+    } catch {
+      // ignorar
+    }
+  }, [estadosSel, alertasSel, orden]);
+
   // OC y proveedores de los pedidos que ya tienen OC, para los desplegables.
   const opcionesOC = useMemo(() => {
     const ocs = Array.from(
@@ -1743,6 +1772,10 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
                 const porcentaje = totalPedido
                   ? Math.min(100, (totalRecibido / totalPedido) * 100)
                   : 0;
+                const ocsDe = Array.from(
+                  new Set(vigentes.map((it) => it.ocAsociada).filter(Boolean))
+                );
+                const sinOCn = vigentes.filter((it) => !it.ocAsociada).length;
                 const sinGuardar = cambiosPorPedido.get(p.pedidoId) ?? 0;
                 const urgentePend = esUrgentePendiente(p);
                 const atrasado = esAtrasado(p);
@@ -1840,6 +1873,17 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
                           </span>
                         )}
                       </div>
+                      {ocsDe.length > 0 && (
+                        <div className="mt-0.5 truncate text-[11px] font-semibold text-accent">
+                          OC {ocsDe.join(" · ")}
+                          {sinOCn > 0 && (
+                            <span className="font-medium text-muted-foreground">
+                              {" "}
+                              · {sinOCn} sin OC
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                         <span className="tabular-nums">
                           {formatFecha(p.fecha)}
