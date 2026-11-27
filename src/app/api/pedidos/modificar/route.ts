@@ -128,7 +128,9 @@ export async function POST(request: Request) {
       }
       const recibida = Number(objetivo.r[16]) || 0;
       const cambiaArticulo = codigo !== str(objetivo.r[11]);
-      if (cambiaArticulo && (recibida > 0 || str(objetivo.r[17]))) {
+      // Un manual solo recibido a mano (sin documento en Defontana) sí se puede cambiar.
+      const esManual = str(objetivo.r[11]) === CODIGO_ARTICULO_MANUAL;
+      if (cambiaArticulo && (str(objetivo.r[17]) || (recibida > 0 && !esManual))) {
         return error(
           "Este artículo ya tiene recepción o consumo registrado: no se puede cambiar por otro. Elimínalo y agrega el correcto."
         );
