@@ -2714,6 +2714,27 @@ function DialogoConsumo({
         </label>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className={labelClass}>
+              No. DE FACTURA{conRecepcionOC ? "" : " (opcional)"}
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={factura}
+              disabled={enviando}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "");
+                setFactura(v);
+                if (!v) {
+                  setOc("");
+                  setOtraOc(false);
+                }
+              }}
+              placeholder="Ej.: 4331"
+              className={inputClass}
+            />
+          </label>
           <div>
             <label htmlFor="consumo-oc" className={labelClass}>
               N° DE OC{conRecepcionOC ? "" : " (opcional)"}
@@ -2770,27 +2791,6 @@ function DialogoConsumo({
               />
             )}
           </div>
-          <label className="block">
-            <span className={labelClass}>
-              No. DE FACTURA{conRecepcionOC ? "" : " (opcional)"}
-            </span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={factura}
-              disabled={enviando}
-              onChange={(e) => {
-                const v = e.target.value.replace(/\D/g, "");
-                setFactura(v);
-                if (!v) {
-                  setOc("");
-                  setOtraOc(false);
-                }
-              }}
-              placeholder="Ej.: 4331"
-              className={inputClass}
-            />
-          </label>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           Ingresa la factura con que se recepcionan los artículos (física o en PDF):
@@ -4737,6 +4737,40 @@ function Detalle({
             Todo recibido
           </button>
           {!bloqueado && (
+            <>
+            <button
+              type="button"
+              onClick={() => setAsociando(true)}
+              disabled={sinOC.length === 0}
+              title={
+                seleccionadas.length === 0
+                  ? "Marca los artículos de la tabla que están en la OC"
+                  : sinOC.length === 0
+                    ? "Los artículos marcados ya tienen OC"
+                    : "Asociar una orden de compra de Defontana a los artículos marcados sin OC"
+              }
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Asociar OC{sinOC.length > 0 ? ` (${sinOC.length})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreandoOC(true)}
+              disabled={sinOC.length === 0}
+              title={
+                seleccionadas.length === 0
+                  ? "Marca los artículos de la tabla que irán en la nueva OC"
+                  : sinOC.length === 0
+                    ? "Los artículos marcados ya tienen OC"
+                    : "Crear en Defontana una OC con los artículos marcados sin OC"
+              }
+              className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Crear OC{sinOC.length > 0 ? ` (${sinOC.length})` : ""}
+            </button>
+            </>
+          )}
+          {!bloqueado && (
             <button
               type="button"
               onClick={onConsumo}
@@ -4987,38 +5021,8 @@ function Detalle({
         />
         {pedido.sinCorreo && <CorreoFaltante folio={pedido.pedidoId} />}
         <ReportarCorreo folio={pedido.pedidoId} items={vigentes} />
-        {!bloqueado && (
+        {!bloqueado && (conOC.length > 0 || seleccionadas.length === 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setAsociando(true)}
-              disabled={sinOC.length === 0}
-              title={
-                seleccionadas.length === 0
-                  ? "Marca los artículos de la tabla que están en la OC"
-                  : sinOC.length === 0
-                    ? "Los artículos marcados ya tienen OC"
-                    : "Asociar una orden de compra de Defontana a los artículos marcados sin OC"
-              }
-              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-3 text-sm font-semibold text-primary shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Asociar OC{sinOC.length > 0 ? ` (${sinOC.length})` : ""}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCreandoOC(true)}
-              disabled={sinOC.length === 0}
-              title={
-                seleccionadas.length === 0
-                  ? "Marca los artículos de la tabla que irán en la nueva OC"
-                  : sinOC.length === 0
-                    ? "Los artículos marcados ya tienen OC"
-                    : "Crear en Defontana una OC con los artículos marcados sin OC"
-              }
-              className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground shadow-sm transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Crear OC{sinOC.length > 0 ? ` (${sinOC.length})` : ""}
-            </button>
             {conOC.length > 0 && (
               <span className="text-xs text-muted-foreground">
                 {sinOC.length === 0
