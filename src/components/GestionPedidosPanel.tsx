@@ -3951,8 +3951,35 @@ function DialogoModificar({
     s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   // Artículos del catálogo parecidos a lo buscado, con su categoría, para elegir
   // la categoría de uno que se le parezca.
+  // Palabras de un nombre para comparar: sin tildes ni signos, y sin el «UN»/«UNA»
+  // inicial que a veces se escribe antes del nombre («UN KIT COLECTOR…»).
+  const palabrasDe = (s: string) => {
+    const p = sinTildes(s)
+      .replace(/[^a-z0-9/.]+/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    return ["un", "una", "uno"].includes(p[0]) && p.length > 1 ? p.slice(1) : p;
+  };
+  // Artículos que ya existen con (casi) el mismo nombre que el que se va a crear.
+  const similares = useMemo(() => {
+    const a = palabrasDe(nombreNuevo);
+    if (a.length === 0) return [];
+    const conjA = new Set(a);
+    return catalogo
+      .map((c) => {
+        const b = palabrasDe(c.nombre);
+        const comunes = b.filter((p) => conjA.has(p)).length;
+        const union = new Set([...a, ...b]).size;
+        return { c, exacto: a.join(" ") === b.join(" "), score: union ? comunes / union : 0 };
+      })
+      .filter((x) => x.exacto || x.score >= 0.75)
+      .sort((x, y) => Number(y.exacto) - Number(x.exacto) || y.score - x.score)
+      .slice(0, 4);
+  }, [nombreNuevo, catalogo]);
+  const hayExacto = similares.some((x) => x.exacto);
+
   const parecidos = useMemo(() => {
-    const palabras = sinTildes(busqCat).split(/\s+/).filter((p) => p.length > 1);
+    const palabras = palabrasDe(busqCat).filter((p) => p.length > 1);
     if (palabras.length === 0) return [];
     return catalogo
       .filter((a) => {
@@ -4318,6 +4345,43 @@ function DialogoModificar({
                           onChange={(e) => setNombreNuevo(e.target.value)}
                         />
                       </label>
+                      {similares.length > 0 && (
+                        <div
+                          role="alert"
+                          className="rounded-lg border border-warning/40 bg-warning-surface px-3 py-2 text-xs text-warning"
+                        >
+                          <p className="font-bold">
+                            {hayExacto
+                              ? "Este artículo ya existe en el catálogo. No lo crees de nuevo:"
+                              : "Hay artículos muy parecidos en el catálogo. ¿Es alguno de estos?"}
+                          </p>
+                          <ul className="mt-1 space-y-1">
+                            {similares.map(({ c, exacto }) => (
+                              <li key={c.codigo} className="flex items-center justify-between gap-2">
+                                <span className="min-w-0 text-card-foreground">
+                                  {c.nombre} · {c.codigo}
+                                  {exacto && <b className="ml-1 text-warning">(mismo nombre)</b>}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCodigo(c.codigo);
+                                    setCrearAbierto(false);
+                                  }}
+                                  className="shrink-0 rounded-md bg-accent px-2 py-1 font-bold text-accent-foreground hover:bg-accent-hover"
+                                >
+                                  Usar este
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                          {hayExacto && (
+                            <p className="mt-1">
+                              Para crear uno igual, cambia el nombre.
+                            </p>
+                          )}
+                        </div>
+                      )}
                       <div>
                         <span className={labelClass}>Buscar artículos parecidos</span>
                         <input
@@ -4387,7 +4451,7 @@ function DialogoModificar({
                       <button
                         type="button"
                         onClick={() => void crearArticuloNuevo()}
-                        disabled={creando || enviando || !listas}
+                        disabled={creando || enviando || !listas || hayExacto}
                         className="inline-flex h-9 items-center rounded-lg bg-primary px-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
                       >
                         {creando ? "Creando…" : "Crear artículo"}
