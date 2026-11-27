@@ -3989,6 +3989,35 @@ function DialogoModificar({
     if (c) setCatId(String(c.id));
   }
 
+  async function dejarManual() {
+    if (!item) return;
+    setError(null);
+    setEnviando(true);
+    try {
+      const res = await fetch("/api/pedidos/modificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "aManual",
+          pedidoId: pedido.pedidoId,
+          fila: item.fila,
+          codigoActual: item.codigo,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo dejar el artículo como manual.");
+      await onGuardado();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error de red.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
   async function crearArticuloNuevo() {
     setError(null);
     if (!nombreNuevo.trim()) return setError("El artículo necesita un nombre.");
@@ -4395,6 +4424,16 @@ function DialogoModificar({
                     onChange={setCodigo}
                     autoFocus={!item}
                   />
+                )}
+                {item && !fijo && item.codigo !== CODIGO_ARTICULO_MANUAL && (
+                  <button
+                    type="button"
+                    onClick={() => void dejarManual()}
+                    disabled={enviando}
+                    className="mt-1 text-xs font-bold text-accent hover:underline disabled:opacity-60"
+                  >
+                    Dejar como artículo manual (sin código)
+                  </button>
                 )}
               </div>
               <label className="block">
