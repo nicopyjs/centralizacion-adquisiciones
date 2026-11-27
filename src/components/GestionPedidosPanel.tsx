@@ -5548,8 +5548,7 @@ function Detalle({
                       {it.nombre}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                      <span>{it.codigo}</span>
-                      {it.categoria && <span>· {it.categoria}</span>}
+                      <span title={it.categoria || undefined}>{it.codigo}</span>
                       {!it.ocAsociada && !it.anulado && (
                         <span className="rounded-full bg-muted px-2 py-px text-[11px] font-semibold text-secondary">
                           Sin OC
