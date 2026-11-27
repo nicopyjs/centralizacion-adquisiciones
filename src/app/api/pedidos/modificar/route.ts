@@ -1,4 +1,6 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { agregarArticuloAlCatalogo } from "@/lib/articulos";
 import { haySesion } from "@/lib/auth";
 import { agregarMensaje, renombrarHilo, normArea } from "@/lib/chat";
 import { AREAS } from "@/lib/auth";
@@ -177,6 +179,20 @@ export async function POST(request: Request) {
           values: [[categoria.nombre, codigo, nombre, unidad, Number(objetivo.r[14]) || 0]],
         },
       ]);
+      // El catálogo lo rehace el Apps Script una vez al día: se anota aquí para
+      // que el artículo aparezca ya en las listas. Si falla, el artículo igual existe.
+      try {
+        await agregarArticuloAlCatalogo({
+          codigo,
+          nombre,
+          categoriaId,
+          categoria: categoria.nombre,
+          unidad,
+        });
+        revalidatePath("/api/articulos");
+      } catch {
+        // la próxima sincronización diaria lo trae
+      }
       await avisarEnChat(
         pedidoId,
         area,
