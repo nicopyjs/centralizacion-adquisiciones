@@ -694,6 +694,17 @@ export type DetalleOC = {
     monto: number;
     comentario: string;
   }[];
+  /** Recepciones de la OC y los documentos de inventario que generaron (PurchaseOrder/GetReceptionDocuments). */
+  recepciones: {
+    recepcion: number;
+    /** Código del tipo: PE, PE_CD, CI… */
+    tipo: string;
+    tipoNombre: string;
+    numero: string;
+    bodega: string;
+    anio: string;
+    comprobante: string;
+  }[];
   /** Facturas y notas de crédito ligadas a la OC (Purchase/GetPurchaseDocumentsByOrder). */
   documentos: {
     tipo: string;
@@ -768,6 +779,42 @@ export async function detalleOC(numero: number): Promise<DetalleOC | null> {
     // sin documentos
   }
 
+  // Recepciones (y su parte de entrada): también un extra que puede fallar.
+  const NOMBRES_DOC_INV: Record<string, string> = {
+    PE: "Parte de entrada",
+    PE_CD: "Parte de entrada costo directo",
+    CI: "Consumo interno",
+  };
+  let recepciones: DetalleOC["recepciones"] = [];
+  try {
+    const d = await llamar<{
+      receptionDocumentList?: {
+        receptionDocumentNumber: number;
+        inventoryDocumentList?: {
+          numberDocInv?: string;
+          docTypeInv?: string;
+          storageID?: string;
+          fiscalYear?: string;
+          voucherType?: string;
+          voucherNumber?: string;
+        }[];
+      }[];
+    }>(`/api/PurchaseOrder/GetReceptionDocuments?Number=${numero}`);
+    recepciones = (d.receptionDocumentList ?? []).flatMap((rc) =>
+      (rc.inventoryDocumentList ?? []).map((x) => ({
+        recepcion: rc.receptionDocumentNumber,
+        tipo: x.docTypeInv ?? "",
+        tipoNombre: NOMBRES_DOC_INV[x.docTypeInv ?? ""] ?? (x.docTypeInv ?? ""),
+        numero: x.numberDocInv ?? "",
+        bodega: x.storageID ?? "",
+        anio: x.fiscalYear ?? "",
+        comprobante: x.voucherType ? `${x.voucherType} ${x.voucherNumber ?? ""}`.trim() : "",
+      }))
+    );
+  } catch {
+    // sin recepciones
+  }
+
   return {
     numero,
     estado: estadoTextoOC(o),
@@ -787,6 +834,7 @@ export async function detalleOC(numero: number): Promise<DetalleOC | null> {
       monto: Number(d.amount) || 0,
       comentario: d.comment?.trim() ?? "",
     })),
+    recepciones,
     documentos,
   };
 }
