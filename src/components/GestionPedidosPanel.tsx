@@ -5021,18 +5021,13 @@ function Detalle({
         />
         {pedido.sinCorreo && <CorreoFaltante folio={pedido.pedidoId} />}
         <ReportarCorreo folio={pedido.pedidoId} items={vigentes} />
-        {!bloqueado && (conOC.length > 0 || seleccionadas.length === 0) && (
+        {!bloqueado && conOC.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {conOC.length > 0 && (
               <span className="text-xs text-muted-foreground">
                 {sinOC.length === 0
                   ? "Los artículos marcados ya tienen OC."
                   : `${conOC.length} de los marcados ya tienen OC y se dejan fuera.`}
-              </span>
-            )}
-            {seleccionadas.length === 0 && (
-              <span className="text-xs text-muted-foreground">
-                Marca los artículos de la tabla para asociarlos a una OC.
               </span>
             )}
           </div>
