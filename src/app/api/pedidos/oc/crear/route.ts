@@ -4,6 +4,7 @@ import {
   CODIGO_ARTICULO_MANUAL,
   ambienteDefontana,
   buscarProveedores,
+  categoriaCreable,
   categoriasArticulo,
   condicionesPago,
   crearArticulo,
@@ -176,9 +177,11 @@ export async function POST(request: Request) {
       const [categorias, unidades] = await Promise.all([categoriasArticulo(), unidadesArticulo()]);
       for (const m of manuales) {
         const nombre = str(m.row[12]);
-        if (!categorias.some((c) => c.id === m.categoriaId)) {
+        if (!categorias.some((c) => c.id === m.categoriaId) || !categoriaCreable(m.categoriaId)) {
           return NextResponse.json(
-            { error: `Elige la categoría de «${nombre}» para crearlo en Defontana.` },
+            {
+              error: `Elige la categoría de «${nombre}»: un artículo no se crea sin categoría.`,
+            },
             { status: 400 }
           );
         }
