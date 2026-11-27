@@ -7,6 +7,7 @@ import {
   crearConsumoInterno,
   crearParteEntradaCostoDirecto,
   problemasPorRecibir,
+  repartirEnLineas,
   problemasRecepcion,
   recepcionOC,
   recepcionarOC,
@@ -386,12 +387,20 @@ export async function POST(request: Request) {
             ? { providerId: oc.proveedorRut, ocNumero: oc.numero, ocSerie: oc.serie ?? "" }
             : {}),
           facturaNumero,
-          lineas: detalle.map((d) => ({
-            articleId: d.codigo,
-            cantidad: d.cantidad,
-            costoUnitario: costoPorFila.get(d.fila) ?? 0,
-            ocLinea: oc?.lineas.find((x) => x.codigo === d.codigo)?.linea,
-          })),
+          // Si el artículo está en varias líneas de la OC, cada tramo del parte
+          // se liga a la línea que le corresponde.
+          lineas: oc
+            ? repartirEnLineas(oc, detalle).map((d) => ({
+                articleId: d.codigo,
+                cantidad: d.cantidad,
+                costoUnitario: costoPorFila.get(d.fila) ?? 0,
+                ocLinea: d.ocLinea.linea,
+              }))
+            : detalle.map((d) => ({
+                articleId: d.codigo,
+                cantidad: d.cantidad,
+                costoUnitario: costoPorFila.get(d.fila) ?? 0,
+              })),
         });
         folioEntrada = r.folio;
       } catch (err) {
