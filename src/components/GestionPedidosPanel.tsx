@@ -4901,6 +4901,7 @@ function Detalle({
   }, [ocsClave, pedido.pedidoId]);
   // Datos comunes a todo el pedido: se escriben una vez y se copian a cada artículo.
   const [todosPersona, setTodosPersona] = useState("");
+  const [aplicarAbierto, setAplicarAbierto] = useState(false);
   const [todosBodega, setTodosBodega] = useState("");
   const [todosEntrega, setTodosEntrega] = useState("");
   const hayDatosTodos = Boolean(todosPersona.trim() || todosBodega || todosEntrega);
@@ -5327,7 +5328,18 @@ function Detalle({
         )}
       </div>
 
-      {!bloqueado && vigentes.length > 1 && (
+      {!bloqueado && vigentes.length > 1 && !aplicarAbierto && !hayDatosTodos && (
+        <div className="border-b border-border bg-accent/[0.03] px-4 py-1.5">
+          <button
+            type="button"
+            onClick={() => setAplicarAbierto(true)}
+            className="text-xs font-bold text-accent hover:underline"
+          >
+            ▸ Aplicar recepcionado por / fechas a los {vigentes.length} artículos
+          </button>
+        </div>
+      )}
+      {!bloqueado && vigentes.length > 1 && (aplicarAbierto || hayDatosTodos) && (
         <div className="flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-border bg-accent/[0.03] px-4 py-2.5">
           <p className="mr-1 w-full text-xs font-bold text-accent sm:w-auto sm:pb-2.5">
             Aplicar a los {vigentes.length} artículos
@@ -5366,6 +5378,11 @@ function Detalle({
           <button
             type="button"
             disabled={!hayDatosTodos}
+            title={
+              hayDatosTodos
+                ? `Aplicar estos datos a los ${vigentes.length} artículos`
+                : "Elige quién recepciona o una fecha para aplicarla a todos"
+            }
             onClick={() => {
               onAplicarATodos(vigentes, {
                 recepcionadoPor: todosPersona.trim(),
@@ -5816,41 +5833,45 @@ function Detalle({
                   className={`border-b border-border/70 last:border-0 max-lg:block max-lg:px-3 max-lg:pb-3 ${fondoFila}`}
                 >
                   <td colSpan={9} className="px-4 pb-2.5 pt-0 max-lg:block max-lg:p-0">
+                    {!it.ocAsociada ? (
+                      <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Sin OC aún
+                      </p>
+                    ) : (
                     <p className="flex flex-wrap items-center gap-x-5 gap-y-0.5 rounded-md border border-border/60 bg-card/60 px-3 py-1 text-xs uppercase tracking-wide text-muted-foreground">
                       <span>
                         Proveedor:{" "}
                         <span className={dato}>
-                          {!it.ocAsociada
-                            ? "En gestión"
-                            : infoOC
-                              ? infoOC.proveedor
-                              : infoOC === null
-                                ? "No encontrado"
-                                : "Consultando…"}
+                          {infoOC
+                            ? infoOC.proveedor
+                            : infoOC === null
+                              ? "No encontrado"
+                              : "Consultando…"}
                         </span>
                       </span>
                       <span>
-                        OC: <span className={dato}>{it.ocAsociada || "En gestión"}</span>
-                        {it.ocAsociada && (
-                          <button
-                            type="button"
-                            className="ml-2 text-xs text-red-600 underline"
-                            onClick={() => quitarOC(it)}
-                          >
-                            Quitar
-                          </button>
-                        )}
+                        OC: <span className={dato}>{it.ocAsociada}</span>
+                        <button
+                          type="button"
+                          className="ml-2 text-xs text-red-600 underline"
+                          onClick={() => quitarOC(it)}
+                        >
+                          Quitar
+                        </button>
                       </span>
-                      <span>
-                        Fecha:{" "}
-                        <span className={dato}>
-                          {infoOC?.fecha ? infoOC.fecha.split("-").reverse().join("/") : ""}
+                      {infoOC?.fecha && (
+                        <span>
+                          Fecha:{" "}
+                          <span className={dato}>{infoOC.fecha.split("-").reverse().join("/")}</span>
                         </span>
-                      </span>
-                      <span>
-                        Estado: <span className={dato}>{infoOC?.estado ?? ""}</span>
-                      </span>
+                      )}
+                      {infoOC?.estado && (
+                        <span>
+                          Estado: <span className={dato}>{infoOC.estado}</span>
+                        </span>
+                      )}
                     </p>
+                    )}
                   </td>
                 </tr>
                 </Fragment>
