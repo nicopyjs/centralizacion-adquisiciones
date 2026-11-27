@@ -3602,6 +3602,214 @@ type CondicionBusqueda = { codigo: string; nombre: string };
 
 const clp = (n: number) => `$${Math.round(n).toLocaleString("es-CL")}`;
 
+type DetalleOCUI = {
+  numero: number;
+  estado: string;
+  proveedor: string;
+  rut: string;
+  fecha: string;
+  centro: string;
+  comentario: string;
+  neto: number;
+  lineas: {
+    linea: number;
+    codigo: string;
+    descripcion: string;
+    pedida: number;
+    recibida: number;
+    precio: number;
+    monto: number;
+    comentario: string;
+  }[];
+  documentos: { tipo: string; numero: string; proveedor: string; total: number; fecha: string }[];
+};
+
+/** Datos completos de una OC de Defontana: cabecera, líneas recibidas y documentos relacionados. */
+function DialogoDetalleOC({ oc, onCerrar }: { oc: string; onCerrar: () => void }) {
+  const [datos, setDatos] = useState<DetalleOCUI | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const caja = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let vigente = true;
+    fetch(`/api/pedidos/oc-detalle?numero=${encodeURIComponent(oc)}`)
+      .then(async (res) => {
+        const d = await res.json().catch(() => ({}));
+        if (!vigente) return;
+        if (!res.ok) setError(d.error || "No se pudo leer la OC.");
+        else setDatos(d.oc as DetalleOCUI);
+      })
+      .catch(() => vigente && setError("No se pudo conectar. Reintenta."));
+    caja.current?.focus();
+    return () => {
+      vigente = false;
+    };
+  }, [oc]);
+
+  const fecha = (f: string) => (f ? f.split("-").reverse().join("/") : "—");
+  const totalRecibido = datos?.lineas.reduce((a, l) => a + l.recibida, 0) ?? 0;
+  const totalPedido = datos?.lineas.reduce((a, l) => a + l.pedida, 0) ?? 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-primary/50 p-4 backdrop-blur-[2px]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCerrar();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCerrar();
+      }}
+    >
+      <div
+        ref={caja}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Datos de la orden de compra ${oc}`}
+        className="max-h-[90dvh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-base font-extrabold uppercase tracking-wide text-primary">
+            Orden de compra {oc}
+            {datos && (
+              <span className="ml-2 rounded-full bg-accent/10 px-2.5 py-0.5 align-middle text-xs font-bold normal-case tracking-normal text-accent">
+                {datos.estado}
+              </span>
+            )}
+          </h3>
+          <button
+            type="button"
+            onClick={onCerrar}
+            aria-label="Cerrar"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+          >
+            ✕
+          </button>
+        </div>
+
+        {error ? (
+          <p role="alert" className="mt-4 text-sm font-semibold text-destructive">
+            {error}
+          </p>
+        ) : !datos ? (
+          <p className="mt-6 text-sm text-muted-foreground">Consultando Defontana…</p>
+        ) : (
+          <div className="mt-3 space-y-4 text-sm text-card-foreground">
+            <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+              {(
+                [
+                  ["Proveedor", datos.proveedor || "—"],
+                  ["RUT", datos.rut || "—"],
+                  ["Fecha de emisión", fecha(datos.fecha)],
+                  ["Centro de negocio", datos.centro || "—"],
+                  ["Neto", datos.neto ? clp(datos.neto) : "—"],
+                  ["Recepcionado", `${totalRecibido} de ${totalPedido} unid.`],
+                ] as const
+              ).map(([k, v]) => (
+                <div key={k}>
+                  <dt className={labelClass}>{k}</dt>
+                  <dd className="font-semibold">{v}</dd>
+                </div>
+              ))}
+              {datos.comentario && (
+                <div className="sm:col-span-2">
+                  <dt className={labelClass}>Comentario</dt>
+                  <dd>{datos.comentario}</dd>
+                </div>
+              )}
+            </dl>
+
+            <div>
+              <p className={labelClass}>Artículos de la OC</p>
+              <div className="mt-1 overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/60 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2">Artículo</th>
+                      <th className="px-3 py-2 text-right">Pedido</th>
+                      <th className="px-3 py-2 text-right">Recibido</th>
+                      <th className="px-3 py-2 text-right">Precio unit.</th>
+                      <th className="px-3 py-2 text-right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {datos.lineas.map((l) => (
+                      <tr key={l.linea}>
+                        <td className="px-3 py-2">
+                          <span className="font-semibold">{l.descripcion || l.codigo}</span>
+                          <span className="block text-[11px] text-muted-foreground">{l.codigo}</span>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{l.pedida}</td>
+                        <td
+                          className={`px-3 py-2 text-right font-bold tabular-nums ${
+                            l.recibida >= l.pedida
+                              ? "text-success"
+                              : l.recibida > 0
+                                ? "text-warning"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          {l.recibida}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{l.precio ? clp(l.precio) : "—"}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{l.monto ? clp(l.monto) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <p className={labelClass}>Documentos relacionados (facturas y notas de crédito)</p>
+              {datos.documentos.length === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Esta OC aún no tiene facturas ni notas de crédito asociadas en Defontana.
+                </p>
+              ) : (
+                <div className="mt-1 overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/60 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2">Documento</th>
+                        <th className="px-3 py-2">N°</th>
+                        <th className="px-3 py-2">Proveedor</th>
+                        <th className="px-3 py-2">Fecha</th>
+                        <th className="px-3 py-2 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {datos.documentos.map((d, i) => (
+                        <tr key={`${d.tipo}-${d.numero}-${i}`}>
+                          <td className="px-3 py-2">{d.tipo || "—"}</td>
+                          <td className="px-3 py-2 font-semibold tabular-nums">{d.numero || "—"}</td>
+                          <td className="px-3 py-2">{d.proveedor || "—"}</td>
+                          <td className="px-3 py-2 tabular-nums">{fecha(d.fecha)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{clp(d.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={onCerrar}
+            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Crea en Defontana una OC con los artículos marcados del pedido. Reutiliza el
  * centro de negocio, los clasificadores y el código del pedido; el proveedor, la
@@ -4977,6 +5185,7 @@ function Detalle({
   // OC asociadas a los artículos: se leen de Defontana (proveedor, fecha, estado).
   const [asociando, setAsociando] = useState(false);
   const [creandoOC, setCreandoOC] = useState(false);
+  const [verOC, setVerOC] = useState<string | null>(null);
   const [ocInfos, setOcInfos] = useState<Record<string, InfoOC>>({});
   const ocsAsociadas = Array.from(
     new Set(pedido.items.map((i) => i.ocAsociada).filter(Boolean))
@@ -5519,6 +5728,7 @@ function Detalle({
         )}
       </div>
 
+      {verOC && <DialogoDetalleOC oc={verOC} onCerrar={() => setVerOC(null)} />}
       {creandoOC && (
         <DialogoCrearOC
           pedido={pedido}
@@ -5947,7 +6157,15 @@ function Detalle({
                         </span>
                       </span>
                       <span>
-                        OC: <span className={dato}>{it.ocAsociada}</span>
+                        OC:{" "}
+                        <button
+                          type="button"
+                          onClick={() => setVerOC(it.ocAsociada)}
+                          title="Ver los datos de la OC y sus documentos relacionados"
+                          className="font-bold text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                        >
+                          {it.ocAsociada}
+                        </button>
                         <button
                           type="button"
                           className="ml-2 text-xs text-red-600 underline"

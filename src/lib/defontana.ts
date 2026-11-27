@@ -674,6 +674,123 @@ export async function recepcionarOC(
   return { recepcion, partes };
 }
 
+export type DetalleOC = {
+  numero: number;
+  estado: string;
+  proveedor: string;
+  rut: string;
+  /** "YYYY-MM-DD" */
+  fecha: string;
+  centro: string;
+  comentario: string;
+  neto: number;
+  lineas: {
+    linea: number;
+    codigo: string;
+    descripcion: string;
+    pedida: number;
+    recibida: number;
+    precio: number;
+    monto: number;
+    comentario: string;
+  }[];
+  /** Facturas y notas de crédito ligadas a la OC (Purchase/GetPurchaseDocumentsByOrder). */
+  documentos: {
+    tipo: string;
+    numero: string;
+    proveedor: string;
+    total: number;
+    fecha: string;
+  }[];
+};
+
+/**
+ * Datos completos de una OC para mostrarlos en pantalla: cabecera, líneas con
+ * lo recepcionado y los documentos de compra relacionados. Null si no existe.
+ */
+export async function detalleOC(numero: number): Promise<DetalleOC | null> {
+  type Bruto = {
+    success: boolean;
+    purchaseOrderData?: {
+      receiptState?: string;
+      approveState?: string;
+      billingState?: string;
+      emissionState?: string;
+      emissionDate?: string;
+      comment?: string | null;
+      amountBeforeTaxes?: number;
+      amoutExempt?: number;
+      businessCenterData?: { name?: string } | null;
+      providerInfo?: { legalCode?: string; name?: string };
+      purchaseOrderDetail?: {
+        line: number;
+        productId: string;
+        quantity: number;
+        receivedQuantity: number;
+        price?: number;
+        amount?: number;
+        comment?: string | null;
+        product?: { description?: string } | null;
+      }[];
+    } | null;
+  };
+  let r: Bruto;
+  try {
+    r = await llamar<Bruto>(`/api/PurchaseOrder/Get?Number=${numero}`);
+  } catch (e) {
+    if (e instanceof Error && /no existe/i.test(e.message)) return null;
+    throw e;
+  }
+  const o = r.purchaseOrderData;
+  if (!r.success || !o) return null;
+
+  // Los documentos relacionados son un extra: si falla, se muestra el resto.
+  let documentos: DetalleOC["documentos"] = [];
+  try {
+    const d = await llamar<{
+      documents?: {
+        documentType?: string;
+        documentNumber?: number | string;
+        providerName?: string;
+        total?: number | string;
+        emissionDate?: string;
+        entryDate?: string;
+      }[];
+    }>(`/api/Purchase/GetPurchaseDocumentsByOrder?PurchaseOrderNumber=${numero}`);
+    documentos = (d.documents ?? []).map((x) => ({
+      tipo: x.documentType ?? "",
+      numero: String(x.documentNumber ?? "").replace(/\.0$/, ""),
+      proveedor: x.providerName ?? "",
+      total: Number(x.total) || 0,
+      fecha: (x.emissionDate ?? x.entryDate ?? "").slice(0, 10),
+    }));
+  } catch {
+    // sin documentos
+  }
+
+  return {
+    numero,
+    estado: estadoTextoOC(o),
+    proveedor: o.providerInfo?.name ?? "",
+    rut: formatearRut(o.providerInfo?.legalCode ?? ""),
+    fecha: (o.emissionDate ?? "").slice(0, 10),
+    centro: o.businessCenterData?.name?.trim() ?? "",
+    comentario: o.comment?.trim() ?? "",
+    neto: (Number(o.amountBeforeTaxes) || 0) + (Number(o.amoutExempt) || 0),
+    lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
+      linea: d.line,
+      codigo: d.productId,
+      descripcion: d.product?.description?.trim() ?? "",
+      pedida: Number(d.quantity) || 0,
+      recibida: Number(d.receivedQuantity) || 0,
+      precio: Number(d.price) || 0,
+      monto: Number(d.amount) || 0,
+      comentario: d.comment?.trim() ?? "",
+    })),
+    documentos,
+  };
+}
+
 export type OCListada = {
   numero: number;
   proveedor: string;
