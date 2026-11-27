@@ -3621,6 +3621,15 @@ type DetalleOCUI = {
     monto: number;
     comentario: string;
   }[];
+  recepciones: {
+    recepcion: number;
+    tipo: string;
+    tipoNombre: string;
+    numero: string;
+    bodega: string;
+    anio: string;
+    comprobante: string;
+  }[];
   documentos: { tipo: string; numero: string; proveedor: string; total: number; fecha: string }[];
 };
 
@@ -3758,6 +3767,47 @@ function DialogoDetalleOC({ oc, onCerrar }: { oc: string; onCerrar: () => void }
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            <div>
+              <p className={labelClass}>Recepciones y movimientos de inventario</p>
+              {datos.recepciones.length === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Esta OC aún no tiene recepciones ni partes de entrada en Defontana.
+                </p>
+              ) : (
+                <div className="mt-1 overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/60 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2">Recepción</th>
+                        <th className="px-3 py-2">Documento de inventario</th>
+                        <th className="px-3 py-2">N°</th>
+                        <th className="px-3 py-2">Bodega</th>
+                        <th className="px-3 py-2">Año</th>
+                        <th className="px-3 py-2">Comprobante</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {datos.recepciones.map((r, i) => (
+                        <tr key={`${r.recepcion}-${r.tipo}-${r.numero}-${i}`}>
+                          <td className="px-3 py-2 font-semibold tabular-nums">{r.recepcion}</td>
+                          <td className="px-3 py-2">
+                            {r.tipoNombre}
+                            {r.tipo && r.tipoNombre !== r.tipo && (
+                              <span className="ml-1 text-[11px] text-muted-foreground">({r.tipo})</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-semibold tabular-nums">{r.numero || "—"}</td>
+                          <td className="px-3 py-2">{r.bodega || "—"}</td>
+                          <td className="px-3 py-2 tabular-nums">{r.anio || "—"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{r.comprobante || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             <div>
