@@ -23,6 +23,8 @@ export async function GET(request: Request) {
       estado: oc.estado,
       estadoTexto: oc.estadoTexto,
       proveedor: oc.proveedorNombre,
+      centroNegocio: oc.centroNegocio,
+      centroNombre: oc.centroNombre,
       lineas: oc.lineas,
     });
   } catch (err) {

@@ -397,6 +397,8 @@ export type OrdenCompra = {
   codigoPedido: string;
   /** Código del centro de negocio de la OC (vacío si la OC no lo trae). */
   centroNegocio: string;
+  /** Nombre del centro de la OC, p. ej. «SST - Eco Origen». */
+  centroNombre: string;
   lineas: LineaOC[];
 };
 
@@ -441,7 +443,7 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
         emissionDate?: string;
         customFields?: { name?: string; value?: string }[] | null;
         series?: string | null;
-        businessCenterData?: { businessCenterId?: string } | null;
+        businessCenterData?: { businessCenterId?: string; name?: string } | null;
         providerInfo?: { legalCode?: string; name?: string };
         purchaseOrderDetail?: {
           line: number;
@@ -468,6 +470,7 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
           .find((c) => /^c[oó]digo\s*pedido$/i.test((c.name ?? "").trim()))
           ?.value?.trim() ?? "",
       centroNegocio: o.businessCenterData?.businessCenterId?.trim() ?? "",
+      centroNombre: o.businessCenterData?.name?.trim() ?? "",
       lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
         linea: d.line,
         codigo: d.productId,
