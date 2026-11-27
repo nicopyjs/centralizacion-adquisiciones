@@ -5454,7 +5454,7 @@ function Detalle({
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1340px]">
+        <table className="w-full border-collapse text-sm max-lg:block lg:min-w-[1240px]">
           <thead className="max-lg:hidden">
             <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pl-4 pr-1.5 font-semibold">
@@ -5506,18 +5506,16 @@ function Detalle({
                   : sucia
                     ? "bg-accent/5"
                     : estadoLinea(it) === "completo"
-                      ? "bg-[#bdefd6]"
+                      ? "bg-[#e6f7ee]"
                       : estadoLinea(it) === "parcial"
-                        ? "bg-[#fed7aa]"
-                        : estadoLinea(it) === "pendiente"
-                          ? "bg-[#e3e9f2]"
-                          : "";
+                        ? "bg-[#fff1e0]"
+                        : "";
               const infoOC = it.ocAsociada ? ocInfos[it.ocAsociada] : undefined;
               const dato = "font-semibold text-card-foreground";
               return (
                 <Fragment key={it.fila}>
                 <tr
-                  className={`align-top max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 lg:border-b-0 ${fondoFila}`}
+                  className={`align-top max-lg:relative max-lg:grid max-lg:grid-cols-2 max-lg:gap-x-3 max-lg:gap-y-3 max-lg:p-3 ${it.ocAsociada ? "lg:border-b-0" : "border-b border-border/70"} ${fondoFila}`}
                 >
                   <td className="py-2 pl-4 pr-1.5 pt-3 max-lg:absolute max-lg:right-3 max-lg:top-3 max-lg:p-0">
                     <input
@@ -5552,6 +5550,12 @@ function Detalle({
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                       <span>{it.codigo}</span>
                       {it.categoria && <span>· {it.categoria}</span>}
+                      {!it.ocAsociada && !it.anulado && (
+                        <span className="rounded-full bg-muted px-2 py-px text-[11px] font-semibold text-secondary">
+                          Sin OC
+                        </span>
+                      )}
+                      {(it.anulado || estadoLinea(it) !== "pendiente") && (
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-px text-[11px] font-semibold ${
                           it.anulado
@@ -5565,6 +5569,7 @@ function Detalle({
                       >
                         {it.anulado ? ESTADOS.anulado.label : estadoIt.label}
                       </span>
+                      )}
                     </div>
                     {it.anulado && it.motivoAnulacion && (
                       <p className="mt-1 max-w-[260px] text-xs font-medium text-destructive max-lg:max-w-none">
@@ -5662,7 +5667,7 @@ function Detalle({
                   </td>
                   <td className="px-2 py-2 max-lg:col-span-2 max-lg:p-0">
                     <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:hidden">Recepcionado por</span>
-                    <div className="w-[230px] max-lg:w-full" title={edicion.recepcionadoPor || undefined}>
+                    <div className="w-[180px] max-lg:w-full" title={edicion.recepcionadoPor || undefined}>
                       <SearchCombobox
                         size="sm"
                         allowCustom
@@ -5829,15 +5834,11 @@ function Detalle({
                     )}
                   </td>
                 </tr>
+                {it.ocAsociada && (
                 <tr
                   className={`border-b border-border/70 last:border-0 max-lg:block max-lg:px-3 max-lg:pb-3 ${fondoFila}`}
                 >
                   <td colSpan={9} className="px-4 pb-2.5 pt-0 max-lg:block max-lg:p-0">
-                    {!it.ocAsociada ? (
-                      <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Sin OC aún
-                      </p>
-                    ) : (
                     <p className="flex flex-wrap items-center gap-x-5 gap-y-0.5 rounded-md border border-border/60 bg-card/60 px-3 py-1 text-xs uppercase tracking-wide text-muted-foreground">
                       <span>
                         Proveedor:{" "}
@@ -5871,9 +5872,9 @@ function Detalle({
                         </span>
                       )}
                     </p>
-                    )}
                   </td>
                 </tr>
+                )}
                 </Fragment>
               );
             })}
