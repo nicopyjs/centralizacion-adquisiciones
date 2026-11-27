@@ -395,6 +395,8 @@ export type OrdenCompra = {
   estadoTexto: string;
   /** Campo personalizado «Código Pedido» de la OC, si Defontana lo trae. */
   codigoPedido: string;
+  /** Código del centro de negocio de la OC (vacío si la OC no lo trae). */
+  centroNegocio: string;
   lineas: LineaOC[];
 };
 
@@ -439,6 +441,7 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
         emissionDate?: string;
         customFields?: { name?: string; value?: string }[] | null;
         series?: string | null;
+        businessCenterData?: { businessCenterId?: string } | null;
         providerInfo?: { legalCode?: string; name?: string };
         purchaseOrderDetail?: {
           line: number;
@@ -464,6 +467,7 @@ export async function recepcionOC(numero: number): Promise<OrdenCompra | null> {
         (o.customFields ?? [])
           .find((c) => /^c[oó]digo\s*pedido$/i.test((c.name ?? "").trim()))
           ?.value?.trim() ?? "",
+      centroNegocio: o.businessCenterData?.businessCenterId?.trim() ?? "",
       lineas: (o.purchaseOrderDetail ?? []).map((d) => ({
         linea: d.line,
         codigo: d.productId,

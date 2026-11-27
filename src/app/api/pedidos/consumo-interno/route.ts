@@ -380,7 +380,9 @@ export async function POST(request: Request) {
           fecha,
           glosa,
           bodega,
-          centroNegocio: centro,
+          // Con OC, el gasto va al centro de la OC (un pedido puede tener OC de
+          // distintos centros); sin OC, al del pedido.
+          centroNegocio: oc?.centroNegocio || centro,
           clasificador1,
           clasificador2,
           ...(oc
