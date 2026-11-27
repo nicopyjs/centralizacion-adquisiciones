@@ -3932,7 +3932,13 @@ function DialogoModificar({
   const [error, setError] = useState<string | null>(null);
 
   // Si ya hay recepción o consumo registrado, el artículo queda fijo.
-  const fijo = Boolean(item && ((item.cantidadRecibida ?? 0) > 0 || item.consumoInterno));
+  // Un artículo manual solo con «recibido» marcado a mano (sin documento en
+  // Defontana) sí se puede cambiar o crear: nada depende aún de su código.
+  const fijo = Boolean(
+    item &&
+      (item.consumoInterno ||
+        ((item.cantidadRecibida ?? 0) > 0 && item.codigo !== CODIGO_ARTICULO_MANUAL))
+  );
 
   // Artículo manual: se puede crear en Defontana desde aquí (sin «Crear OC»).
   const esManualItem = item?.codigo === CODIGO_ARTICULO_MANUAL && !fijo;
