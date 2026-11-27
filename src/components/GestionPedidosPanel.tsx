@@ -3958,15 +3958,10 @@ function DialogoModificar({
       .catch(() => setError("No se pudo cargar el catálogo de artículos."));
   }, [cabecera]);
 
-  const opciones: ComboOption[] = useMemo(() => {
-    const enPedido = new Set(
-      pedido.items.filter((x) => x.codigo !== item?.codigo).map((x) => x.codigo)
-    );
-    return catalogo.map((a) => ({
-      value: a.codigo,
-      label: `${a.nombre} · ${a.codigo}${enPedido.has(a.codigo) ? " (ya en el pedido)" : ""}`,
-    }));
-  }, [catalogo, pedido.items, item]);
+  const opciones: ComboOption[] = useMemo(
+    () => catalogo.map((a) => ({ value: a.codigo, label: `${a.nombre} · ${a.codigo}` })),
+    [catalogo]
+  );
 
   // Solicitantes: la nómina más el actual (por si ya no figura en la planilla).
   const opcionesSolicitante: ComboOption[] = useMemo(() => {
@@ -4021,9 +4016,6 @@ function DialogoModificar({
       };
     } else {
       if (!elegido) return setError("Elige un artículo.");
-      if (pedido.items.some((x) => x.codigo === elegido.codigo && x.codigo !== item?.codigo)) {
-        return setError("Ese artículo ya está en el pedido: edita su cantidad en la tabla.");
-      }
       const n = Number(cantidad);
       if (!Number.isFinite(n) || n <= 0) return setError("Ingresa una cantidad mayor a 0.");
       payload = {
