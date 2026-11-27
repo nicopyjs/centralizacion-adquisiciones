@@ -2370,7 +2370,14 @@ function DialogoConsumo({
   type Accion = "rec_ci" | "rec" | "ci" | "pe_cd";
   type EstadoOC =
     | { estado: "cargando" | "inexistente" | "error" }
-    | { estado: "ok"; lineas: LineaOC[]; proveedor: string; recibidaEstado: string };
+    | {
+        estado: "ok";
+        lineas: LineaOC[];
+        proveedor: string;
+        recibidaEstado: string;
+        centroNegocio: string;
+        centroNombre: string;
+      };
   const caja = useRef<HTMLDivElement>(null);
   const [bodegas, setBodegas] = useState<{ codigo: string; nombre: string }[]>(
     []
@@ -2490,6 +2497,8 @@ function DialogoConsumo({
                   lineas: d.lineas ?? [],
                   proveedor: d.proveedor ?? "",
                   recibidaEstado: d.estado ?? "",
+                  centroNegocio: d.centroNegocio ?? "",
+                  centroNombre: d.centroNombre ?? "",
                 }
               : { oc, estado: "inexistente" }
           );
@@ -2833,6 +2842,15 @@ function DialogoConsumo({
                     ? "recepcionada parcial"
                     : "sin recepcionar"
               }`}
+          </p>
+        )}
+        {conEntradaDirecta && ocInfo?.estado === "ok" && ocInfo.centroNegocio && (
+          <p className="mt-2 rounded-lg bg-warning-surface px-3 py-2 text-xs font-semibold text-warning">
+            El parte de entrada costo directo se imputará al centro de negocio de la OC{" "}
+            {oc}: {ocInfo.centroNombre || ocInfo.centroNegocio} ({ocInfo.centroNegocio})
+            {ocInfo.centroNegocio !== pedido.centroCodigo &&
+              `, distinto del centro del pedido (${pedido.centroNegocio})`}
+            .
           </p>
         )}
         {problemasOC.length > 0 && (
