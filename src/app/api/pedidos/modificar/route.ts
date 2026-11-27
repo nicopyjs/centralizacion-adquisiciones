@@ -129,9 +129,6 @@ export async function POST(request: Request) {
       if (cantidad < recibida) {
         return error(`Ya se recibieron ${fmt(recibida)}: la cantidad no puede ser menor.`);
       }
-      if (cambiaArticulo && delPedido.some((x) => x.fila !== fila && str(x.r[11]) === codigo)) {
-        return error("Ese artículo ya está en el pedido.");
-      }
       const categoria = str(body.categoria);
       const unidad = str(body.unidad) || "UN";
       const comentarioArticulo = str(body.comentarioArticulo);
@@ -192,9 +189,6 @@ export async function POST(request: Request) {
       if (!codigo || !nombre) return error("Debes elegir un artículo.");
       if (!Number.isFinite(cantidad) || cantidad <= 0) {
         return error("La cantidad debe ser un número mayor a 0.");
-      }
-      if (delPedido.some((x) => str(x.r[11]) === codigo)) {
-        return error("Ese artículo ya está en el pedido. Edita su cantidad.");
       }
       // Copia los datos del pedido (A..J, P, T) de una línea existente.
       const base = delPedido[0].r;
