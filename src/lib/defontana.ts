@@ -508,25 +508,74 @@ export const AVISO_RECEPCION =
 
 /**
  * Problemas para recepcionar estas cantidades contra la OC: el artículo debe
- * estar en la OC, ser entero, caber en lo pendiente y no usar lotes.
+ * estar en la OC, ser entero, caber en lo pendiente y no usar lotes. Un mismo
+ * artículo puede estar en varias líneas de la OC: se suma lo pendiente de todas.
  */
 export function problemasPorRecibir(
   oc: { lineas: LineaOC[] },
   pedido: { codigo: string; nombre: string; cantidad: number }[]
 ): string[] {
   const out: string[] = [];
+  const pedidoPorCodigo = new Map<string, { nombre: string; cantidad: number }>();
   for (const p of pedido) {
-    const l = oc.lineas.find((x) => x.codigo === p.codigo);
-    if (!l) {
+    const previo = pedidoPorCodigo.get(p.codigo);
+    pedidoPorCodigo.set(p.codigo, {
+      nombre: p.nombre,
+      cantidad: (previo?.cantidad ?? 0) + p.cantidad,
+    });
+  }
+  for (const [codigo, p] of pedidoPorCodigo) {
+    const lineas = oc.lineas.filter((x) => x.codigo === codigo);
+    if (lineas.length === 0) {
       out.push(`«${p.nombre}» no está en la OC`);
-    } else if (l.usaLotes) {
+    } else if (lineas.some((l) => l.usaLotes)) {
       out.push(`«${p.nombre}» usa lotes: recepciónalo en Defontana`);
-    } else if (!Number.isInteger(p.cantidad)) {
+    } else if (pedido.some((x) => x.codigo === codigo && !Number.isInteger(x.cantidad))) {
       out.push(`«${p.nombre}»: Defontana solo recepciona cantidades enteras`);
-    } else if (p.cantidad > l.pedida - l.recibida) {
-      out.push(
-        `«${p.nombre}»: en la OC quedan ${l.pedida - l.recibida} por recibir y pides ${p.cantidad}`
-      );
+    } else {
+      const pendiente = lineas.reduce((a, l) => a + (l.pedida - l.recibida), 0);
+      if (p.cantidad > pendiente) {
+        out.push(`«${p.nombre}»: en la OC quedan ${pendiente} por recibir y pides ${p.cantidad}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Asigna cada cantidad a línea(s) de la OC con pendiente. Si el artículo está
+ * en varias líneas, usa primero la línea donde cabe entera (la más justa) y, si
+ * no hay ninguna, la reparte entre varias. Supone que `problemasPorRecibir` ya
+ * validó que lo pedido cabe en lo pendiente.
+ */
+export function repartirEnLineas<T extends { codigo: string; cantidad: number }>(
+  oc: { lineas: LineaOC[] },
+  items: T[]
+): (T & { ocLinea: LineaOC })[] {
+  const pendiente = new Map<number, number>(
+    oc.lineas.map((l) => [l.linea, l.pedida - l.recibida])
+  );
+  const out: (T & { ocLinea: LineaOC })[] = [];
+  for (const it of items) {
+    const lineas = oc.lineas.filter((l) => l.codigo === it.codigo);
+    if (lineas.length === 0) throw new Error(`«${it.codigo}» no está en la OC.`);
+    let resto = it.cantidad;
+    const entera = lineas
+      .filter((l) => (pendiente.get(l.linea) ?? 0) >= resto)
+      .sort((a, b) => (pendiente.get(a.linea)! - pendiente.get(b.linea)!))[0];
+    const orden = entera ? [entera] : lineas;
+    for (const l of orden) {
+      if (resto <= 0) break;
+      const usa = Math.min(resto, pendiente.get(l.linea) ?? 0);
+      if (usa <= 0) continue;
+      pendiente.set(l.linea, (pendiente.get(l.linea) ?? 0) - usa);
+      out.push({ ...it, cantidad: usa, ocLinea: l });
+      resto -= usa;
+    }
+    if (resto > 0) {
+      // No debería pasar tras validar; se deja en la primera línea para que
+      // Defontana rechace con su propio mensaje.
+      out.push({ ...it, cantidad: resto, ocLinea: lineas[0] });
     }
   }
   return out;
@@ -547,18 +596,28 @@ export async function recepcionarOC(
   input: RecepcionInput
 ): Promise<{ recepcion: number; partes: number[] }> {
   const { oc } = input;
-  const detail = input.lineas.map((l) => {
-    const d = oc.lineas.find((x) => x.codigo === l.codigo);
-    if (!d) throw new Error(`«${l.codigo}» no está en la OC ${oc.numero}.`);
-    return {
-      line: d.linea,
-      productId: d.codigo,
-      quantity: l.cantidad,
-      // Costo de la OC proporcional a lo que se recibe.
-      total: Math.round((d.monto / d.pedida) * l.cantidad * 100) / 100,
-      isService: d.servicio,
-    };
-  });
+  for (const l of input.lineas) {
+    if (!oc.lineas.some((x) => x.codigo === l.codigo)) {
+      throw new Error(`«${l.codigo}» no está en la OC ${oc.numero}.`);
+    }
+  }
+  // Una línea de la recepción por línea de la OC (el artículo puede repetirse).
+  const porLinea = new Map<number, { d: LineaOC; cantidad: number }>();
+  for (const p of repartirEnLineas(oc, input.lineas)) {
+    const previo = porLinea.get(p.ocLinea.linea);
+    porLinea.set(p.ocLinea.linea, {
+      d: p.ocLinea,
+      cantidad: (previo?.cantidad ?? 0) + p.cantidad,
+    });
+  }
+  const detail = [...porLinea.values()].map(({ d, cantidad }) => ({
+    line: d.linea,
+    productId: d.codigo,
+    quantity: cantidad,
+    // Costo de la OC proporcional a lo que se recibe.
+    total: Math.round((d.monto / d.pedida) * cantidad * 100) / 100,
+    isService: d.servicio,
+  }));
   const r = await llamar<{
     number?: string | number | null;
     success: boolean;
