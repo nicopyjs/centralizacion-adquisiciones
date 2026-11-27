@@ -8,6 +8,13 @@ import { renombrarCorreoPedido } from "@/lib/google-oauth";
 import { CLASIFICADORES_1, CLASIFICADORES_2 } from "@/lib/clasificadores";
 import { fechaEntregaAYMD } from "@/lib/fechas";
 import {
+  CODIGO_ARTICULO_MANUAL,
+  categoriaCreable,
+  categoriasArticulo,
+  crearArticulo,
+  unidadesArticulo,
+} from "@/lib/defontana";
+import {
   appendRows,
   articulosSheetId,
   batchWriteRanges,
@@ -141,6 +148,41 @@ export async function POST(request: Request) {
       const antes = `${str(objetivo.r[12])} × ${fmt(Number(objetivo.r[14]) || 0)}`;
       await avisarEnChat(pedidoId, area, `«${antes}» ahora es «${nombre} × ${fmt(cantidad)}».`);
       return NextResponse.json({ ok: true });
+    }
+
+    // Crea en Defontana el artículo manual de una línea (sin pasar por «Crear OC»)
+    // y deja la línea apuntando al código nuevo.
+    if (accion === "crearArticulo") {
+      const fila = Number(body.fila);
+      const objetivo = delPedido.find((x) => x.fila === fila);
+      if (!objetivo || str(objetivo.r[11]) !== CODIGO_ARTICULO_MANUAL) {
+        return error("Esa línea no es un artículo manual. Recarga la lista e inténtalo de nuevo.", 409);
+      }
+      const nombre = (str(body.nombre) || str(objetivo.r[12])).toUpperCase();
+      const unidad = str(body.unidad);
+      const categoriaId = Number(body.categoriaId);
+      if (!nombre) return error("El artículo necesita un nombre.");
+      const [categorias, unidades] = await Promise.all([categoriasArticulo(), unidadesArticulo()]);
+      const categoria = categorias.find((c) => c.id === categoriaId);
+      if (!categoria || !categoriaCreable(categoriaId)) {
+        return error("Elige la categoría: un artículo no se crea sin categoría.");
+      }
+      if (!unidades.some((u) => u.codigo === unidad)) return error("Elige la unidad del artículo.");
+
+      const codigo = await crearArticulo({ nombre, unidad, categoriaId });
+      // Se anota ya: el artículo existe en Defontana, un reintento no debe duplicarlo.
+      await batchWriteRanges(sheetId, [
+        {
+          range: `${PEDIDOS_SHEET}!K${fila}:O${fila}`,
+          values: [[categoria.nombre, codigo, nombre, unidad, Number(objetivo.r[14]) || 0]],
+        },
+      ]);
+      await avisarEnChat(
+        pedidoId,
+        area,
+        `se creó el artículo «${nombre}» (${codigo}, categoría ${categoria.nombre}).`
+      );
+      return NextResponse.json({ ok: true, codigo, categoria: categoria.nombre });
     }
 
     if (accion === "anularLinea" || accion === "reactivarLinea") {

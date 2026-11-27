@@ -3944,6 +3944,84 @@ function DialogoModificar({
   // Si ya hay recepción o consumo registrado, el artículo queda fijo.
   const fijo = Boolean(item && ((item.cantidadRecibida ?? 0) > 0 || item.consumoInterno));
 
+  // Artículo manual: se puede crear en Defontana desde aquí (sin «Crear OC»).
+  const esManualItem = item?.codigo === CODIGO_ARTICULO_MANUAL && !fijo;
+  const [crearAbierto, setCrearAbierto] = useState(false);
+  const [listas, setListas] = useState<{
+    categorias: { id: number; nombre: string }[];
+    unidades: { codigo: string; nombre: string }[];
+  } | null>(null);
+  const [nombreNuevo, setNombreNuevo] = useState(item?.nombre ?? "");
+  const [catId, setCatId] = useState("");
+  const [unidadNueva, setUnidadNueva] = useState(item?.unidad ?? "UN");
+  const [busqCat, setBusqCat] = useState(item?.nombre ?? "");
+  const [creando, setCreando] = useState(false);
+
+  const sinTildes = (s: string) =>
+    s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  // Artículos del catálogo parecidos a lo buscado, con su categoría, para elegir
+  // la categoría de uno que se le parezca.
+  const parecidos = useMemo(() => {
+    const palabras = sinTildes(busqCat).split(/\s+/).filter((p) => p.length > 1);
+    if (palabras.length === 0) return [];
+    return catalogo
+      .filter((a) => {
+        const n = sinTildes(a.nombre);
+        return palabras.every((p) => n.includes(p));
+      })
+      .slice(0, 12);
+  }, [busqCat, catalogo]);
+
+  function abrirCrear() {
+    setCrearAbierto(true);
+    if (listas) return;
+    fetch("/api/pedidos/oc/crear")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.categorias) throw new Error(d.error);
+        setListas({ categorias: d.categorias, unidades: d.unidades ?? [] });
+      })
+      .catch(() => setError("No se pudieron cargar las categorías de Defontana."));
+  }
+
+  function usarCategoriaDe(nombreCategoria: string) {
+    const c = listas?.categorias.find((x) => sinTildes(x.nombre) === sinTildes(nombreCategoria));
+    if (c) setCatId(String(c.id));
+  }
+
+  async function crearArticuloNuevo() {
+    setError(null);
+    if (!nombreNuevo.trim()) return setError("El artículo necesita un nombre.");
+    if (!catId) return setError("Elige la categoría: un artículo no se crea sin categoría.");
+    if (!unidadNueva) return setError("Elige la unidad.");
+    setCreando(true);
+    try {
+      const res = await fetch("/api/pedidos/modificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "crearArticulo",
+          pedidoId: pedido.pedidoId,
+          fila: item?.fila,
+          nombre: nombreNuevo,
+          categoriaId: Number(catId),
+          unidad: unidadNueva,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo crear el artículo.");
+      await onGuardado();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error de red.");
+    } finally {
+      setCreando(false);
+    }
+  }
+
   useEffect(() => {
     caja.current?.focus();
     if (cabecera) {
@@ -4200,6 +4278,105 @@ function DialogoModificar({
             </>
           ) : (
             <>
+              {esManualItem && (
+                <div className="rounded-xl border border-border bg-muted/40 p-3">
+                  {!crearAbierto ? (
+                    <button
+                      type="button"
+                      onClick={abrirCrear}
+                      className="text-sm font-bold text-accent hover:underline"
+                    >
+                      + Crear este artículo en Defontana
+                    </button>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-sm font-bold text-primary">Crear artículo en Defontana</p>
+                      <label className="block">
+                        <span className={labelClass}>Nombre</span>
+                        <input
+                          className={fieldClass}
+                          value={nombreNuevo}
+                          onChange={(e) => setNombreNuevo(e.target.value)}
+                        />
+                      </label>
+                      <div>
+                        <span className={labelClass}>Buscar artículos parecidos</span>
+                        <input
+                          className={fieldClass}
+                          value={busqCat}
+                          onChange={(e) => setBusqCat(e.target.value)}
+                          placeholder="Escribe parte del nombre…"
+                        />
+                        <ul className="mt-1 max-h-40 divide-y divide-border overflow-y-auto rounded-lg border border-border bg-card text-xs">
+                          {parecidos.length === 0 ? (
+                            <li className="px-2 py-1.5 text-muted-foreground">
+                              Sin artículos parecidos en el catálogo.
+                            </li>
+                          ) : (
+                            parecidos.map((a) => (
+                              <li key={a.codigo}>
+                                <button
+                                  type="button"
+                                  onClick={() => usarCategoriaDe(a.categoria)}
+                                  title="Usar esta categoría"
+                                  className="flex w-full items-start justify-between gap-2 px-2 py-1.5 text-left hover:bg-muted"
+                                >
+                                  <span className="text-card-foreground">{a.nombre}</span>
+                                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-semibold text-primary">
+                                    {a.categoria || "Sin categoría"}
+                                  </span>
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          Toca uno para usar su categoría.
+                        </span>
+                      </div>
+                      <label className="block">
+                        <span className={labelClass}>Categoría (obligatoria)</span>
+                        <select
+                          className={fieldClass}
+                          value={catId}
+                          onChange={(e) => setCatId(e.target.value)}
+                          disabled={!listas}
+                        >
+                          <option value="">{listas ? "Elige una categoría…" : "Cargando…"}</option>
+                          {listas?.categorias.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Unidad</span>
+                        <select
+                          className={fieldClass}
+                          value={unidadNueva}
+                          onChange={(e) => setUnidadNueva(e.target.value)}
+                          disabled={!listas}
+                        >
+                          {listas?.unidades.map((u) => (
+                            <option key={u.codigo} value={u.codigo}>
+                              {u.codigo} · {u.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void crearArticuloNuevo()}
+                        disabled={creando || enviando || !listas}
+                        className="inline-flex h-9 items-center rounded-lg bg-primary px-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
+                      >
+                        {creando ? "Creando…" : "Crear artículo"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <span className={labelClass}>Artículo</span>
                 {fijo ? (
