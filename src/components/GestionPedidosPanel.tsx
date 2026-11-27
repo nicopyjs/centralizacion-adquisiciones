@@ -3434,11 +3434,14 @@ function DialogoCrearOC({
   pedido,
   items,
   onCerrar,
+  onEditarManual,
   onCreada,
 }: {
   pedido: PedidoResumen;
   items: PedidoItem[];
   onCerrar: () => void;
+  /** Abre la edición (lápiz) de un artículo manual para crearlo en Defontana. */
+  onEditarManual: (item: PedidoItem) => void;
   onCreada: (
     filas: number[],
     oc: string,
@@ -3451,12 +3454,6 @@ function DialogoCrearOC({
   const [buscando, setBuscando] = useState(false);
   const [proveedor, setProveedor] = useState<ProveedorBusqueda | null>(null);
   const [condiciones, setCondiciones] = useState<CondicionBusqueda[]>([]);
-  const [categorias, setCategorias] = useState<{ id: number; nombre: string }[]>([]);
-  const [unidades, setUnidades] = useState<{ codigo: string; nombre: string }[]>([]);
-  // Artículos manuales (sin código en el catálogo): categoría y unidad con que se crean.
-  const [datosArticulo, setDatosArticulo] = useState<
-    Record<number, { categoriaId: string; unidad: string }>
-  >({});
   const [ambiente, setAmbiente] = useState("");
   const [condicion, setCondicion] = useState("");
   const [fechaRecepcion, setFechaRecepcion] = useState(
@@ -3480,8 +3477,6 @@ function DialogoCrearOC({
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
         setCondiciones(d.condiciones ?? []);
-        setCategorias(d.categorias ?? []);
-        setUnidades(d.unidades ?? []);
         setAmbiente(d.ambiente ?? "");
       })
       .catch((e) =>
@@ -3526,22 +3521,14 @@ function DialogoCrearOC({
   const neto = items.reduce((a, i) => a + Math.round(i.cantidad * (num(i.fila) || 0)), 0);
   const iva = exenta ? 0 : Math.round(neto * 0.19);
   const preciosOk = items.every((i) => num(i.fila) > 0);
-  const esManual = (i: PedidoItem) => i.codigo === CODIGO_ARTICULO_MANUAL;
-  // Unidad por defecto: la que escribió el solicitante si existe en Defontana, si no UN.
-  const unidadDe = (i: PedidoItem) =>
-    datosArticulo[i.fila]?.unidad ??
-    (unidades.some((u) => u.codigo === i.unidad.trim().toUpperCase())
-      ? i.unidad.trim().toUpperCase()
-      : "UN");
-  const manualesOk = items.every(
-    (i) => !esManual(i) || (!!datosArticulo[i.fila]?.categoriaId && !!unidadDe(i))
-  );
+  // Los artículos manuales deben crearse antes en Defontana (con su categoría).
+  const manuales = items.filter((i) => i.codigo === CODIGO_ARTICULO_MANUAL);
   const puedeCrear =
     !!proveedor &&
     !!condicion &&
     !!fechaRecepcion &&
     preciosOk &&
-    manualesOk &&
+    manuales.length === 0 &&
     !enviando &&
     !creada;
   const condicionProveedor = proveedor
@@ -3574,9 +3561,6 @@ function DialogoCrearOC({
           lineas: items.map((i) => ({
             fila: i.fila,
             precio: num(i.fila),
-            ...(esManual(i)
-              ? { categoriaId: Number(datosArticulo[i.fila]?.categoriaId), unidad: unidadDe(i) }
-              : {}),
           })),
         }),
       });
@@ -3625,7 +3609,7 @@ function DialogoCrearOC({
         role="dialog"
         aria-modal="true"
         aria-label="Crear orden de compra con los artículos seleccionados"
-        className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
+        className="max-h-[90dvh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-card p-5 shadow-2xl outline-none"
       >
         <h3 className="text-base font-extrabold uppercase tracking-wide text-primary">
           Crear orden de compra · pedido {folioCorto(pedido.pedidoId)}
@@ -3663,6 +3647,47 @@ function DialogoCrearOC({
                 type="button"
                 onClick={cerrar}
                 className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-bold text-accent-foreground shadow-sm hover:bg-accent-hover"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        ) : manuales.length > 0 ? (
+          <div className="mt-4 space-y-3 text-sm text-card-foreground">
+            <p role="alert" className="font-semibold text-destructive">
+              No se puede crear la OC: hay {manuales.length}{" "}
+              {manuales.length === 1 ? "artículo manual" : "artículos manuales"} que aún no
+              existen en Defontana. Créalos primero con su categoría.
+            </p>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {manuales.map((i) => (
+                <li key={i.fila} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <span className="min-w-0">
+                    <span className="font-semibold">{i.nombre}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {" "}
+                      · {i.cantidad} {i.unidad}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onEditarManual(i)}
+                    className="inline-flex h-8 shrink-0 items-center rounded-lg bg-accent px-3 text-xs font-bold text-accent-foreground shadow-sm hover:bg-accent-hover"
+                  >
+                    ✏️ Crear artículo
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">
+              En cada uno: lápiz (✏️) → «+ Crear este artículo en Defontana» → elige la categoría
+              (puedes buscar artículos parecidos) y la unidad. Luego vuelve a «Crear OC».
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onCerrar}
+                className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted-foreground hover:bg-muted"
               >
                 Cerrar
               </button>
@@ -3771,88 +3796,53 @@ function DialogoCrearOC({
             </div>
 
             <p className={`${labelClass} mt-4`}>Artículos y precio neto unitario</p>
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {items.map((i) => (
-                <li
-                  key={i.fila}
-                  className="grid grid-cols-[1fr_7rem_6rem] items-center gap-x-3 gap-y-1.5 px-3 py-1.5 text-sm"
-                >
-                  <span className="min-w-0 truncate text-card-foreground" title={i.nombre}>
-                    {i.nombre}
-                    <span className="text-xs text-muted-foreground">
-                      {" "}
-                      · {i.cantidad} {i.unidad}
-                    </span>
-                  </span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    aria-label={`Precio neto unitario de ${i.nombre}`}
-                    placeholder="Precio"
-                    value={precios[i.fila] ?? ""}
-                    disabled={enviando}
-                    onChange={(e) =>
-                      setPrecios((p) => ({
-                        ...p,
-                        [i.fila]: e.target.value.replace(/[^\d.,]/g, ""),
-                      }))
-                    }
-                    className="h-9 w-full rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
-                  />
-                  <span className="text-right text-xs text-muted-foreground">
-                    {num(i.fila) > 0 ? clp(i.cantidad * num(i.fila)) : "—"}
-                  </span>
-                  {esManual(i) && (
-                    <div className="col-span-3 grid gap-2 rounded-lg bg-muted/50 p-2 sm:grid-cols-[1fr_9rem]">
-                      <p className="text-xs font-semibold text-secondary sm:col-span-2">
-                        Artículo manual: no existe en Defontana. Se creará con el siguiente código
-                        de su categoría.
-                      </p>
-                      <select
-                        aria-label={`Categoría de ${i.nombre}`}
-                        className={inputClass}
-                        disabled={enviando}
-                        value={datosArticulo[i.fila]?.categoriaId ?? ""}
-                        onChange={(e) =>
-                          setDatosArticulo((p) => ({
-                            ...p,
-                            [i.fila]: { unidad: unidadDe(i), categoriaId: e.target.value },
-                          }))
-                        }
-                      >
-                        <option value="">Categoría…</option>
-                        {categorias.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.nombre}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        aria-label={`Unidad de ${i.nombre}`}
-                        className={inputClass}
-                        disabled={enviando}
-                        value={unidadDe(i)}
-                        onChange={(e) =>
-                          setDatosArticulo((p) => ({
-                            ...p,
-                            [i.fila]: {
-                              categoriaId: p[i.fila]?.categoriaId ?? "",
-                              unidad: e.target.value,
-                            },
-                          }))
-                        }
-                      >
-                        {unidades.map((u) => (
-                          <option key={u.codigo} value={u.codigo}>
-                            {u.nombre}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/60 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2">Artículo</th>
+                    <th className="w-24 px-3 py-2 text-right">Cantidad</th>
+                    <th className="w-24 px-3 py-2">Unidad</th>
+                    <th className="w-40 px-3 py-2 text-right">Precio neto unit.</th>
+                    <th className="w-32 px-3 py-2 text-right">Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {items.map((i) => (
+                    <tr key={i.fila}>
+                      <td className="px-3 py-2 text-card-foreground">
+                        <span className="font-semibold">{i.nombre}</span>
+                        <span className="block text-[11px] text-muted-foreground">{i.codigo}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-base font-bold tabular-nums text-primary">
+                        {i.cantidad}
+                      </td>
+                      <td className="px-3 py-2 text-card-foreground">{i.unidad}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          aria-label={`Precio neto unitario de ${i.nombre}`}
+                          placeholder="Precio"
+                          value={precios[i.fila] ?? ""}
+                          disabled={enviando}
+                          onChange={(e) =>
+                            setPrecios((p) => ({
+                              ...p,
+                              [i.fila]: e.target.value.replace(/[^\d.,]/g, ""),
+                            }))
+                          }
+                          className="h-9 w-full rounded-lg border border-border bg-card px-2 text-right text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-card-foreground">
+                        {num(i.fila) > 0 ? clp(i.cantidad * num(i.fila)) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
               <label className="inline-flex items-center gap-2 text-card-foreground">
@@ -5269,6 +5259,10 @@ function Detalle({
           pedido={pedido}
           items={sinOC}
           onCerrar={() => setCreandoOC(false)}
+          onEditarManual={(it) => {
+            setCreandoOC(false);
+            onModificar({ tipo: "linea", item: it });
+          }}
           onCreada={(filas, oc, articulosCreados) => {
             setCreandoOC(false);
             onOcAsociada(filas, oc, articulosCreados);
