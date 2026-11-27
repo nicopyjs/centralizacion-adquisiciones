@@ -79,6 +79,9 @@ const AREAS_PEDIDO = [
 
 const ESTADOS_POR_ATENDER: Estado[] = ["pendiente", "parcial"];
 
+/** Valor del filtro «Estado de la OC» para pedidos con algún artículo aún sin OC. */
+const SIN_OC = "__sin_oc__";
+
 const ESTADOS: Record<Estado, { label: string; chip: string; dot: string }> = {
   pendiente: {
     label: "Pendiente",
@@ -324,6 +327,10 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
   const [fHasta, setFHasta] = useState("");
   const [fProveedor, setFProveedor] = useState("");
   const [fOC, setFOC] = useState("");
+  const [fEstadoOC, setFEstadoOC] = useState("");
+  // Estado de cada OC en Defontana (Aprobado, Parcialmente Recepcionado…) y
+  // cuándo se consultó: cambia con el tiempo, así que se refresca cada 5 min.
+  const [estadoPorOC, setEstadoPorOC] = useState<Record<string, { estado: string; ts: number }>>({});
   // Proveedor de cada OC asociada a algún pedido (N° de OC → nombre). No está en
   // la planilla: se consulta a Defontana una vez por OC.
   const [provPorOC, setProvPorOC] = useState<Record<string, string>>({});
@@ -581,6 +588,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     fHasta,
     fProveedor,
     fOC,
+    fEstadoOC,
   ].filter(Boolean).length;
 
   // Recuerda la vista (estados, alertas y orden) entre visitas, por navegador.
@@ -620,17 +628,29 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     const proveedores = Array.from(new Set(ocs.map((o) => provPorOC[o]).filter(Boolean))).sort(
       (a, b) => a.localeCompare(b, "es")
     );
+    const ORDEN_ESTADOS = [
+      "Ingresado",
+      "Aprobado",
+      "Parcialmente Recepcionado",
+      "Completamente Recepcionado",
+      "Cerrado",
+      "Anulado",
+    ];
+    const estadosOC = Array.from(
+      new Set(ocs.map((o) => estadoPorOC[o]?.estado).filter((e): e is string => !!e))
+    ).sort((a, b) => ORDEN_ESTADOS.indexOf(a) - ORDEN_ESTADOS.indexOf(b));
     return {
+      estadosOC,
       oc: ocs.map((o) => ({ value: o, label: provPorOC[o] ? `${o} · ${provPorOC[o]}` : o })),
       proveedor: proveedores.map((o) => ({ value: o, label: o })),
     };
-  }, [pedidos, provPorOC]);
+  }, [pedidos, provPorOC, estadoPorOC]);
 
   // Trae de Defontana el proveedor de las OC que aún no se conocen (en tandas).
   useEffect(() => {
     const faltan = Array.from(
       new Set(pedidos.flatMap((p) => p.items.map((i) => i.ocAsociada)).filter(Boolean))
-    ).filter((o) => !(o in provPorOC));
+    ).filter((o) => !(o in provPorOC) || Date.now() - (estadoPorOC[o]?.ts ?? 0) > 5 * 60_000);
     if (faltan.length === 0) return;
     let vigente = true;
     (async () => {
@@ -639,12 +659,20 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
         try {
           const res = await fetch(`/api/pedidos/oc-proveedor?ocs=${tanda.join(",")}`);
           if (!res.ok) continue;
-          const d = (await res.json()) as { proveedores?: Record<string, string> };
+          const d = (await res.json()) as {
+            proveedores?: Record<string, string>;
+            estados?: Record<string, string>;
+          };
           if (!vigente) return;
           // Las que Defontana no devolvió quedan como "" para no reintentarlas.
           const lote: Record<string, string> = {};
-          for (const o of tanda) lote[o] = d.proveedores?.[o] ?? "";
+          const estLote: Record<string, { estado: string; ts: number }> = {};
+          for (const o of tanda) {
+            lote[o] = d.proveedores?.[o] ?? "";
+            estLote[o] = { estado: d.estados?.[o] ?? "", ts: Date.now() };
+          }
           setProvPorOC((prev) => ({ ...prev, ...lote }));
+          setEstadoPorOC((prev) => ({ ...prev, ...estLote }));
         } catch {
           // sin proveedor: el filtro por OC sigue funcionando
         }
@@ -696,6 +724,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
     setFHasta("");
     setFProveedor("");
     setFOC("");
+    setFEstadoOC("");
   }
 
   // Búsqueda y filtros adicionales (todo salvo estado y alertas).
@@ -707,6 +736,14 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
       if (fCentro && p.centroNegocio.trim() !== fCentro) return false;
       if (fDespacho && p.despacho.trim() !== fDespacho) return false;
       if (fOC && !p.items.some((it) => it.ocAsociada === fOC)) return false;
+      if (fEstadoOC === SIN_OC) {
+        if (!p.items.some((it) => !it.anulado && !it.ocAsociada)) return false;
+      } else if (
+        fEstadoOC &&
+        !p.items.some((it) => it.ocAsociada && estadoPorOC[it.ocAsociada]?.estado === fEstadoOC)
+      ) {
+        return false;
+      }
       if (fProveedor && !p.items.some((it) => it.ocAsociada && provPorOC[it.ocAsociada] === fProveedor)) {
         return false;
       }
@@ -728,7 +765,7 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
       ].join(" ");
       return normalizar(texto).includes(q);
     };
-  }, [busqueda, provPorOC, fOC, fProveedor, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
+  }, [busqueda, provPorOC, estadoPorOC, fEstadoOC, fOC, fProveedor, fSolicitante, fArea, fCentro, fDespacho, fDesde, fHasta]);
 
   /** ¿Cumple el estado marcado? Sin estados marcados, todos menos anulados. */
   function pasaEstado(p: PedidoResumen): boolean {
@@ -1635,6 +1672,22 @@ export default function GestionPedidosPanel({ pedidoInicial }: { pedidoInicial?:
               value={fOC}
               onChange={setFOC}
             />
+          </label>
+          <label className="block min-w-0">
+            <span className={labelClass}>Estado de la OC</span>
+            <select
+              className={fieldClass}
+              value={fEstadoOC}
+              onChange={(e) => setFEstadoOC(e.target.value)}
+            >
+              <option value="">Todos</option>
+              <option value={SIN_OC}>Con artículos sin OC</option>
+              {opcionesOC.estadosOC.map((e) => (
+                <option key={e} value={e}>
+                  {e}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block min-w-0">
             <span className={labelClass}>Pedido desde</span>
