@@ -949,6 +949,11 @@ const CODIGO_POR_CATEGORIA: Record<number, [prefijo: string, ultimo: number]> = 
   67: ["ESAE", 6], 68: ["TEIF", 2], 69: ["SECO", 2],
 };
 
+/** Si se puede crear un artículo con esa categoría (debe tener prefijo de código). */
+export function categoriaCreable(categoriaId: number): boolean {
+  return Number.isInteger(categoriaId) && categoriaId > 0 && categoriaId in CODIGO_POR_CATEGORIA;
+}
+
 /**
  * Crea un artículo en Defontana (Sale/SaveProduct, probado en `replapi` el
  * 2026-11-24) con el siguiente código libre de su categoría. Devuelve el código.
@@ -961,9 +966,14 @@ export async function crearArticulo(input: {
   /** Precio de compra neto (solo informativo en el maestro). */
   precio?: number;
 }): Promise<string> {
-  const base = CODIGO_POR_CATEGORIA[input.categoriaId];
+  // Sin categoría válida el artículo no se crea (regla de Adquisiciones).
+  const base = categoriaCreable(input.categoriaId)
+    ? CODIGO_POR_CATEGORIA[input.categoriaId]
+    : undefined;
   if (!base) {
-    throw new Error(`La categoría ${input.categoriaId} no tiene prefijo de código definido.`);
+    throw new Error(
+      `Un artículo no se crea sin categoría válida (categoría ${input.categoriaId}).`
+    );
   }
   const [prefijo, ultimo] = base;
   for (let n = ultimo + 1; n <= ultimo + 40; n++) {
